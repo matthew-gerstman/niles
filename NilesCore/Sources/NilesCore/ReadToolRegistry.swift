@@ -21,6 +21,9 @@ public struct ReadToolRegistry: Sendable {
     /// The read tools, in listing order.
     public var tools: [Tool] { Self.toolDefinitions }
 
+    /// The names `call` answers.
+    public var toolNames: Set<String> { Set(Self.projections.keys) }
+
     /// Answers one `tools/call` for a read tool. Unknown tool names and graph
     /// read failures return `isError` results rather than throwing, so the
     /// agent sees the failure in-band.

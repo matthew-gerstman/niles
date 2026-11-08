@@ -22,12 +22,20 @@ public final class ServerCoordinator {
     private let tokenStore: any TokenStoring
     private var server: LANServer?
 
+    /// The proposal pipeline for the injected service, if any. Created once at
+    /// init so staged proposals survive foreground cycles and expire only by
+    /// TTL — and so the approval UI binds to the same instance the server
+    /// stages into.
+    public let proposalStore: ProposalStore?
+
     nonisolated public init(
         port: UInt16 = LANServer.defaultPort,
-        tokenStore: any TokenStoring = KeychainTokenStore()
+        tokenStore: any TokenStoring = KeychainTokenStore(),
+        homeKitService: (any HomeKitWriting)? = nil
     ) {
         self.port = port
         self.tokenStore = tokenStore
+        self.proposalStore = homeKitService.map { ProposalStore(homeKit: $0) }
     }
 
     /// Starts serving if not already running; on failure records `.failed` with the
@@ -38,10 +46,21 @@ public final class ServerCoordinator {
             // One token guards both entry points: the gateway's pre-transport gate
             // and each session transport's validation pipeline.
             let token = try tokenStore.loadOrCreate()
-            let gateway = MCPGateway(
-                validationPipeline: NilesValidationPipeline(expectedToken: token),
-                auth: BearerTokenAuthMiddleware(expectedToken: token)
-            )
+            let gateway: MCPGateway
+            if let proposalStore {
+                gateway = MCPGateway(
+                    serverFactory: NilesServerFactory.makeFactory(store: proposalStore),
+                    validationPipeline: NilesValidationPipeline(expectedToken: token),
+                    auth: BearerTokenAuthMiddleware(expectedToken: token)
+                )
+            } else {
+                // No service injected yet — serving with the empty default
+                // tool surface (the pre-tools behavior) rather than crashing.
+                gateway = MCPGateway(
+                    validationPipeline: NilesValidationPipeline(expectedToken: token),
+                    auth: BearerTokenAuthMiddleware(expectedToken: token)
+                )
+            }
             let server = LANServer(gateway: gateway, port: port)
             try await server.start()
             self.server = server
