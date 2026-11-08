@@ -70,6 +70,8 @@ targets:
       - path: NilesCore/Tests
     dependencies:
       - target: NilesCore
+      - package: MCPSwift
+        product: MCP
 
 schemes:
   Niles:
