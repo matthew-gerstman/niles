@@ -1,0 +1,564 @@
+import Foundation
+
+/// Pure planning: one typed write request + the current graph -> the minimal
+/// HomeKit operations and the full review card. No side effects; every
+/// rejection throws `PlannerError` before a proposal exists, so the human
+/// never sees a card that is guaranteed to fail (spec: eager validation).
+public enum ProposalPlanner {
+
+    public enum PlannerError: Error, Equatable, Sendable {
+        case unknownHome(String)
+        case unknownRoom(String)
+        case unknownZone(String)
+        case unknownScene(String)
+        case unknownServiceGroup(String)
+        case unknownAccessory(id: String, home: String)
+        case unknownService(String)
+        case duplicateName(kind: String, name: String, home: String)
+        case invalidInput(String)
+        case noChange(String)
+        case validationFailed([String])
+
+        /// Agent-readable text; the tool layer surfaces it in-band.
+        public var message: String {
+            switch self {
+            case .unknownHome(let id):
+                "No home with id \(id). Call get_homes first."
+            case .unknownRoom(let id):
+                "No room with id \(id). Call get_rooms first."
+            case .unknownZone(let id):
+                "No zone with id \(id). Call get_zones first."
+            case .unknownScene(let id):
+                "No scene with id \(id). Call get_scenes first."
+            case .unknownServiceGroup(let id):
+                "No service group with id \(id). Call get_service_groups first."
+            case .unknownAccessory(let id, let home):
+                "No accessory with id \(id) in home “\(home)”."
+            case .unknownService(let id):
+                "No service with id \(id) visible in the home graph; service ids come from get_service_groups."
+            case .duplicateName(let kind, let name, let home):
+                "A \(kind) named “\(name)” already exists in “\(home)”."
+            case .invalidInput(let detail):
+                detail
+            case .noChange(let detail):
+                "Nothing to change: \(detail)"
+            case .validationFailed(let messages):
+                messages.joined(separator: " ")
+            }
+        }
+    }
+
+    public static func plan(_ request: WriteRequest, graph: HomeGraph) throws -> Plan {
+        switch request {
+        case .createRoom(let homeId, let name):
+            return try createRoom(homeId: homeId, name: name, graph: graph)
+        case .renameRoom(let roomId, let name):
+            return try renameRoom(roomId: roomId, name: name, graph: graph)
+        case .deleteRoom(let roomId):
+            return try deleteRoom(roomId: roomId, graph: graph)
+        case .setZoneRooms(let zoneId, let roomIds):
+            return try setZoneRooms(zoneId: zoneId, roomIds: roomIds, graph: graph)
+        case .createScene(let homeId, let name, let actions):
+            return try createScene(homeId: homeId, name: name, actions: actions, graph: graph)
+        case .setSceneActions(let sceneId, let actions):
+            return try setSceneActions(sceneId: sceneId, actions: actions, graph: graph)
+        case .createServiceGroup(let homeId, let name):
+            return try createServiceGroup(homeId: homeId, name: name, graph: graph)
+        case .setServiceGroupMembers(let groupId, let serviceIds):
+            return try setServiceGroupMembers(groupId: groupId, serviceIds: serviceIds, graph: graph)
+        case .deleteServiceGroup(let groupId):
+            return try deleteServiceGroup(groupId: groupId, graph: graph)
+        }
+    }
+
+    /// The default planning function the proposal store composes: parse the
+    /// MCP arguments, then plan against the graph.
+    public static var planFunction: ProposalStore.PlanFunction {
+        { tool, arguments, graph in
+            try plan(WriteRequest.parse(tool: tool, arguments: arguments), graph: graph)
+        }
+    }
+
+    // MARK: - Rooms
+
+    private static func createRoom(homeId: String, name: String, graph: HomeGraph) throws -> Plan {
+        let trimmed = try requiredName(name, kind: "room")
+        let home = try self.home(id: homeId, in: graph)
+        try rejectDuplicate(kind: "room", name: trimmed, in: home.rooms.map(\.name), homeName: home.name)
+        return Plan(
+            tool: "create_room",
+            title: "Create room “\(trimmed)”",
+            summary: "Create room “\(trimmed)” in “\(home.name)”",
+            isDestructive: false,
+            operations: [.addRoom(homeId: home.id, name: trimmed)],
+            entries: [ProposalDiffEntry(
+                object: ProposalObjectRef(kind: .room, id: "", name: trimmed),
+                op: .create,
+                before: nil,
+                after: trimmed
+            )],
+            card: [ProposalCardLine(.add, "Room “\(trimmed)” · created")]
+        )
+    }
+
+    private static func renameRoom(roomId: String, name: String, graph: HomeGraph) throws -> Plan {
+        let trimmed = try requiredName(name, kind: "room")
+        let (home, room) = try self.room(id: roomId, in: graph)
+        if room.name == trimmed {
+            throw PlannerError.noChange("room “\(room.name)” is already named “\(trimmed)”.")
+        }
+        return Plan(
+            tool: "rename_room",
+            title: "Rename room “\(room.name)”",
+            summary: "Rename room “\(room.name)” to “\(trimmed)”",
+            isDestructive: false,
+            operations: [.renameRoom(homeId: home.id, roomId: room.id, to: trimmed)],
+            entries: [ProposalDiffEntry(
+                object: ProposalObjectRef(kind: .room, id: room.id, name: room.name),
+                op: .rename,
+                before: room.name,
+                after: trimmed
+            )],
+            card: [ProposalCardLine(.plain, "Room “\(room.name)” → “\(trimmed)”")]
+        )
+    }
+
+    private static func deleteRoom(roomId: String, graph: HomeGraph) throws -> Plan {
+        let (home, room) = try self.room(id: roomId, in: graph)
+        let displaced = room.accessories.count
+
+        var card: [ProposalCardLine] = [ProposalCardLine(.remove, "Room “\(room.name)” · deleted")]
+        if displaced > 0 {
+            // Spec risk (shared-database blast radius): HomeKit reassigns the
+            // deleted room's accessories to the default room. The card says so.
+            let noun = displaced == 1 ? "accessory" : "accessories"
+            card.append(ProposalCardLine(.note, "⚠ \(displaced) \(noun) will move to the default room"))
+        }
+        card.append(ProposalCardLine(
+            .plain,
+            "Visible immediately to Siri, the Home app, and every automation that references this room."
+        ))
+
+        return Plan(
+            tool: "delete_room",
+            title: "Delete room “\(room.name)”",
+            summary: "Delete room “\(room.name)”",
+            isDestructive: true,
+            operations: [.removeRoom(homeId: home.id, roomId: room.id)],
+            entries: [ProposalDiffEntry(
+                object: ProposalObjectRef(kind: .room, id: room.id, name: room.name),
+                op: .delete,
+                before: room.name,
+                after: nil
+            )],
+            card: card
+        )
+    }
+
+    // MARK: - Zones
+
+    private static func setZoneRooms(zoneId: String, roomIds: [String], graph: HomeGraph) throws -> Plan {
+        let (home, zone) = try self.zone(id: zoneId, in: graph)
+
+        // Deduplicate while preserving the agent's order.
+        var seen = Set<String>()
+        let target: [String] = roomIds.filter { seen.insert($0).inserted }
+        for roomId in target where !home.rooms.contains(where: { $0.id == roomId }) {
+            throw PlannerError.unknownRoom(roomId)
+        }
+
+        let current = zone.roomIds
+        let additions = target.filter { !current.contains($0) }
+        let removals = current.filter { !target.contains($0) }
+        if additions.isEmpty && removals.isEmpty {
+            throw PlannerError.noChange("zone “\(zone.name)” already contains exactly these rooms.")
+        }
+
+        let zoneRef = ProposalObjectRef(kind: .zone, id: zone.id, name: zone.name)
+        let entries: [ProposalDiffEntry] =
+            additions.map { roomId in
+                ProposalDiffEntry(
+                    object: zoneRef, op: .addMembers,
+                    before: nil, after: Self.room(id: roomId, in: home)?.name ?? roomId
+                )
+            }
+            + removals.map { roomId in
+                ProposalDiffEntry(
+                    object: zoneRef, op: .removeMembers,
+                    before: Self.room(id: roomId, in: home)?.name ?? roomId, after: nil
+                )
+            }
+
+        var card: [ProposalCardLine] =
+            additions.map { roomId in
+                ProposalCardLine(.add, "“\(zone.name)” · add room “\(Self.room(id: roomId, in: home)?.name ?? roomId)”")
+            }
+            + removals.map { roomId in
+                ProposalCardLine(.remove, "“\(zone.name)” · remove room “\(Self.room(id: roomId, in: home)?.name ?? roomId)”")
+            }
+        // The spec's worked example: agents re-send the full membership, and
+        // the card must show that the other rooms simply stay.
+        if removals.isEmpty {
+            let staying = current.filter { !additions.contains($0) }.compactMap { Self.room(id: $0, in: home)?.name }
+            if !staying.isEmpty {
+                let names = staying.joined(separator: ", ")
+                let verb = staying.count == 1 ? "stays" : "stay"
+                card.append(ProposalCardLine(.plain, "No rooms removed — \(names) \(verb)."))
+            }
+        }
+
+        return Plan(
+            tool: "set_zone_rooms",
+            title: Self.zoneTitle(zoneName: zone.name, additions: additions, removals: removals, home: home),
+            summary: Self.zoneSummary(
+                zoneName: zone.name, additions: additions, removals: removals, home: home
+            ),
+            isDestructive: false,
+            operations: [.setZoneRooms(homeId: home.id, zoneId: zone.id, addRoomIds: additions, removeRoomIds: removals)],
+            entries: entries,
+            card: card
+        )
+    }
+
+    private static func zoneTitle(zoneName: String, additions: [String], removals: [String], home: HomeGraph.Home) -> String {
+        if additions.count == 1, removals.isEmpty {
+            return "Move \(roomName(id: additions[0], home: home)) into \(zoneName)"
+        }
+        if removals.count == 1, additions.isEmpty {
+            return "Remove \(roomName(id: removals[0], home: home)) from \(zoneName)"
+        }
+        return "Update zone “\(zoneName)”"
+    }
+
+    private static func zoneSummary(zoneName: String, additions: [String], removals: [String], home: HomeGraph.Home) -> String {
+        if additions.count == 1, removals.isEmpty {
+            return "Add room “\(roomName(id: additions[0], home: home))” to zone “\(zoneName)”"
+        }
+        if removals.count == 1, additions.isEmpty {
+            return "Remove room “\(roomName(id: removals[0], home: home))” from zone “\(zoneName)”"
+        }
+        return "Update zone “\(zoneName)” membership (\(additions.count) added, \(removals.count) removed)"
+    }
+
+    // MARK: - Scenes
+
+    private static func createScene(homeId: String, name: String, actions: [SceneActionSpec], graph: HomeGraph) throws -> Plan {
+        let trimmed = try requiredName(name, kind: "scene")
+        let home = try self.home(id: homeId, in: graph)
+        try rejectDuplicate(kind: "scene", name: trimmed, in: home.scenes.map(\.name), homeName: home.name)
+        try validate(accessories: actions, home: home)
+
+        let actionNoun = actions.count == 1 ? "action" : "actions"
+        var card: [ProposalCardLine] = [
+            ProposalCardLine(.add, "Scene “\(trimmed)” · created with \(actions.count) \(actionNoun)")
+        ]
+        card += actions.map { ProposalCardLine(.add, actionLine($0, in: home)) }
+        // Scope note: execute is deliberately out of v1 (spec) — the card
+        // preempts the "did it run?" question.
+        card.append(ProposalCardLine(.note, "⚠ Niles stages scenes; it never runs one."))
+
+        return Plan(
+            tool: "create_scene",
+            title: "Create scene “\(trimmed)”",
+            summary: "Create scene “\(trimmed)” with \(actions.count) \(actionNoun)",
+            isDestructive: false,
+            operations: [.addActionSet(homeId: home.id, name: trimmed, actions: actions)],
+            entries: [ProposalDiffEntry(
+                object: ProposalObjectRef(kind: .scene, id: "", name: trimmed),
+                op: .create,
+                before: nil,
+                after: "\(actions.count) \(actionNoun)"
+            )],
+            card: card
+        )
+    }
+
+    private static func setSceneActions(sceneId: String, actions: [SceneActionSpec], graph: HomeGraph) throws -> Plan {
+        let (home, scene) = try self.scene(id: sceneId, in: graph)
+        try validate(accessories: actions, home: home)
+
+        let currentKeys = scene.actions.map(SceneActionKey.init(action:))
+        let targetKeys = actions.map(SceneActionKey.init(spec:))
+        let additions = actions.filter { spec in !currentKeys.contains(SceneActionKey(spec: spec)) }
+        let removals = scene.actions.filter { action in !targetKeys.contains(SceneActionKey(action: action)) }
+        if additions.isEmpty && removals.isEmpty {
+            throw PlannerError.noChange("scene “\(scene.name)” already has exactly these actions.")
+        }
+
+        let sceneRef = ProposalObjectRef(kind: .scene, id: scene.id, name: scene.name)
+        let entries: [ProposalDiffEntry] =
+            removals.map { action in
+                ProposalDiffEntry(
+                    object: sceneRef, op: .removeMembers,
+                    before: describe(action: action, home: home), after: nil
+                )
+            }
+            + additions.map { spec in
+                ProposalDiffEntry(
+                    object: sceneRef, op: .addMembers,
+                    before: nil, after: describe(spec: spec, home: home)
+                )
+            }
+
+        var card: [ProposalCardLine] =
+            removals.map { action in
+                ProposalCardLine(.remove, "“\(scene.name)” · remove action \(describe(action: action, home: home))")
+            }
+            + additions.map { spec in
+                ProposalCardLine(.add, "“\(scene.name)” · add action \(describe(spec: spec, home: home))")
+            }
+        let unchanged = scene.actions.count - removals.count
+        if unchanged > 0 {
+            let noun = unchanged == 1 ? "action" : "actions"
+            card.append(ProposalCardLine(.plain, "\(unchanged) existing \(noun) unchanged."))
+        }
+
+        return Plan(
+            tool: "set_scene_actions",
+            title: "Update scene “\(scene.name)”",
+            summary: "Update scene “\(scene.name)” actions (\(additions.count) added, \(removals.count) removed)",
+            isDestructive: false,
+            operations: [.setSceneActions(
+                homeId: home.id, sceneId: scene.id,
+                add: additions, remove: removals.map(SceneActionKey.init(action:))
+            )],
+            entries: entries,
+            card: card
+        )
+    }
+
+    // MARK: - Service groups
+
+    private static func createServiceGroup(homeId: String, name: String, graph: HomeGraph) throws -> Plan {
+        let trimmed = try requiredName(name, kind: "service group")
+        let home = try self.home(id: homeId, in: graph)
+        try rejectDuplicate(kind: "service group", name: trimmed, in: home.serviceGroups.map(\.name), homeName: home.name)
+        return Plan(
+            tool: "create_service_group",
+            title: "Create service group “\(trimmed)”",
+            summary: "Create service group “\(trimmed)” in “\(home.name)”",
+            isDestructive: false,
+            operations: [.addServiceGroup(homeId: home.id, name: trimmed)],
+            entries: [ProposalDiffEntry(
+                object: ProposalObjectRef(kind: .serviceGroup, id: "", name: trimmed),
+                op: .create,
+                before: nil,
+                after: trimmed
+            )],
+            card: [ProposalCardLine(.add, "Service group “\(trimmed)” · created")]
+        )
+    }
+
+    private static func setServiceGroupMembers(groupId: String, serviceIds: [String], graph: HomeGraph) throws -> Plan {
+        let (home, group) = try self.serviceGroup(id: groupId, in: graph)
+
+        // The graph only exposes services through groups, so validate against
+        // every ServiceRef in the home. The real adapter resolves any
+        // HMService; the fake's vocabulary is group-visible services.
+        let known = Dictionary(
+            home.serviceGroups.flatMap(\.services).map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        var failures: [String] = []
+        for serviceId in serviceIds where known[serviceId] == nil {
+            failures.append("Service \(serviceId): \(PlannerError.unknownService(serviceId).message)")
+        }
+        if !failures.isEmpty {
+            throw PlannerError.validationFailed(failures)
+        }
+
+        var seen = Set<String>()
+        let target = serviceIds.filter { seen.insert($0).inserted }
+        let current = group.services.map(\.id)
+        let additions = target.filter { !current.contains($0) }
+        let removals = current.filter { !target.contains($0) }
+        if additions.isEmpty && removals.isEmpty {
+            throw PlannerError.noChange("service group “\(group.name)” already has exactly these members.")
+        }
+
+        let groupRef = ProposalObjectRef(kind: .serviceGroup, id: group.id, name: group.name)
+        let entries: [ProposalDiffEntry] =
+            additions.map { serviceId in
+                ProposalDiffEntry(
+                    object: groupRef, op: .addMembers,
+                    before: nil, after: known[serviceId]?.name ?? serviceId
+                )
+            }
+            + removals.map { serviceId in
+                ProposalDiffEntry(
+                    object: groupRef, op: .removeMembers,
+                    before: known[serviceId]?.name ?? serviceId, after: nil
+                )
+            }
+
+        var card: [ProposalCardLine] =
+            additions.map { serviceId in
+                ProposalCardLine(.add, "“\(group.name)” · add service “\(known[serviceId]?.name ?? serviceId)”")
+            }
+            + removals.map { serviceId in
+                ProposalCardLine(.remove, "“\(group.name)” · remove service “\(known[serviceId]?.name ?? serviceId)”")
+            }
+        let unchanged = current.count - removals.count
+        if unchanged > 0 {
+            let noun = unchanged == 1 ? "member" : "members"
+            card.append(ProposalCardLine(.plain, "\(unchanged) existing \(noun) unchanged."))
+        }
+
+        return Plan(
+            tool: "set_service_group_members",
+            title: "Update service group “\(group.name)”",
+            summary: "Update service group “\(group.name)” members (\(additions.count) added, \(removals.count) removed)",
+            isDestructive: false,
+            operations: [.setServiceGroupMembers(
+                homeId: home.id, groupId: group.id,
+                addServiceIds: additions, removeServiceIds: removals
+            )],
+            entries: entries,
+            card: card
+        )
+    }
+
+    private static func deleteServiceGroup(groupId: String, graph: HomeGraph) throws -> Plan {
+        let (home, group) = try self.serviceGroup(id: groupId, in: graph)
+        return Plan(
+            tool: "delete_service_group",
+            title: "Delete service group “\(group.name)”",
+            summary: "Delete service group “\(group.name)”",
+            isDestructive: true,
+            operations: [.removeServiceGroup(homeId: home.id, groupId: group.id)],
+            entries: [ProposalDiffEntry(
+                object: ProposalObjectRef(kind: .serviceGroup, id: group.id, name: group.name),
+                op: .delete,
+                before: group.name,
+                after: nil
+            )],
+            card: [
+                ProposalCardLine(.remove, "Service group “\(group.name)” · deleted"),
+                // Groups are labels over services; deleting one touches no device.
+                ProposalCardLine(.plain, "Devices are unaffected — a group is a label over services."),
+            ]
+        )
+    }
+
+    // MARK: - Shared helpers
+
+    private static func home(id: String, in graph: HomeGraph) throws -> HomeGraph.Home {
+        guard let home = graph.homes.first(where: { $0.id == id }) else {
+            throw PlannerError.unknownHome(id)
+        }
+        return home
+    }
+
+    private static func room(id: String, in home: HomeGraph.Home) -> HomeGraph.Room? {
+        home.rooms.first { $0.id == id }
+    }
+
+    private static func room(id: String, in graph: HomeGraph) throws -> (HomeGraph.Home, HomeGraph.Room) {
+        for home in graph.homes {
+            if let room = Self.room(id: id, in: home) { return (home, room) }
+        }
+        throw PlannerError.unknownRoom(id)
+    }
+
+    private static func zone(id: String, in graph: HomeGraph) throws -> (HomeGraph.Home, HomeGraph.Zone) {
+        for home in graph.homes {
+            if let zone = home.zones.first(where: { $0.id == id }) { return (home, zone) }
+        }
+        throw PlannerError.unknownZone(id)
+    }
+
+    private static func scene(id: String, in graph: HomeGraph) throws -> (HomeGraph.Home, HomeGraph.Scene) {
+        for home in graph.homes {
+            if let scene = home.scenes.first(where: { $0.id == id }) { return (home, scene) }
+        }
+        throw PlannerError.unknownScene(id)
+    }
+
+    private static func serviceGroup(id: String, in graph: HomeGraph) throws -> (HomeGraph.Home, HomeGraph.ServiceGroup) {
+        for home in graph.homes {
+            if let group = home.serviceGroups.first(where: { $0.id == id }) { return (home, group) }
+        }
+        throw PlannerError.unknownServiceGroup(id)
+    }
+
+    private static func roomName(id: String, home: HomeGraph.Home) -> String {
+        room(id: id, in: home)?.name ?? id
+    }
+
+    private static func requiredName(_ name: String, kind: String) throws -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw PlannerError.invalidInput("\(kind.capitalized) name must not be empty.")
+        }
+        return trimmed
+    }
+
+    private static func rejectDuplicate(kind: String, name: String, in names: [String], homeName: String) throws {
+        if names.contains(where: { $0.caseInsensitiveCompare(name) == .orderedSame }) {
+            throw PlannerError.duplicateName(kind: kind, name: name, home: homeName)
+        }
+    }
+
+    /// Eager per-action validation (spec): every proposed scene action must
+    /// reference an accessory that exists in the home today. All failures are
+    /// collected, so the agent fixes everything in one retry.
+    private static func validate(accessories actions: [SceneActionSpec], home: HomeGraph.Home) throws {
+        let known = Set(home.rooms.flatMap { $0.accessories.map(\.id) })
+        var failures: [String] = []
+        for (index, action) in actions.enumerated() where !known.contains(action.accessoryId) {
+            let error = PlannerError.unknownAccessory(id: action.accessoryId, home: home.name)
+            failures.append("Action \(index + 1): \(error.message)")
+        }
+        if !failures.isEmpty {
+            throw PlannerError.validationFailed(failures)
+        }
+    }
+
+    /// Display line for a proposed action: "Desk Lamp: Brightness → 30".
+    private static func describe(spec: SceneActionSpec, home: HomeGraph.Home) -> String {
+        let accessory = spec.accessoryId
+        let label = characteristicLabel(for: spec.characteristic, in: home)
+        return "\(accessory): \(label) → \(spec.value.rendered)"
+    }
+
+    /// Display line for an action read from the graph.
+    private static func describe(action: HomeGraph.SceneAction, home: HomeGraph.Home) -> String {
+        let accessory = action.accessoryName ?? action.accessoryId ?? "unknown accessory"
+        let label = action.characteristicName ?? action.characteristic
+        return "\(accessory): \(label) → \(action.valueDescription)"
+    }
+
+    private static func actionLine(_ spec: SceneActionSpec, in home: HomeGraph.Home) -> String {
+        let accessory = accessoryName(of: spec.accessoryId, in: home) ?? spec.accessoryId
+        return "\(accessory): \(characteristicLabel(for: spec.characteristic, in: home)) → \(spec.value.rendered)"
+    }
+
+    private static func accessoryName(of id: String, in home: HomeGraph.Home) -> String? {
+        home.rooms.flatMap { $0.accessories }.first { $0.id == id }?.name
+    }
+
+    /// Borrow a human label for a characteristic type from any scene action in
+    /// the home that already carries one; unknown types fall back to the type
+    /// string itself. Display-only — proposals are keyed by type.
+    private static func characteristicLabel(for type: String, in home: HomeGraph.Home) -> String {
+        for scene in home.scenes {
+            for action in scene.actions where action.characteristic == type {
+                if let name = action.characteristicName { return name }
+            }
+        }
+        return type
+    }
+}
+
+extension ProposalStore {
+    /// The store every caller wants: planned by `ProposalPlanner`. The store
+    /// itself takes any plan function — tests and future tools can substitute
+    /// their own — so the concrete planner lives here, with the planner.
+    public init(
+        homeKit: any HomeKitWriting,
+        now: @escaping @Sendable () -> Date = { Date() },
+        lifetime: TimeInterval = 24 * 60 * 60
+    ) {
+        self.init(homeKit: homeKit, planWith: ProposalPlanner.planFunction, now: now, lifetime: lifetime)
+    }
+}
