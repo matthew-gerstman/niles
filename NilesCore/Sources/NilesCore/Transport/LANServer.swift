@@ -1,0 +1,128 @@
+import Foundation
+import MCP
+import Network
+
+/// Bonjour identity for the MCP endpoint, advertised only while the listener runs.
+public enum NilesBonjour {
+    public static let instanceName = "Niles"
+    public static let serviceType = "_niles-mcp._tcp"
+}
+
+/// Thrown when the server cannot be constructed (e.g. an invalid port).
+public enum LANServerError: Error, Equatable {
+    case invalidPort(UInt16)
+}
+
+/// Accepts LAN connections and serves them through the MCP gateway.
+///
+/// Owns the `NWListener` and one task per connection. Session, auth, and MCP logic
+/// live in the gateway; this layer only moves bytes. Niles serves while the app is
+/// foregrounded: `stop()` cancels the listener (which unregisters any advertised
+/// service) and closes every connection, so the LAN server's lifetime is exactly
+/// the app's visible lifetime.
+public actor LANServer {
+
+    public enum State: Sendable, Equatable {
+        case idle
+        case running(port: UInt16)
+        case stopped
+        case failed(String)
+    }
+
+    /// The fixed port the approved pairing screen advertises (`http://<host>:8901/mcp`).
+    public static let defaultPort: UInt16 = 8901
+
+    private let gateway: MCPGateway
+    private let port: UInt16
+    private let bonjourName: String?
+    private let bonjourType: String?
+    private var listener: NWListener?
+    private var connectionRunners: [UUID: HTTPConnectionRunner] = [:]
+
+    public private(set) var state: State = .idle
+
+    public init(
+        gateway: MCPGateway,
+        port: UInt16 = LANServer.defaultPort,
+        bonjourName: String? = NilesBonjour.instanceName,
+        bonjourType: String? = NilesBonjour.serviceType
+    ) {
+        self.gateway = gateway
+        self.port = port
+        self.bonjourName = bonjourName
+        self.bonjourType = bonjourType
+    }
+
+    /// Starts accepting connections. Idempotent while already listening.
+    public func start() async throws {
+        guard listener == nil else { return }
+
+        let parameters = NWParameters.tcp
+        parameters.allowLocalEndpointReuse = true
+        guard let endpointPort = NWEndpoint.Port(rawValue: port) else {
+            throw LANServerError.invalidPort(port)
+        }
+        let listener = try NWListener(using: parameters, on: endpointPort)
+
+        // Advertising lives with the listener: cancelling it unregisters the service,
+        // so `_niles-mcp._tcp` disappears the moment serving stops. The app's
+        // Info.plist declares the type in NSBonjourServices (local-network prompt).
+        if let bonjourType {
+            listener.service = NWListener.Service(name: bonjourName ?? "Niles", type: bonjourType)
+        }
+
+        listener.stateUpdateHandler = { [weak self] listenerState in
+            Task { await self?.listenerStateChanged(listenerState) }
+        }
+        listener.newConnectionHandler = { [gateway] connection in
+            let runner = HTTPConnectionRunner(connection: connection, gateway: gateway)
+            Task { await self.serve(runner) }
+        }
+
+        listener.start(queue: DispatchQueue(label: "com.gerstman.niles.listener"))
+        self.listener = listener
+        state = .running(port: port)
+    }
+
+    /// Stops accepting connections, closes every client connection, and tears down
+    /// gateway sessions. Idempotent.
+    public func stop() async {
+        listener?.cancel()
+        listener = nil
+        for runner in connectionRunners.values {
+            runner.cancel()
+        }
+        connectionRunners.removeAll()
+        await gateway.stop()
+        state = .stopped
+    }
+
+    private func serve(_ runner: HTTPConnectionRunner) async {
+        let identifier = UUID()
+        connectionRunners[identifier] = runner
+        await runner.run()
+        connectionRunners.removeValue(forKey: identifier)
+    }
+
+    private func listenerStateChanged(_ listenerState: NWListener.State) {
+        switch listenerState {
+        case .ready:
+            state = .running(port: port)
+        case .failed(let error):
+            // The listener is dead (port conflict, interface gone) — clear it so a
+            // later start() can try again, and surface the cause.
+            state = .failed(String(describing: error))
+            listener = nil
+        case .cancelled:
+            // A listener that failed then cancelled keeps the failure cause;
+            // a normally-cancelled one reports .stopped.
+            if case .failed = state {} else { state = .stopped }
+        case .waiting:
+            break  // transient (e.g. interface selection); the listener recovers on its own
+        case .setup:
+            break
+        @unknown default:
+            break
+        }
+    }
+}
