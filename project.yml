@@ -13,7 +13,6 @@ packages:
 settings:
   base:
     SWIFT_VERSION: "6.0"
-    DEVELOPMENT_TEAM: DVM2MJ6Z3Q
     CODE_SIGN_STYLE: Automatic
 
 targets:
@@ -30,6 +29,10 @@ targets:
       path: Niles/Info.plist
       properties:
         CFBundleDisplayName: Niles
+        # Version values come from the target's build settings so this stays
+        # the single source of truth in project.yml.
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UILaunchScreen: {}
         NSLocalNetworkUsageDescription: >-
           Niles advertises an MCP server on your local network so agents on the
@@ -43,6 +46,9 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.gerstman.niles
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
+        # Team scoped to the app target: frameworks and tests stay unsigned, and
+        # other contributors can override their own team without editing this file.
+        DEVELOPMENT_TEAM: DVM2MJ6Z3Q
 
   NilesCore:
     type: framework

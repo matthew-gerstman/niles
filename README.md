@@ -26,13 +26,14 @@ xcodegen generate
 open Niles.xcodeproj
 ```
 
-Build and test from the CLI:
+Build and test from the CLI (pick any available simulator from
+`xcrun simctl list devices available`; iPhone 17 used here):
 
 ```sh
 xcodebuild build -project Niles.xcodeproj -scheme Niles \
-  -destination 'platform=iOS Simulator,name=iPhone 16' CODE_SIGNING_ALLOWED=NO
+  -destination 'platform=iOS Simulator,name=iPhone 17' CODE_SIGNING_ALLOWED=NO
 xcodebuild test -project Niles.xcodeproj -scheme Niles \
-  -destination 'platform=iOS Simulator,name=iPhone 16' CODE_SIGNING_ALLOWED=NO
+  -destination 'platform=iOS Simulator,name=iPhone 17' CODE_SIGNING_ALLOWED=NO
 ```
 
 CI runs the same generate → build → test on every pull request.
