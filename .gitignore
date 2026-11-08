@@ -1,0 +1,15 @@
+# Generated Xcode project — source of truth is project.yml
+*.xcodeproj
+
+# Xcode noise
+xcuserdata/
+DerivedData/
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Swift Package Manager
+.build/
+
+# macOS
+.DS_Store

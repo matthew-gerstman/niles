@@ -1,0 +1,82 @@
+name: Niles
+options:
+  bundleIdPrefix: com.gerstman
+  createIntermediateGroups: true
+  deploymentTarget:
+    iOS: "17.0"
+
+packages:
+  MCPSwift:
+    url: https://github.com/modelcontextprotocol/swift-sdk
+    exactVersion: 0.12.1
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    CODE_SIGN_STYLE: Automatic
+
+targets:
+  Niles:
+    type: application
+    platform: iOS
+    sources:
+      - path: Niles
+    entitlements:
+      path: Niles/Niles.entitlements
+      properties:
+        com.apple.developer.homekit: true
+    info:
+      path: Niles/Info.plist
+      properties:
+        CFBundleDisplayName: Niles
+        # Version values come from the target's build settings so this stays
+        # the single source of truth in project.yml.
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        UILaunchScreen: {}
+        NSLocalNetworkUsageDescription: >-
+          Niles advertises an MCP server on your local network so agents on the
+          same network can discover and connect to it.
+        NSBonjourServices:
+          - "_niles-mcp._tcp"
+    dependencies:
+      - target: NilesCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.gerstman.niles
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        # Team scoped to the app target: frameworks and tests stay unsigned, and
+        # other contributors can override their own team without editing this file.
+        DEVELOPMENT_TEAM: DVM2MJ6Z3Q
+
+  NilesCore:
+    type: framework
+    platform: iOS
+    sources:
+      - path: NilesCore/Sources
+    dependencies:
+      - package: MCPSwift
+        product: MCP
+    info:
+      path: NilesCore/Info.plist
+      properties:
+        CFBundleDisplayName: NilesCore
+
+  NilesCoreTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: NilesCore/Tests
+    dependencies:
+      - target: NilesCore
+
+schemes:
+  Niles:
+    build:
+      targets:
+        Niles: all
+        NilesCoreTests: [test]
+    test:
+      targets:
+        - NilesCoreTests
