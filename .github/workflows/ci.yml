@@ -24,6 +24,12 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
+      - name: Resolve Swift packages
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project Niles.xcodeproj \
+            -scheme Niles
+
       - name: List available simulators
         run: xcrun simctl list devices available
 
