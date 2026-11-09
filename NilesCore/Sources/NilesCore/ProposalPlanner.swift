@@ -286,9 +286,9 @@ public enum ProposalPlanner {
         ]
         card += actions.map { ProposalCardLine(.add, describe(spec: $0, home: home)) }
         card += capabilityNotes
-        // Scope note: execute is deliberately out of v1 (spec) — the card
-        // preempts the "did it run?" question.
-        card.append(ProposalCardLine(.note, "⚠ Niles stages scenes; it never runs one."))
+        // Scope note: the card preempts the "did it run?" question —
+        // running the scene is a separate approval (execute_scene).
+        card.append(ProposalCardLine(.note, "⚠ To run this scene later, use execute_scene after approval."))
 
         return Plan(
             tool: "create_scene",
