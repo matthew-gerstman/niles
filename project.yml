@@ -80,6 +80,11 @@ targets:
       - target: NilesCore
       - package: MCPSwift
         product: MCP
+    settings:
+      base:
+        # Signing (even ad-hoc, as the simulator test action does) requires an
+        # Info.plist; generate one so the Keychain-backed tests can run signed.
+        GENERATE_INFOPLIST_FILE: YES
 
   # App-target unit tests: exercise the live UI wiring (LiveNilesStore) inside
   # the app process, since the view models live in the app target.
@@ -94,6 +99,8 @@ targets:
         product: MCP
     settings:
       base:
+        # See NilesCoreTests: ad-hoc signing needs an Info.plist.
+        GENERATE_INFOPLIST_FILE: YES
         TEST_HOST: $(BUILT_PRODUCTS_DIR)/Niles.app/Niles
         BUNDLE_LOADER: $(TEST_HOST)
 
@@ -108,6 +115,8 @@ targets:
       - target: Niles
     settings:
       base:
+        # See NilesCoreTests: ad-hoc signing needs an Info.plist.
+        GENERATE_INFOPLIST_FILE: YES
         TEST_TARGET_NAME: Niles
         PRODUCT_BUNDLE_IDENTIFIER: com.gerstman.niles.uitests
 
