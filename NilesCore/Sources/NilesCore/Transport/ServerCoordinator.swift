@@ -70,7 +70,10 @@ public final class ServerCoordinator {
                     auth: BearerTokenAuthMiddleware(tokenProvider: tokenProvider)
                 )
             }
-            let server = LANServer(gateway: gateway, port: port)
+            // The pairing exchange answers on the same listener, routed ahead
+            // of the gateway's auth gate by the connection runner.
+            let pairing = PairingService(codes: PairingCodeManager(), tokens: tokenStore)
+            let server = LANServer(gateway: gateway, pairingService: pairing, port: port)
             try await server.start()
             self.server = server
             self.gateway = gateway

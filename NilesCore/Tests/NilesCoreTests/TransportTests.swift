@@ -516,22 +516,6 @@ private func matches(_ outcome: HTTPParseOutcome, _ expected: HTTPParseOutcome) 
 
 // MARK: - Token-set helpers
 
-/// A service name no other test run has ever used: Keychain tests must not
-/// see (or evict) each other's items across runs on one simulator.
-private func isolatedService() -> String {
-    "com.gerstman.niles.tests." + UUID().uuidString
-}
-
-/// Deletes every generic-password item under the service — test cleanup for
-/// the isolated namespace above.
-private func deleteAllItems(service: String) {
-    let query: [String: Any] = [
-        kSecClass as String: kSecClassGenericPassword,
-        kSecAttrService as String: service,
-    ]
-    SecItemDelete(query as CFDictionary)
-}
-
 /// Thread-safe in-memory `TokenStoring` double: mutating the set between
 /// requests proves the middleware reads live state, not a construction-time
 /// snapshot.

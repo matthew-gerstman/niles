@@ -6,6 +6,32 @@ import Network
 public enum NilesBonjour {
     public static let instanceName = "Niles"
     public static let serviceType = "_niles-mcp._tcp"
+
+    /// Discovery keys agents read to use the server without out-of-band
+    /// documentation: the MCP endpoint path, the pairing protocol version,
+    /// and the code-capable flag (absent on pre-pairing builds).
+    static let txtEntries = [
+        "mcp": "/mcp",
+        "pairing": "v1",
+        "code": "1",
+    ]
+
+    /// Encodes entries as a NetService TXT record: one length byte followed by
+    /// that many bytes of `key=value`, keys sorted so the record is
+    /// deterministic (and testable).
+    static func txtRecord(_ entries: [String: String]) -> Data {
+        var out = Data()
+        for (key, value) in entries.sorted(by: { $0.key < $1.key }) {
+            let entry = "\(key)=\(value)"
+            precondition(entry.utf8.count <= 255, "TXT entry \(entry) exceeds the 255-byte record limit")
+            out.append(UInt8(entry.utf8.count))
+            out.append(contentsOf: entry.utf8)
+        }
+        return out
+    }
+
+    /// The TXT record advertised with the MCP service.
+    static var serviceTXT: Data { txtRecord(txtEntries) }
 }
 
 /// Thrown when the server cannot be constructed (e.g. an invalid port).
@@ -33,6 +59,7 @@ public actor LANServer {
     public static let defaultPort: UInt16 = 8901
 
     private let gateway: MCPGateway
+    private let pairingService: PairingService?
     private let port: UInt16
     private let bonjourName: String?
     private let bonjourType: String?
@@ -43,11 +70,13 @@ public actor LANServer {
 
     public init(
         gateway: MCPGateway,
+        pairingService: PairingService? = nil,
         port: UInt16 = LANServer.defaultPort,
         bonjourName: String? = NilesBonjour.instanceName,
         bonjourType: String? = NilesBonjour.serviceType
     ) {
         self.gateway = gateway
+        self.pairingService = pairingService
         self.port = port
         self.bonjourName = bonjourName
         self.bonjourType = bonjourType
@@ -65,17 +94,23 @@ public actor LANServer {
         let listener = try NWListener(using: parameters, on: endpointPort)
 
         // Advertising lives with the listener: cancelling it unregisters the service,
-        // so `_niles-mcp._tcp` disappears the moment serving stops. The app's
-        // Info.plist declares the type in NSBonjourServices (local-network prompt).
+        // so `_niles-mcp._tcp` disappears the moment serving stops. The TXT record
+        // tells agents where the MCP and pairing endpoints live without
+        // out-of-band documentation. The app's Info.plist declares the type in
+        // NSBonjourServices (local-network prompt).
         if let bonjourType {
-            listener.service = NWListener.Service(name: bonjourName ?? "Niles", type: bonjourType)
+            listener.service = NWListener.Service(
+                name: bonjourName ?? "Niles",
+                type: bonjourType,
+                txtRecord: NilesBonjour.serviceTXT
+            )
         }
 
         listener.stateUpdateHandler = { [weak self] listenerState in
             Task { await self?.listenerStateChanged(listenerState) }
         }
-        listener.newConnectionHandler = { [gateway] connection in
-            let runner = HTTPConnectionRunner(connection: connection, gateway: gateway)
+        listener.newConnectionHandler = { [gateway, pairingService] connection in
+            let runner = HTTPConnectionRunner(connection: connection, gateway: gateway, pairing: pairingService)
             Task { await self.serve(runner) }
         }
 
