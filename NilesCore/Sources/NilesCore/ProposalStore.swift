@@ -10,6 +10,14 @@ public enum ProposalStoreError: Error, Equatable, Sendable {
     case proposalNotFound(String)
     case proposalNotPending(id: String, state: ProposalState)
     case homeReadFailed(String)
+    /// The executed record has no paired revert — an operation without a
+    /// meaningful inverse (scene execution), a proposal that never executed,
+    /// or one already undone.
+    case notRevertable(id: String)
+    /// The home has diverged from what execution produced, so the paired
+    /// revert can no longer be applied safely. The divergences name what
+    /// moved; nothing was changed.
+    case undoConflict(id: String, divergences: [ProposalEvidence])
 }
 
 /// The staging, approval, and expiry machine at the heart of the spec.
@@ -41,6 +49,10 @@ public actor ProposalStore {
     /// The operations behind each staged proposal — the execution detail the
     /// envelope intentionally omits. Cleared once terminal.
     private var operations: [String: [HomeKitOperation]] = [:]
+    /// The paired revert captured at execution time for each executed
+    /// proposal that can be undone. In-memory, like the proposals
+    /// themselves; a relaunch loses history either way.
+    private var revertPlans: [String: RevertPlan] = [:]
 
     public init(
         homeKit: any HomeKitWriting,
@@ -123,8 +135,20 @@ public actor ProposalStore {
     /// failure marks the proposal `.failed`, records the HomeKit error, and
     /// reads back whatever did apply so the human and the agent see the same
     /// story. Rejected-at-approval failures leave the home untouched.
-    public func approve(id: String) async throws -> Proposal {
-        try await decide(id: id, to: .approved) { [homeKit] proposal, operations in
+    ///
+    /// `memberRestore` is revert-only: the members returned to an object
+    /// this execution re-creates, applied against the fresh id the re-create
+    /// returns, inside the same forward-only run and read back by the same
+    /// evidence.
+    public func approve(id: String, memberRestore: MemberRestore? = nil) async throws -> Proposal {
+        // The pre-execution state a revert would restore, captured at
+        // execution time — before the first operation runs. A read failure
+        // costs undo coverage, never execution.
+        let preGraph = try? await homeKit.snapshot()
+        var executedOperations: [HomeKitOperation] = []
+        var recordedCreatedIds: [String?] = []
+        let approved = try await decide(id: id, to: .approved) { [homeKit] proposal, operations in
+            executedOperations = operations
             var updated = proposal
             // perform returns the created object's id per operation. Threading
             // those ids into evidence collection matches created rooms,
@@ -132,13 +156,25 @@ public actor ProposalStore {
             // fallback — so a same-named pre-existing object cannot
             // false-confirm a creation.
             var createdIds = [String?](repeating: nil, count: operations.count)
+            var allOperations = operations
             do {
                 for (index, operation) in operations.enumerated() {
                     createdIds[index] = try await homeKit.perform(operation)
                 }
+                if let restore = memberRestore, let createdId = createdIds.compactMap({ $0 }).first {
+                    let restoreOperations = restore.operations(createdId: createdId)
+                    for restoreOperation in restoreOperations {
+                        _ = try await homeKit.perform(restoreOperation)
+                    }
+                    // The restore rides in the same execution and the same
+                    // read-back: each member's return is confirmed like any
+                    // other operation.
+                    allOperations += restoreOperations
+                    createdIds += [String?](repeating: nil, count: restoreOperations.count)
+                }
                 let fresh = try await homeKit.snapshot()
                 updated.evidence = ProposalEvidenceCollector.collect(
-                    operations: operations, createdIds: createdIds, graph: fresh
+                    operations: allOperations, createdIds: createdIds, graph: fresh
                 )
                 updated.state = .executed
             } catch {
@@ -149,14 +185,28 @@ public actor ProposalStore {
                 // honest observation.
                 if let fresh = try? await homeKit.snapshot() {
                     updated.evidence = ProposalEvidenceCollector.collect(
-                        operations: operations, createdIds: createdIds, graph: fresh
+                        operations: allOperations, createdIds: createdIds, graph: fresh
                     )
                 }
                 updated.error = String(describing: error)
                 updated.state = .failed
             }
+            recordedCreatedIds = createdIds
             return updated
         }
+        // Only a clean execution offers undo: a failed one applied an
+        // unknown prefix of its operations, and no plan can honestly
+        // describe the partial state. Both snapshots read, the paired
+        // revert is built and kept for the undo flow.
+        if approved.state == .executed, let preGraph,
+           let postGraph = try? await homeKit.snapshot(),
+           let plan = RevertPlanBuilder.plan(
+               operations: executedOperations, createdIds: recordedCreatedIds,
+               preGraph: preGraph, postGraph: postGraph
+           ) {
+            revertPlans[id] = plan
+        }
+        return approved
     }
 
     /// Denies a staged proposal. Nothing ever executes — matching the
@@ -164,6 +214,89 @@ public actor ProposalStore {
     @discardableResult
     public func deny(id: String) async throws -> Proposal {
         try await decide(id: id, to: .denied) { proposal, _ in proposal }
+    }
+
+    // MARK: - Undo and batch approval
+
+    /// Undoes an executed proposal: its paired revert stages as a normal
+    /// forward-only proposal and executes immediately — the Undo tap IS the
+    /// approval. Execution never rewinds; the revert is a new set of
+    /// operations with its own read-back evidence, linked to the original
+    /// through the proposal's `revertsProposalId`.
+    ///
+    /// The current home must still match what execution produced — objects
+    /// still exist where required, values still equal the recorded
+    /// post-state, membership unchanged. A diverged home throws
+    /// `undoConflict` naming what moved, and applies nothing. Records with
+    /// no meaningful inverse (scene execution), proposals that never
+    /// executed, and already-undone proposals throw `notRevertable`; there
+    /// is no undo of an undo.
+    @discardableResult
+    public func undo(proposalId: String) async throws -> Proposal {
+        guard let original = proposals.first(where: { $0.id == proposalId }) else {
+            throw ProposalStoreError.proposalNotFound(proposalId)
+        }
+        guard original.state == .executed, let plan = revertPlans[proposalId] else {
+            throw ProposalStoreError.notRevertable(id: proposalId)
+        }
+        let current: HomeGraph
+        do {
+            current = try await homeKit.snapshot()
+        } catch {
+            throw ProposalStoreError.homeReadFailed(String(describing: error))
+        }
+        let divergences = plan.conflicts(in: current)
+        guard divergences.isEmpty else {
+            throw ProposalStoreError.undoConflict(id: proposalId, divergences: divergences)
+        }
+        let revert = stage(plan: Plan(
+            tool: original.tool,
+            title: "Undo — \(original.title)",
+            summary: "Restores the home to how it was before “\(original.title)” was applied.",
+            isDestructive: plan.operations.contains { Self.isDestructiveOperation($0) },
+            operations: plan.operations,
+            entries: [],
+            card: [ProposalCardLine(.note, "Reverts “\(original.title)” — applying the paired inverse.")]
+        ))
+        if let index = proposals.firstIndex(where: { $0.id == revert.id }) {
+            proposals[index].revertsProposalId = proposalId
+        }
+        let executed = try await approve(id: revert.id, memberRestore: plan.memberRestore)
+        if executed.state == .executed {
+            // The revert applied: the original is now undone and its plan
+            // is spent — no undo of an undo. The revert's own plan (if any
+            // was captured) is dropped too; undoing a revert is not offered.
+            revertPlans[proposalId] = nil
+            revertPlans[revert.id] = nil
+        }
+        return executed
+    }
+
+    /// Approves and executes every staged proposal immediately — destructive
+    /// included. Execution stays sequential and forward-only: each proposal
+    /// runs to its own terminal state (a mid-batch HomeKit failure marks
+    /// that proposal `.failed` while the rest still run). Undo afterwards is
+    /// per-item, each with its own conflict check.
+    @discardableResult
+    public func approveAll() async throws -> [Proposal] {
+        expireSweep()
+        let ids = proposals.filter { $0.state == .staged }.map(\.id)
+        var executed: [Proposal] = []
+        for id in ids {
+            executed.append(try await approve(id: id))
+        }
+        return executed
+    }
+
+    /// The delete operations — a revert containing any of these is itself
+    /// destructive severity on the queue card.
+    private static func isDestructiveOperation(_ operation: HomeKitOperation) -> Bool {
+        switch operation {
+        case .removeRoom, .removeZone, .removeActionSet, .removeServiceGroup, .removeTrigger, .removeAccessory:
+            true
+        default:
+            false
+        }
     }
 
     // MARK: - Internals
