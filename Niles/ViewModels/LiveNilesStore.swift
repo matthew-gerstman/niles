@@ -1,5 +1,4 @@
 import Foundation
-import MCP
 import NilesCore
 import Observation
 import OSLog
@@ -429,32 +428,60 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, HomeGraphViewMod
             logger.error("Seed fixture requested but no proposal store is running")
             return
         }
-        let registry = WriteToolRegistry(store: store)
-        func stage(_ name: String, _ arguments: [String: MCP.Value]) async -> String? {
-            let response = await registry.call(name: name, arguments: arguments)
-            if response.isError == true {
-                logger.error("Seed fixture \(name, privacy: .public) failed to stage")
-                return nil
-            }
+        // The app target does not link MCP, so fixtures stage hand-built
+        // Plans directly. Operations stay real — approve/undo exercise the
+        // same execution and revert-derivation paths as agent-staged writes.
+        func room(_ id: String, _ name: String?) -> ProposalObjectRef {
+            ProposalObjectRef(kind: .room, id: id, name: name)
+        }
+        func stage(_ plan: Plan) async -> String? {
+            _ = await store.stage(plan: plan)
             await refresh()
-            return pendingProposals.first { $0.tool == name }?.id
+            return pendingProposals.first { $0.tool == plan.tool }?.id
+        }
+        func createRoomPlan() -> Plan {
+            Plan(
+                tool: "create_room",
+                title: "Create room Studio",
+                summary: "Adds the Studio room to the home.",
+                isDestructive: false,
+                operations: [.addRoom(homeId: "home-1", name: "Studio")],
+                entries: [.init(object: room("", "Studio"), op: .create, before: nil, after: "Studio")],
+                card: [.init(.add, "Add room Studio")]
+            )
         }
 
         switch args[index + 1] {
         case "pending":
-            _ = await stage("create_room", ["homeId": .string("home-1"), "name": .string("Studio")])
-            _ = await stage("rename_room", ["roomId": .string("room-2"), "name": .string("Cookery")])
+            _ = await stage(createRoomPlan())
+            _ = await stage(Plan(
+                tool: "rename_room",
+                title: "Rename room to Cookery",
+                summary: "Renames room-2 to Cookery.",
+                isDestructive: false,
+                operations: [.renameRoom(homeId: "home-1", roomId: "room-2", to: "Cookery")],
+                entries: [.init(object: room("room-2", "Cookery"), op: .rename, before: nil, after: "Cookery")],
+                card: [.init(.plain, "Rename room to Cookery")]
+            ))
 
         case "destructive":
-            _ = await stage("create_room", ["homeId": .string("home-1"), "name": .string("Studio")])
-            _ = await stage("delete_room", ["roomId": .string("room-3")])
+            _ = await stage(createRoomPlan())
+            _ = await stage(Plan(
+                tool: "delete_room",
+                title: "Delete room",
+                summary: "Removes room-3 and its accessory assignments.",
+                isDestructive: true,
+                operations: [.removeRoom(homeId: "home-1", roomId: "room-3")],
+                entries: [.init(object: room("room-3", nil), op: .delete, before: nil, after: nil)],
+                card: [.init(.remove, "Delete room-3"), .init(.note, "Accessories in this room become unassigned.")]
+            ))
 
         case "undo":
-            guard let id = await stage("create_room", ["homeId": .string("home-1"), "name": .string("Studio")]) else { return }
+            guard let id = await stage(createRoomPlan()) else { return }
             await approveAndWait(id)
 
         case "conflict":
-            guard let id = await stage("create_room", ["homeId": .string("home-1"), "name": .string("Studio")]) else { return }
+            guard let id = await stage(createRoomPlan()) else { return }
             await approveAndWait(id)
             // Diverge the home out-of-band — the revert expects the created
             // room to still exist, so removing it directly is exactly the
