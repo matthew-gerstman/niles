@@ -271,7 +271,7 @@ public enum ProposalPlanner {
         var card: [ProposalCardLine] = [
             ProposalCardLine(.add, "Scene “\(trimmed)” · created with \(actions.count) \(actionNoun)")
         ]
-        card += actions.map { ProposalCardLine(.add, actionLine($0, in: home)) }
+        card += actions.map { ProposalCardLine(.add, describe(spec: $0, home: home)) }
         // Scope note: execute is deliberately out of v1 (spec) — the card
         // preempts the "did it run?" question.
         card.append(ProposalCardLine(.note, "⚠ Niles stages scenes; it never runs one."))
@@ -760,7 +760,7 @@ public enum ProposalPlanner {
 
     /// Display line for a proposed action: "Desk Lamp: Brightness → 30".
     private static func describe(spec: SceneActionSpec, home: HomeGraph.Home) -> String {
-        let accessory = spec.accessoryId
+        let accessory = accessoryName(of: spec.accessoryId, in: home) ?? spec.accessoryId
         let label = characteristicLabel(for: spec.characteristic, in: home)
         return "\(accessory): \(label) → \(spec.value.rendered)"
     }
@@ -770,11 +770,6 @@ public enum ProposalPlanner {
         let accessory = action.accessoryName ?? action.accessoryId ?? "unknown accessory"
         let label = action.characteristicName ?? action.characteristic
         return "\(accessory): \(label) → \(action.valueDescription)"
-    }
-
-    private static func actionLine(_ spec: SceneActionSpec, in home: HomeGraph.Home) -> String {
-        let accessory = accessoryName(of: spec.accessoryId, in: home) ?? spec.accessoryId
-        return "\(accessory): \(characteristicLabel(for: spec.characteristic, in: home)) → \(spec.value.rendered)"
     }
 
     private static func accessoryName(of id: String, in home: HomeGraph.Home) -> String? {

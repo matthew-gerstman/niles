@@ -160,6 +160,81 @@ import Testing
         #expect(approved.evidence.first?.observed.contains("2 actions") == true)
     }
 
+    /// The review card and diff entries name accessories by their human name
+    /// resolved from the live graph — never the raw id the agent sent.
+    @Test func sceneActionCardShowsResolvedAccessoryNames() async throws {
+        var graph = fixtureGraph()
+        graph.homes[0].scenes.append(HomeGraph.Scene(
+            id: "scene-movie", name: "Movie Night",
+            actions: [HomeGraph.SceneAction(
+                accessoryId: "acc-lamp-b", accessoryName: "Lamp B", service: nil,
+                characteristic: "Brightness", characteristicName: "Brightness", valueDescription: "30"
+            )]
+        ))
+        let (_, store, registry, _) = makeContext(graph: graph)
+
+        let staged = try proposal(from: await registry.call(
+            name: "set_scene_actions",
+            arguments: [
+                "sceneId": .string("scene-movie"),
+                "actions": .array([
+                    .object([
+                        "accessoryId": .string("acc-light-a"),
+                        "characteristic": .string("Brightness"),
+                        "value": .int(10),
+                    ]),
+                ]),
+            ]
+        ))
+
+        // The added action's after-string and card line carry the name.
+        let added = staged.entries.first { $0.op == .addMembers }
+        #expect(added?.after == "Light A: Brightness → 10")
+        // The removed action's before-string resolves its stored name.
+        let removed = staged.entries.first { $0.op == .removeMembers }
+        #expect(removed?.before == "Lamp B: Brightness → 30")
+        #expect(staged.card.contains { $0.text.contains("add action Light A: Brightness → 10") })
+        #expect(staged.card.contains { $0.text.contains("remove action Lamp B: Brightness → 30") })
+        // No card line falls back to the raw id while the name resolves.
+        #expect(!staged.card.contains { $0.text.contains("acc-") })
+    }
+
+    /// Unresolvable accessories keep the raw id on the card — the fallback
+    /// the spec allows when the graph cannot name the accessory.
+    @Test func sceneActionCardFallsBackToRawIdWhenNameUnresolvable() async throws {
+        var graph = fixtureGraph()
+        graph.homes[0].scenes.append(HomeGraph.Scene(
+            id: "scene-movie", name: "Movie Night",
+            // A graph record without a stored accessory name (e.g. written
+            // before name threading existed) falls back to the raw id.
+            actions: [HomeGraph.SceneAction(
+                accessoryId: "acc-light-a", accessoryName: nil, service: nil,
+                characteristic: "Brightness", characteristicName: "Brightness", valueDescription: "30"
+            )]
+        ))
+        let (_, store, registry, _) = makeContext(graph: graph)
+
+        let staged = try proposal(from: await registry.call(
+            name: "set_scene_actions",
+            arguments: [
+                "sceneId": .string("scene-movie"),
+                "actions": .array([
+                    .object([
+                        "accessoryId": .string("acc-lamp-b"),
+                        "characteristic": .string("Brightness"),
+                        "value": .int(20),
+                    ]),
+                ]),
+            ]
+        ))
+
+        let removed = staged.entries.first { $0.op == .removeMembers }
+        #expect(removed?.before == "acc-light-a: Brightness → 30")
+        #expect(staged.card.contains { $0.text.contains("remove action acc-light-a: Brightness → 30") })
+        // The resolvable addition still shows its name.
+        #expect(staged.card.contains { $0.text.contains("add action Lamp B: Brightness → 20") })
+    }
+
     // MARK: - Deny
 
     @Test func denyLeavesHomeUntouchedAndIsTerminal() async throws {
