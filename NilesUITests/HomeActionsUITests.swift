@@ -4,23 +4,20 @@ import XCTest
 /// Settings screen, driven deterministically in the simulator (which runs
 /// the demo fixture through FakeHomeKitService).
 ///
-/// CI drives the quick actions through the `-UIRevealQuickActions` launch
-/// hook and real button taps — XCUITest's synthesized drag gestures are
-/// unreliably delivered (cancelled mid-path), so gesture-driven assertions
-/// are inherently flaky. The physical swipes themselves are covered by the
-/// recorded QA evidence rather than CI.
+/// CI asserts the trailing quick-action menu affordance on the rows, then
+/// drives the staging flow through the row detail page, where the same
+/// actions are plain buttons — XCUITest taps on popup-menu items and other
+/// gestures are unreliably delivered, so the menu interaction itself is
+/// covered by the recorded QA evidence rather than CI.
 final class HomeActionsUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
     }
 
     @MainActor
-    func testQuickActionsRevealAndStageIntoQueue() throws {
+    func testQuickActionsStageIntoQueue() throws {
         let app = XCUIApplication()
-        app.launchArguments += [
-            "-UITabSelect", "home",
-            "-UIRevealQuickActions", "Good Morning",
-        ]
+        app.launchArguments += ["-UITabSelect", "home"]
         app.launch()
 
         let scene = app.staticTexts["Good Morning"]
@@ -35,18 +32,36 @@ final class HomeActionsUITests: XCTestCase {
         app.tabBars.buttons["Home"].tap()
         XCTAssertTrue(scene.waitForExistence(timeout: 10))
 
-        // The hook pre-revealed the scene row's quick actions — the same
-        // buttons a left swipe exposes. Assert the reveal deterministically.
-        let delete = app.buttons["Delete"]
-        XCTAssertTrue(delete.waitForExistence(timeout: 10))
-        XCTAssertTrue(app.buttons["Run"].exists)
-        XCTAssertTrue(app.buttons["Rename"].exists)
+        // Every row carries the trailing quick-action menu affordance.
+        let quickActions = app.buttons["Actions for Good Morning"]
+        XCTAssertTrue(quickActions.waitForExistence(timeout: 10))
         sleep(1)
         capture("home-quick-actions", in: app)
 
-        // Tapping a quick action stages it — a Run on the scene row lands as
-        // a proposal in the queue. Nothing applies from Home.
-        app.buttons["Run"].tap()
+        // The same action set is reachable from the row detail page, where
+        // the actions are plain buttons. Tap the row itself — activating the
+        // inner static text does not reliably trigger the NavigationLink in
+        // synthetic runs. Tap Run to stage a proposal.
+        let sceneRow = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Good Morning")
+        ).firstMatch
+        XCTAssertTrue(sceneRow.waitForExistence(timeout: 10))
+        sceneRow.tap()
+        XCTAssertTrue(
+            app.navigationBars["Good Morning"].waitForExistence(timeout: 10),
+            "Tapping the scene row should push its detail page"
+        )
+        let detailRun = app.buttons["Run"].firstMatch
+        XCTAssertTrue(detailRun.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["Rename"].exists)
+        XCTAssertTrue(app.buttons["Delete"].exists)
+        capture("home-detail-actions", in: app)
+        detailRun.tap()
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(scene.waitForExistence(timeout: 10))
+
+        // A quick-action Run on the scene row lands as a proposal in the
+        // queue. Nothing applies from Home.
         queueButton.tap()
         let stagedCard = app.staticTexts.containing(
             NSPredicate(format: "label CONTAINS %@", "Good Morning")
