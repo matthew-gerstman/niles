@@ -15,6 +15,7 @@ struct ApprovalsScreen: View {
                 ForEach(model.proposals) { proposal in
                     ProposalCard(
                         proposal: proposal,
+                        decision: model.decisionsInFlight[proposal.id],
                         onOpenDetail: { openDetail = proposal },
                         onApprove: { model.approve(proposal.id) },
                         onDeny: { model.deny(proposal.id) }
@@ -36,9 +37,12 @@ struct ApprovalsScreen: View {
 }
 
 /// One proposal review card. Destructive proposals get the red edge; once a
-/// verdict is recorded the buttons disable and a status chip appears.
+/// verdict is recorded the buttons disable and a status chip appears. While a
+/// decision's pipeline round-trip is still running, `decision` shows an
+/// in-progress chip and disables the buttons before the verdict state lands.
 struct ProposalCard: View {
     let proposal: NilesProposal
+    var decision: ProposalDecision?
     var onOpenDetail: () -> Void = {}
     var onApprove: () -> Void = {}
     var onDeny: () -> Void = {}
@@ -57,9 +61,9 @@ struct ProposalCard: View {
             DiffLineList(lines: proposal.diff)
             HStack(spacing: 8) {
                 ActionButton(title: "Approve", style: .primary, action: onApprove)
-                    .disabled(!proposal.isPending)
+                    .disabled(!proposal.isPending || decision != nil)
                 ActionButton(title: "Deny", style: .ghost, action: onDeny)
-                    .disabled(!proposal.isPending)
+                    .disabled(!proposal.isPending || decision != nil)
             }
             .padding(.top, 2)
             if let chip = statusChip {
@@ -74,12 +78,18 @@ struct ProposalCard: View {
     }
 
     private var statusChip: (text: String, color: Color)? {
+        if let decision {
+            switch decision {
+            case .approving: return ("Approving…", NilesTheme.brand)
+            case .denying: return ("Denying…", NilesTheme.bad)
+            }
+        }
         switch proposal.state {
-        case .staged, .approved: nil
-        case .executed: ("Executed", NilesTheme.good)
-        case .denied: ("Denied", NilesTheme.bad)
-        case .expired: ("Expired", NilesTheme.warn)
-        case .failed: ("Failed", NilesTheme.bad)
+        case .staged, .approved: return nil
+        case .executed: return ("Executed", NilesTheme.good)
+        case .denied: return ("Denied", NilesTheme.bad)
+        case .expired: return ("Expired", NilesTheme.warn)
+        case .failed: return ("Failed", NilesTheme.bad)
         }
     }
 }
@@ -88,9 +98,21 @@ struct ProposalCard: View {
     ApprovalsScreen(model: InMemoryNilesStore())
 }
 
+#Preview("Approvals — deciding") {
+    struct DecidingStore: ApprovalsViewModel {
+        private let base = InMemoryNilesStore()
+        var proposals: [NilesProposal] { base.proposals }
+        var decisionsInFlight: [String: ProposalDecision] { [base.proposals[0].id: .approving] }
+        func approve(_ id: String) { base.approve(id) }
+        func deny(_ id: String) { base.deny(id) }
+    }
+    return ApprovalsScreen(model: DecidingStore())
+}
+
 #Preview("Approvals — empty") {
     struct EmptyStore: ApprovalsViewModel {
         var proposals: [NilesProposal] { [] }
+        var decisionsInFlight: [String: ProposalDecision] { [:] }
         func approve(_ id: String) {}
         func deny(_ id: String) {}
     }

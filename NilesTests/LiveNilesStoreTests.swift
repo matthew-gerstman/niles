@@ -75,6 +75,64 @@ struct LiveNilesStoreTests {
         #expect(store.approvedTodayCount == 1)
     }
 
+    /// Regression for the device-QA latency finding: the tap path must give
+    /// visible feedback synchronously — before the pipeline round-trip
+    /// settles — and reconcile with the settled result.
+    @Test
+    func approveTapShowsOptimisticFeedbackBeforePipelineSettles() async throws {
+        let fake = FakeHomeKitService(graph: .demoFixture)
+        let coordinator = ServerCoordinator(tokenStore: StaticTokenStore(token: "test-token"), homeKitService: fake)
+        let store = LiveNilesStore(coordinator: coordinator, notifier: .disabled)
+        await store.refresh()
+        let registry = WriteToolRegistry(store: try #require(coordinator.proposalStore))
+        _ = await registry.call(
+            name: "create_room",
+            arguments: ["homeId": .string("home-1"), "name": .string("Studio")]
+        )
+        await store.refresh()
+        let pending = try #require(store.pendingProposals.first)
+
+        // The tap path: no await. The in-progress chip must be visible now.
+        store.approve(pending.id)
+        #expect(store.decisionsInFlight[pending.id] == .approving)
+
+        // Reconciliation: the marker clears once the pipeline settles and
+        // the refreshed state is authoritative.
+        try await waitUntil { store.decisionsInFlight.isEmpty }
+        let settled = try #require(store.proposals.first { $0.id == pending.id })
+        #expect(settled.state == .executed)
+        #expect(store.pendingProposals.isEmpty)
+    }
+
+    /// Double-tap idempotency on the tap path: a second tap while the first
+    /// round-trip is still in flight must not execute the operations twice —
+    /// the pipeline's terminal-state guard rejects the re-approve.
+    @Test
+    func doubleTapApproveExecutesOperationsOnce() async throws {
+        let fake = FakeHomeKitService(graph: .demoFixture)
+        let coordinator = ServerCoordinator(tokenStore: StaticTokenStore(token: "test-token"), homeKitService: fake)
+        let store = LiveNilesStore(coordinator: coordinator, notifier: .disabled)
+        await store.refresh()
+        let registry = WriteToolRegistry(store: try #require(coordinator.proposalStore))
+        _ = await registry.call(
+            name: "create_room",
+            arguments: ["homeId": .string("home-1"), "name": .string("Studio")]
+        )
+        await store.refresh()
+        let pending = try #require(store.pendingProposals.first)
+
+        // Two taps in quick succession, as on a card that looked dead.
+        store.approve(pending.id)
+        store.approve(pending.id)
+
+        try await waitUntil {
+            store.decisionsInFlight.isEmpty
+                && store.proposals.first { $0.id == pending.id }?.state == .executed
+        }
+        let after = try await fake.snapshot()
+        #expect(after.homes[0].rooms.filter { $0.name == "Studio" }.count == 1)
+    }
+
     @Test
     func denialLeavesFakeHomeUntouched() async throws {
         let fake = FakeHomeKitService(graph: .demoFixture)

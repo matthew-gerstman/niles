@@ -22,8 +22,19 @@ protocol DashboardViewModel: Observable {
 @MainActor
 protocol ApprovalsViewModel: Observable {
     var proposals: [NilesProposal] { get }
+    /// Proposal id -> decision in flight; present from the tap until the
+    /// pipeline settles (or the decision fails and the card reverts).
+    var decisionsInFlight: [String: ProposalDecision] { get }
     func approve(_ id: String)
     func deny(_ id: String)
+}
+
+/// The direction of a decision whose pipeline round-trip is still running.
+/// Cards render an in-progress chip and disable their buttons until it
+/// settles, so a tap never looks dead while the pipeline works.
+enum ProposalDecision: Hashable {
+    case approving
+    case denying
 }
 
 @MainActor
@@ -55,6 +66,9 @@ final class InMemoryNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGrap
     private(set) var connectedAgents: [AgentConnection] = []
 
     private(set) var proposals: [NilesProposal] = []
+    /// The in-memory store settles decisions synchronously, so nothing is
+    /// ever in flight here.
+    let decisionsInFlight: [String: ProposalDecision] = [:]
 
     private(set) var sections: [HomeSection] = []
 
