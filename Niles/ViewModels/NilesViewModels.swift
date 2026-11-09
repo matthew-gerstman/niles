@@ -201,7 +201,9 @@ final class InMemoryNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGrap
                 title: "\(action.title) “\(row.name)”",
                 agentName: "You",
                 createdAt: Date(),
-                isDestructive: action == .delete
+                isDestructive: action == .delete,
+                evidence: "",
+                diff: []
             )
         )
     }
