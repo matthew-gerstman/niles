@@ -221,6 +221,7 @@ public actor MCPGateway {
     /// The agent's name, from the `initialize` body's `clientInfo.name` —
     /// display only (review cards and the connected-agents list); unknown
     /// when the client omits it.
+    static func clientName(in body: Data?) -> String? {
         guard let json = try? JSONSerialization.jsonObject(with: body ?? Data()) as? [String: Any],
             let params = json["params"] as? [String: Any],
             let clientInfo = params["clientInfo"] as? [String: Any]
