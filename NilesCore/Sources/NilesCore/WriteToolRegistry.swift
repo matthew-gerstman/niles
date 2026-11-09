@@ -273,15 +273,51 @@ public struct WriteToolRegistry: Sendable {
         ),
         Tool(
             name: "create_event_trigger",
-            description: "Create an event automation (HomeKit HMEventTrigger): characteristic events and/or presence events (atHome/away — presence is evaluated by HomeKit itself, no location access). Created DISABLED — arming it requires a separate set_trigger_state approval. Optionally runs an existing scene (sceneId from get_scenes). STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            description: "Create an event automation (HomeKit HMEventTrigger): characteristic events and/or presence events (atHome/away — presence is evaluated by HomeKit itself, no location access). Optionally restores the prior state after a duration (endEvents) and optionally runs once (executeOnce — HomeKit disables the trigger after its first fire). Created DISABLED — arming it requires a separate set_trigger_state approval. Optionally runs an existing scene (sceneId from get_scenes). STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
             inputSchema: objectSchema(
                 [
                     "homeId": stringProperty("The home to create the trigger in (from get_homes)."),
                     "name": stringProperty("The new trigger's name."),
-                    "events": triggerEventsProperty,
+                    "events": triggerEventsProperty("Every event that can activate the trigger."),
+                    "endEvents": triggerEventsProperty(
+                        "Optional events that end the effect and restore the prior state — e.g. end events on the same characteristics the trigger raised."
+                    ),
+                    "executeOnce": .object([
+                        "type": .string("boolean"),
+                        "description": .string("true runs the trigger once and HomeKit disables it afterwards."),
+                    ]),
                     "sceneId": stringProperty("Optional scene the trigger runs when it fires (from get_scenes)."),
                 ],
                 required: ["homeId", "name", "events"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false)
+        ),
+        Tool(
+            name: "update_event_trigger",
+            description: "Edit an event automation's contents: replace its events (declarative — the full list; presence events re-derive their predicate), and optionally its end events, days-of-week recurrences, or run-once behavior, and optionally re-point it at a different scene. Editing never changes the trigger's armed state — a disabled trigger stays disabled; arming stays a separate set_trigger_state approval. Timer triggers have no events; use set_trigger_state to move their schedule. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            inputSchema: objectSchema(
+                [
+                    "triggerId": stringProperty("The event trigger to edit (from get_triggers)."),
+                    "events": triggerEventsProperty("The full replacement event list that can activate the trigger."),
+                    "endEvents": triggerEventsProperty(
+                        "Optional replacement end events; omit to leave them unchanged, pass [] to clear."
+                    ),
+                    "recurrences": .object([
+                        "type": .string("array"),
+                        "items": .object(["type": .string("object")]),
+                        "description": .string(
+                            "Optional days of the week when the trigger is evaluated, e.g. [{\"weekday\": 1}] (1 = Sunday). Omit to leave unchanged; pass [] to clear."
+                        ),
+                    ]),
+                    "executeOnce": .object([
+                        "type": .string("boolean"),
+                        "description": .string("true runs the trigger once and HomeKit disables it afterwards; omit to leave unchanged."),
+                    ]),
+                    "sceneId": stringProperty(
+                        "Optional scene the trigger runs when it fires (from get_scenes); re-points the trigger when passed, leaves the current scene untouched when omitted."
+                    ),
+                ],
+                required: ["triggerId", "events"]
             ),
             annotations: Tool.Annotations(readOnlyHint: false)
         ),
@@ -399,33 +435,35 @@ public struct WriteToolRegistry: Sendable {
         "description": .string("Every characteristic write the scene should perform."),
     ])
 
-    private static let triggerEventsProperty: Value = .object([
-        "type": .string("array"),
-        "items": .object([
-            "type": .string("object"),
-            "description": .string(
-                "Either a characteristic event {accessoryId, characteristic, value?} — value omitted means the event fires on any change — or a presence event {presence: \"atHome\" | \"away\"}."
-            ),
-            "properties": .object([
-                "accessoryId": .object([
-                    "type": .string("string"),
-                    "description": .string("The accessory whose characteristic is watched (from get_rooms)."),
-                ]),
-                "characteristic": .object([
-                    "type": .string("string"),
-                    "description": .string("The characteristic type to watch, e.g. On or MotionDetected."),
-                ]),
-                "value": .object([
-                    "description": .string("Optional threshold value: number, string, or boolean."),
-                ]),
-                "presence": .object([
-                    "type": .string("string"),
-                    "description": .string("\"atHome\" or \"away\" — HomeKit evaluates presence itself; Niles never requests location access."),
+    private static func triggerEventsProperty(_ description: String) -> Value {
+        .object([
+            "type": .string("array"),
+            "items": .object([
+                "type": .string("object"),
+                "description": .string(
+                    "Either a characteristic event {accessoryId, characteristic, value?} — value omitted means the event fires on any change — or a presence event {presence: \"atHome\" | \"away\"}."
+                ),
+                "properties": .object([
+                    "accessoryId": .object([
+                        "type": .string("string"),
+                        "description": .string("The accessory whose characteristic is watched (from get_rooms)."),
+                    ]),
+                    "characteristic": .object([
+                        "type": .string("string"),
+                        "description": .string("The characteristic type to watch, e.g. On or MotionDetected."),
+                    ]),
+                    "value": .object([
+                        "description": .string("Optional threshold value: number, string, or boolean."),
+                    ]),
+                    "presence": .object([
+                        "type": .string("string"),
+                        "description": .string("\"atHome\" or \"away\" — HomeKit evaluates presence itself; Niles never requests location access."),
+                    ]),
                 ]),
             ]),
-        ]),
-        "description": .string("Every event that can activate the trigger."),
-    ])
+            "description": .string(description),
+        ])
+    }
 
     private static func objectSchema(_ properties: [String: Value], required: [String]) -> Value {
         .object([

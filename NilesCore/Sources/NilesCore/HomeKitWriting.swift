@@ -131,9 +131,25 @@ public enum HomeKitOperation: Sendable, Equatable, Hashable {
     case addTimerTrigger(
         homeId: String, name: String, fireDate: Date, recurrence: [String: Int], sceneId: String?
     )
-    case addEventTrigger(homeId: String, name: String, events: [TriggerEventSpec], sceneId: String?)
+    /// `endEvents` restore the prior state after a duration; `executeOnce`
+    /// has HomeKit disable the trigger after its first fire.
+    case addEventTrigger(
+        homeId: String, name: String, events: [TriggerEventSpec], endEvents: [TriggerEventSpec],
+        executeOnce: Bool, sceneId: String?
+    )
     case setTriggerEnabled(homeId: String, triggerId: String, enabled: Bool)
     case updateTimerTrigger(homeId: String, triggerId: String, fireDate: Date, recurrence: [String: Int])
+    /// Edit an event trigger's contents. The event list is declarative (a
+    /// full replacement, like `set_scene_actions`); predicate follows the
+    /// events — presence events imply the presence predicate, characteristic
+    /// events run none. `endEvents`, `recurrences`, and `executeOnce` are
+    /// optional: nil leaves the current value untouched. `sceneId` re-points
+    /// the trigger's scene when passed, and leaves the links alone when nil.
+    /// The create/arm firewall holds: nothing here changes `isEnabled`.
+    case updateEventTrigger(
+        homeId: String, triggerId: String, events: [TriggerEventSpec], endEvents: [TriggerEventSpec]?,
+        recurrences: [[String: Int]]?, executeOnce: Bool?, sceneId: String?
+    )
     case removeTrigger(homeId: String, triggerId: String)
     case renameAccessory(homeId: String, accessoryId: String, to: String)
     case identifyAccessory(homeId: String, accessoryId: String)
@@ -203,5 +219,75 @@ extension HomeGraph.Accessory {
             }
         }
         return nil
+    }
+}
+
+// MARK: - Canonical trigger-event identity
+
+/// The canonical identity of a trigger event — the same event however the
+/// characteristic was spelled (friendly name or type UUID). The ONE matching
+/// rule for staging diffs and evidence read-back on event-trigger edits, per
+/// the locked "one shared view, one matching rule" decision: a proposal the
+/// card shows as changed is what execution and the read-back both see.
+struct CanonicalTriggerEvent: Equatable, Hashable, Sendable {
+    var isPresence: Bool
+    /// Presence events only: which way presence goes, when the graph
+    /// recorded it (live presence refs lose the direction; nil = unknown).
+    var atHome: Bool?
+    var accessoryId: String?
+    var characteristicType: String?
+    var valueDescription: String?
+}
+
+extension TriggerEventSpec {
+    /// Canonical form of a proposed event, with the characteristic's spelling
+    /// resolved to the graph's canonical type via the shared name-or-UUID rule.
+    func canonicalKey(in home: HomeGraph.Home) -> CanonicalTriggerEvent {
+        switch self {
+        case .characteristic(let accessoryId, let characteristic, let value):
+            let canonicalType = home.rooms.flatMap(\.accessories)
+                .first { $0.id == accessoryId }?
+                .characteristic(characteristic, service: nil)?.type
+            return CanonicalTriggerEvent(
+                isPresence: false,
+                atHome: nil,
+                accessoryId: accessoryId,
+                characteristicType: canonicalType ?? characteristic,
+                valueDescription: value?.rendered
+            )
+        case .presence(let atHome):
+            return CanonicalTriggerEvent(
+                isPresence: true, atHome: atHome,
+                accessoryId: nil, characteristicType: nil, valueDescription: nil
+            )
+        }
+    }
+}
+
+extension HomeGraph.EventRef {
+    /// Canonical form of an event read from the graph. The stored
+    /// characteristic spelling may be a friendly name (the fake) or a type
+    /// UUID (live data); canonicalize it through the same lookup so both
+    /// sides of a diff compare equal.
+    func canonicalKey(in home: HomeGraph.Home) -> CanonicalTriggerEvent {
+        if type.lowercased().contains("presence") {
+            return CanonicalTriggerEvent(
+                isPresence: true,
+                atHome: valueDescription.map { $0.caseInsensitiveCompare("atHome") == .orderedSame },
+                accessoryId: nil, characteristicType: nil, valueDescription: nil
+            )
+        }
+        let accessory = accessoryId.flatMap { id in
+            home.rooms.flatMap(\.accessories).first { $0.id == id }
+        }
+        let canonicalType = accessory.flatMap { accessory in
+            characteristicType.flatMap { accessory.characteristic($0, service: nil)?.type }
+        }
+        return CanonicalTriggerEvent(
+            isPresence: false, atHome: nil,
+            accessoryId: accessoryId,
+            characteristicType: canonicalType ?? characteristicType,
+            valueDescription: valueDescription
+        )
     }
 }

@@ -329,6 +329,7 @@ import Testing
         let steps = try resolve(.addEventTrigger(
             homeId: "home-live", name: "Evening",
             events: [.characteristic(accessoryId: "acc-light-live", characteristic: "Brightness", value: .int(30))],
+            endEvents: [], executeOnce: false,
             sceneId: nil
         ), view: liveShapedView())
         #expect(steps == [.createEventTrigger(
@@ -336,6 +337,7 @@ import Testing
             events: [.characteristic(
                 id: "char-brightness-live", type: "00000008-0000-1000-8000-0026BB765291", value: .number(.int(30))
             )],
+            endEvents: [], executeOnce: false,
             sceneId: nil
         )])
     }
@@ -695,11 +697,13 @@ import Testing
         let steps = try resolve(.addEventTrigger(
             homeId: "home-1", name: "Bright",
             events: [.characteristic(accessoryId: "acc-light-a", characteristic: "Brightness", value: .int(10))],
+            endEvents: [], executeOnce: false,
             sceneId: nil
         ))
         #expect(steps == [.createEventTrigger(
             homeId: "home-1", name: "Bright",
             events: [.characteristic(id: "char-brightness-a", type: "Brightness", value: .number(.int(10)))],
+            endEvents: [], executeOnce: false,
             sceneId: nil
         )])
     }
@@ -708,9 +712,10 @@ import Testing
         let steps = try resolve(.addEventTrigger(
             homeId: "home-1", name: "Track",
             events: [.characteristic(accessoryId: "acc-lamp-b", characteristic: "TrackName", value: .string("Radiohead"))],
+            endEvents: [], executeOnce: false,
             sceneId: nil
         ))
-        guard case .createEventTrigger(_, _, let events, _)? = steps.first, events.count == 1 else {
+        guard case .createEventTrigger(_, _, let events, _, _, _)? = steps.first, events.count == 1 else {
             Issue.record("Expected one createEventTrigger step, got \(steps)")
             return
         }
@@ -721,11 +726,13 @@ import Testing
         let steps = try resolve(.addEventTrigger(
             homeId: "home-1", name: "Any motion",
             events: [.characteristic(accessoryId: "acc-light-a", characteristic: "Brightness", value: nil)],
+            endEvents: [], executeOnce: false,
             sceneId: nil
         ))
         #expect(steps == [.createEventTrigger(
             homeId: "home-1", name: "Any motion",
             events: [.characteristic(id: "char-brightness-a", type: "Brightness", value: .anyChange)],
+            endEvents: [], executeOnce: false,
             sceneId: nil
         )])
     }
@@ -733,10 +740,11 @@ import Testing
     @Test func addEventTriggerBuildsPresenceEvents() throws {
         let steps = try resolve(.addEventTrigger(
             homeId: "home-1", name: "Arriving",
-            events: [.presence(atHome: true)], sceneId: nil
+            events: [.presence(atHome: true)], endEvents: [], executeOnce: false, sceneId: nil
         ))
         #expect(steps == [.createEventTrigger(
-            homeId: "home-1", name: "Arriving", events: [.presence(atHome: true)], sceneId: nil
+            homeId: "home-1", name: "Arriving", events: [.presence(atHome: true)],
+            endEvents: [], executeOnce: false, sceneId: nil
         )])
     }
 
@@ -748,6 +756,7 @@ import Testing
                     .presence(atHome: true),
                     .characteristic(accessoryId: "acc-light-a", characteristic: "On", value: .bool(true)),
                 ],
+                endEvents: [], executeOnce: false,
                 sceneId: nil
             ))
         }?.isInvalidOperation == true)
@@ -758,6 +767,7 @@ import Testing
             _ = try self.resolve(.addEventTrigger(
                 homeId: "home-1", name: "Wrong kind",
                 events: [.characteristic(accessoryId: "acc-lamp-b", characteristic: "Volume", value: .string("loud"))],
+                endEvents: [], executeOnce: false,
                 sceneId: nil
             ))
         }?.isInvalidOperation == true)
@@ -768,9 +778,110 @@ import Testing
             _ = try self.resolve(.addEventTrigger(
                 homeId: "home-1", name: "Ghost",
                 events: [.characteristic(accessoryId: "acc-light-a", characteristic: "Hue", value: nil)],
+                endEvents: [], executeOnce: false,
                 sceneId: nil
             ))
         } == .objectMissing("Accessory “Light A” has no characteristic Hue."))
+    }
+
+    // MARK: Event-trigger updates
+
+    @Test func updateEventTriggerSwapsEventsAndResolvesByFriendlyName() throws {
+        let steps = try resolve(.updateEventTrigger(
+            homeId: "home-1", triggerId: "trigger-event",
+            events: [.characteristic(accessoryId: "acc-light-a", characteristic: "Brightness", value: .int(30))],
+            endEvents: nil, recurrences: nil, executeOnce: nil, sceneId: nil
+        ))
+        #expect(steps == [.updateEventTrigger(
+            homeId: "home-1", triggerId: "trigger-event",
+            events: [.characteristic(id: "char-brightness-a", type: "Brightness", value: .number(.int(30)))],
+            endEvents: nil, recurrences: nil, executeOnce: nil, sceneId: nil
+        )])
+    }
+
+    @Test func updateEventTriggerDerivesThePredicateFromPresenceEvents() throws {
+        // The predicate is never a free-form input: presence events imply the
+        // presence predicate, exactly like creation (the executor derives it).
+        let steps = try resolve(.updateEventTrigger(
+            homeId: "home-1", triggerId: "trigger-event",
+            events: [.presence(atHome: false)],
+            endEvents: nil, recurrences: nil, executeOnce: nil, sceneId: nil
+        ))
+        #expect(steps == [.updateEventTrigger(
+            homeId: "home-1", triggerId: "trigger-event",
+            events: [.presence(atHome: false)],
+            endEvents: nil, recurrences: nil, executeOnce: nil, sceneId: nil
+        )])
+    }
+
+    @Test func updateEventTriggerCarriesExecuteOnceAndScene() throws {
+        let steps = try resolve(.updateEventTrigger(
+            homeId: "home-1", triggerId: "trigger-event",
+            events: [.presence(atHome: true)],
+            endEvents: nil, recurrences: [["weekday": 2]], executeOnce: true, sceneId: "scene-chill"
+        ))
+        guard case .updateEventTrigger(_, _, _, _, let recurrences, let executeOnce, let sceneId)? = steps.first else {
+            Issue.record("Expected one updateEventTrigger step, got \(steps)")
+            return
+        }
+        #expect(executeOnce == true)
+        #expect(sceneId == "scene-chill")
+        #expect(recurrences?.count == 1 && recurrences?[0].weekday == 2)
+    }
+
+    @Test func updateEventTriggerRejectsTimerTriggers() {
+        #expect(error {
+            _ = try self.resolve(.updateEventTrigger(
+                homeId: "home-1", triggerId: "trigger-timer",
+                events: [.presence(atHome: true)],
+                endEvents: nil, recurrences: nil, executeOnce: nil, sceneId: nil
+            ))
+        }?.isInvalidOperation == true)
+    }
+
+    @Test func updateEventTriggerRejectsMissingTrigger() {
+        #expect(error {
+            _ = try self.resolve(.updateEventTrigger(
+                homeId: "home-1", triggerId: "trigger-x",
+                events: [.presence(atHome: true)],
+                endEvents: nil, recurrences: nil, executeOnce: nil, sceneId: nil
+            ))
+        } == .objectMissing("No trigger trigger-x."))
+    }
+
+    @Test func updateEventTriggerRejectsMissingSceneReference() {
+        #expect(error {
+            _ = try self.resolve(.updateEventTrigger(
+                homeId: "home-1", triggerId: "trigger-event",
+                events: [.presence(atHome: true)],
+                endEvents: nil, recurrences: nil, executeOnce: nil, sceneId: "scene-x"
+            ))
+        } == .objectMissing("No scene scene-x."))
+    }
+
+    @Test func updateEventTriggerRejectsNonWeekdayRecurrences() {
+        #expect(error {
+            _ = try self.resolve(.updateEventTrigger(
+                homeId: "home-1", triggerId: "trigger-event",
+                events: [.presence(atHome: true)],
+                endEvents: nil, recurrences: [["hour": 2]], executeOnce: nil, sceneId: nil
+            ))
+        }?.isInvalidOperation == true)
+    }
+
+    @Test func addEventTriggerCarriesEndEventsAndExecuteOnce() throws {
+        let steps = try resolve(.addEventTrigger(
+            homeId: "home-1", name: "Pulse",
+            events: [.characteristic(accessoryId: "acc-light-a", characteristic: "On", value: .bool(true))],
+            endEvents: [.characteristic(accessoryId: "acc-light-a", characteristic: "On", value: .bool(false))],
+            executeOnce: true, sceneId: nil
+        ))
+        #expect(steps == [.createEventTrigger(
+            homeId: "home-1", name: "Pulse",
+            events: [.characteristic(id: "char-on-a", type: "On", value: .number(.bool(true)))],
+            endEvents: [.characteristic(id: "char-on-a", type: "On", value: .number(.bool(false)))],
+            executeOnce: true, sceneId: nil
+        )])
     }
 
     // MARK: Trigger state and deletion

@@ -562,14 +562,63 @@ extension HomeManagerHomeKitService: HomeKitWriting {
             try await Self.enforceBornDisabled(trigger)
             return trigger.uniqueIdentifier.uuidString
 
-        case .createEventTrigger(let homeId, let name, let events, let sceneId):
+        case .createEventTrigger(let homeId, let name, let events, let endEvents, let executeOnce, let sceneId):
             let home = try Self.home(homeId, in: homes)
+            // The creation initializer takes end events and recurrences;
+            // executeOnce is a post-add update (HomeKit disables the trigger
+            // after its first fire when set).
             let (hmEvents, predicate) = try Self.events(events, in: home)
-            let trigger = HMEventTrigger(name: name, events: hmEvents, predicate: predicate)
+            let (hmEndEvents, _) = try Self.events(endEvents, in: home)
+            let trigger = HMEventTrigger(
+                name: name, events: hmEvents, end: hmEndEvents.isEmpty ? nil : hmEndEvents,
+                recurrences: nil, predicate: predicate
+            )
             try await Self.add(trigger, to: home)
+            if executeOnce {
+                try await Self.updateExecuteOnce(trigger, to: true)
+            }
             try await Self.linkScene(sceneId, to: trigger, in: home)
             try await Self.enforceBornDisabled(trigger)
             return trigger.uniqueIdentifier.uuidString
+        case .updateEventTrigger(
+            let homeId, let triggerId, let events, let endEvents, let recurrences, let executeOnce, let sceneId
+        ):
+            let home = try Self.home(homeId, in: homes)
+            let trigger = try Self.trigger(triggerId, in: home)
+            guard let eventTrigger = trigger as? HMEventTrigger else {
+                throw HomeKitWriteError.invalidOperation(
+                    "Trigger \(trigger.name) is not an event trigger; it has no events to edit."
+                )
+            }
+            // The event list is declarative: replace everything, and
+            // re-derive the predicate the same way creation does (presence
+            // events imply the presence predicate; characteristic events run
+            // unpredicated).
+            let (hmEvents, predicate) = try Self.events(events, in: home)
+            try await Self.updateEvents(eventTrigger, to: hmEvents)
+            try await Self.updatePredicate(eventTrigger, to: predicate)
+            if let endEvents {
+                let (hmEndEvents, _) = try Self.events(endEvents, in: home)
+                try await Self.updateEndEvents(eventTrigger, to: hmEndEvents)
+            }
+            if let recurrences {
+                try await Self.updateRecurrences(eventTrigger, to: recurrences)
+            }
+            if let executeOnce {
+                try await Self.updateExecuteOnce(eventTrigger, to: executeOnce)
+            }
+            if let sceneId {
+                // Relinking is explicit: replace the registered action sets
+                // with the named scene. An omitted sceneId leaves the links
+                // untouched.
+                for actionSet in eventTrigger.actionSets {
+                    try await Self.remove(actionSet, from: eventTrigger)
+                }
+                try await Self.linkScene(sceneId, to: eventTrigger, in: home)
+            }
+            // The create/arm firewall: nothing above touches isEnabled — an
+            // edited trigger keeps its current armed state.
+            return nil
 
         case .setTriggerEnabled(let homeId, let triggerId, let enabled):
             let home = try Self.home(homeId, in: homes)
@@ -1079,6 +1128,54 @@ extension HomeManagerHomeKitService: HomeKitWriting {
     private static func remove(_ trigger: HMTrigger, from home: HMHome) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             home.removeTrigger(trigger) { error in
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            }
+        }
+    }
+
+    private static func updateEvents(_ trigger: HMEventTrigger, to events: [HMEvent]) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            trigger.updateEvents(events) { error in
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            }
+        }
+    }
+
+    private static func updateEndEvents(_ trigger: HMEventTrigger, to endEvents: [HMEvent]) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            trigger.updateEndEvents(endEvents) { error in
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            }
+        }
+    }
+
+    private static func updatePredicate(_ trigger: HMEventTrigger, to predicate: NSPredicate?) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            trigger.updatePredicate(predicate) { error in
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            }
+        }
+    }
+
+    private static func updateRecurrences(_ trigger: HMEventTrigger, to recurrences: [DateComponents]) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            trigger.updateRecurrences(recurrences) { error in
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            }
+        }
+    }
+
+    private static func updateExecuteOnce(_ trigger: HMEventTrigger, to executeOnce: Bool) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            trigger.updateExecuteOnce(executeOnce) { error in
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            }
+        }
+    }
+
+    private static func remove(_ actionSet: HMActionSet, from trigger: HMTrigger) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            trigger.removeActionSet(actionSet) { error in
                 if let error { continuation.resume(throwing: error) } else { continuation.resume() }
             }
         }

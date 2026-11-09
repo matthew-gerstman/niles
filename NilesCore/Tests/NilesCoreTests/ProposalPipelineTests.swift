@@ -384,6 +384,75 @@ import Testing
         #expect(polled.state == .expired)
     }
 
+    // MARK: - Event-trigger editing
+
+    /// The deny and expiry paths for update_event_trigger (spec: denial and
+    /// expiry apply nothing) plus staging over the pipeline's own fixture.
+    @Test func eventTriggerUpdateStagesDeniesAndExpiresWithoutTouchingTheTrigger() async throws {
+        let (fake, store, registry, clock) = makeContext()
+
+        let scene = try proposal(from: await registry.call(
+            name: "create_scene",
+            arguments: [
+                "homeId": .string("home-1"),
+                "name": .string("Movie Night"),
+                "actions": .array([.object([
+                    "accessoryId": .string("acc-light-a"),
+                    "characteristic": .string("On"),
+                    "value": .bool(true),
+                ])]),
+            ]
+        ))
+        _ = try await store.approve(id: scene.id)
+
+        let created = try proposal(from: await registry.call(
+            name: "create_event_trigger",
+            arguments: [
+                "homeId": .string("home-1"),
+                "name": .string("Lights On"),
+                "events": .array([
+                    .object([
+                        "accessoryId": .string("acc-light-a"),
+                        "characteristic": .string("On"),
+                        "value": .bool(true),
+                    ]),
+                ]),
+                "sceneId": .string("scene-1"),
+            ]
+        ))
+        _ = try await store.approve(id: created.id)
+        let before = await fake.graph.homes.first!.triggers.first!
+
+        // Staging: an edit proposal is staged, then denied — nothing applies.
+        let edit = try proposal(from: await registry.call(
+            name: "update_event_trigger",
+            arguments: [
+                "triggerId": .string("trigger-1"),
+                "events": .array([.object(["presence": .string("atHome")])]),
+            ]
+        ))
+        let denied = try await store.deny(id: edit.id)
+        #expect(denied.state == .denied)
+        #expect(denied.state.leftHomeUntouched)
+        #expect(await fake.graph.homes.first!.triggers.first! == before)
+
+        // A second edit expires past the TTL — its operations never run.
+        let second = try proposal(from: await registry.call(
+            name: "update_event_trigger",
+            arguments: [
+                "triggerId": .string("trigger-1"),
+                "events": .array([.object(["presence": .string("away")])]),
+            ]
+        ))
+        clock.advance(by: 24 * 60 * 60 + 1)
+        let expired = await store.allProposals().first { $0.id == second.id }
+        #expect(expired?.state == .expired)
+        await #expect(throws: ProposalStoreError.proposalNotPending(id: second.id, state: .expired)) {
+            try await store.approve(id: second.id)
+        }
+        #expect(await fake.graph.homes.first!.triggers.first! == before)
+    }
+
     // MARK: - Declarative collapse
 
     @Test func multiRoomZoneDiffCollapsesToOneProposal() async throws {
@@ -771,13 +840,13 @@ import Testing
         #expect(text.contains("get_proposal"))
     }
 
-    @Test func toolSurfaceIsSixReadsAndTwentyOneWrites() async throws {
+    @Test func toolSurfaceIsSixReadsAndTwentyEightWrites() async throws {
         let (_, store, _, _) = makeContext()
         let reads = ReadToolRegistry(service: await store.homeKit)
         let writes = WriteToolRegistry(store: store)
 
         #expect(reads.tools.count == 6)
-        #expect(writes.tools.count == 27)
+        #expect(writes.tools.count == 28)
         #expect(reads.toolNames.isDisjoint(with: writes.toolNames))
         // Destructive hints land on exactly the six delete tools.
         let destructive = writes.tools.filter { $0.annotations.destructiveHint == true }
