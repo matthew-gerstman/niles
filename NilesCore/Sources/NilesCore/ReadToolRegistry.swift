@@ -45,13 +45,13 @@ public struct ReadToolRegistry: Sendable {
     private static let toolDefinitions: [Tool] = [
         Tool(
             name: "get_homes",
-            description: "List every home with counts of its rooms, zones, accessories, scenes, service groups, and triggers. Call this first to discover home IDs.",
+            description: "List every home with counts of its rooms, zones, accessories, scenes, service groups, and triggers, plus each home's home hub state and the app's HomeKit authorization status. Call this first to discover home IDs.",
             inputSchema: emptyObjectSchema,
             annotations: Tool.Annotations(readOnlyHint: true)
         ),
         Tool(
             name: "get_rooms",
-            description: "List rooms across all homes with their assigned accessories and zone membership. Each accessory names its services and the characteristics each service supports (e.g. a dimmable bulb's lightbulb service lists On and Brightness) — check this before staging a characteristic write. Rooms group accessories; zones (see get_zones) group rooms.",
+            description: "List rooms across all homes with their assigned accessories and zone membership. Each accessory names its services and the characteristics each service supports — each characteristic shows its current value and declared metadata (format, units, min/max/step, validValues), and each accessory shows reachability, bridging, category, and firmware. Check this before staging a characteristic write. Rooms group accessories; zones (see get_zones) group rooms.",
             inputSchema: emptyObjectSchema,
             annotations: Tool.Annotations(readOnlyHint: true)
         ),
@@ -63,7 +63,7 @@ public struct ReadToolRegistry: Sendable {
         ),
         Tool(
             name: "get_scenes",
-            description: "List scenes (HomeKit action sets) with their characteristic-write actions and target values.",
+            description: "List scenes (HomeKit action sets) with their characteristic-write actions, target values, and when each last ran (lastExecutionDate).",
             inputSchema: emptyObjectSchema,
             annotations: Tool.Annotations(readOnlyHint: true)
         ),
@@ -75,7 +75,7 @@ public struct ReadToolRegistry: Sendable {
         ),
         Tool(
             name: "get_triggers",
-            description: "List automations with their enabled state: timer triggers (fire date + recurrence) and event triggers (characteristic events + optional predicate).",
+            description: "List automations with their enabled state, event-trigger activation state (why an event trigger is or is not active — e.g. no home hub), timer triggers (fire date + recurrence), and event triggers (characteristic events + optional predicate).",
             inputSchema: emptyObjectSchema,
             annotations: Tool.Annotations(readOnlyHint: true)
         ),
@@ -99,11 +99,16 @@ public struct ReadToolRegistry: Sendable {
 
     struct HomesProjection: Codable, Sendable, Equatable {
         var homes: [HomeSummary]
+        /// Manager-level HomeKit authorization for the app ("authorized",
+        /// "notDetermined", ...). One grant for the whole app, so it sits
+        /// above the per-home summaries.
+        var authorizationStatus: String?
     }
 
     struct HomeSummary: Codable, Sendable, Equatable {
         var id: String
         var name: String
+        var homeHubState: String?
         var summary: HomeCounts
     }
 
@@ -157,6 +162,8 @@ public struct ReadToolRegistry: Sendable {
         var homeName: String
         var name: String
         var type: String?
+        /// When the scene last ran; nil when never run.
+        var lastExecutionDate: Date?
         var actions: [HomeGraph.SceneAction]
     }
 
@@ -182,24 +189,32 @@ public struct ReadToolRegistry: Sendable {
         var homeName: String
         var name: String
         var isEnabled: Bool
+        /// Raw `HMEventTriggerActivationState`; nil for timer triggers.
+        var triggerActivationState: Int?
+        /// Human-readable form of `triggerActivationState`; nil likewise.
+        var activationStateName: String?
         var detail: HomeGraph.Trigger.Detail
     }
 
     private static func homesView(_ graph: HomeGraph) -> HomesProjection {
-        HomesProjection(homes: graph.homes.map { home in
-            HomeSummary(
-                id: home.id,
-                name: home.name,
-                summary: HomeCounts(
-                    rooms: home.rooms.count,
-                    zones: home.zones.count,
-                    accessories: home.rooms.reduce(0) { $0 + $1.accessories.count },
-                    scenes: home.scenes.count,
-                    serviceGroups: home.serviceGroups.count,
-                    triggers: home.triggers.count
+        HomesProjection(
+            homes: graph.homes.map { home in
+                HomeSummary(
+                    id: home.id,
+                    name: home.name,
+                    homeHubState: home.homeHubState,
+                    summary: HomeCounts(
+                        rooms: home.rooms.count,
+                        zones: home.zones.count,
+                        accessories: home.rooms.reduce(0) { $0 + $1.accessories.count },
+                        scenes: home.scenes.count,
+                        serviceGroups: home.serviceGroups.count,
+                        triggers: home.triggers.count
+                    )
                 )
-            )
-        })
+            },
+            authorizationStatus: graph.authorizationStatus
+        )
     }
 
     private static func roomsView(_ graph: HomeGraph) -> RoomsProjection {
@@ -249,6 +264,7 @@ public struct ReadToolRegistry: Sendable {
                     homeName: home.name,
                     name: scene.name,
                     type: scene.type,
+                    lastExecutionDate: scene.lastExecutionDate,
                     actions: scene.actions
                 )
             }
@@ -278,6 +294,10 @@ public struct ReadToolRegistry: Sendable {
                     homeName: home.name,
                     name: trigger.name,
                     isEnabled: trigger.isEnabled,
+                    triggerActivationState: trigger.triggerActivationState,
+                    activationStateName: trigger.triggerActivationState.map {
+                        HomeManagerHomeKitService.activationStateDescription(rawValue: $0)
+                    },
                     detail: trigger.detail
                 )
             }

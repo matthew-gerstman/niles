@@ -13,15 +13,31 @@ extension HomeGraph {
             name: "Gerstman Home",
             rooms: [
                 Room(id: "room-1", name: "Living Room", accessories: [
-                    Accessory(id: "acc-1", name: "Living Room Lamp", services: [
-                        AccessoryService(
-                            id: "service-acc-1-light", name: "Living Room Lamp", serviceType: "Lightbulb",
-                            characteristics: [
-                                CharacteristicRef(id: "char-acc-1-on", type: "On", name: "On"),
-                                CharacteristicRef(id: "char-acc-1-brightness", type: "Brightness", name: "Brightness"),
-                            ]
-                        ),
-                    ]),
+                    Accessory(
+                        id: "acc-1", name: "Living Room Lamp",
+                        reachable: true, bridged: false,
+                        category: "com.apple.hap.lightbulb", firmwareVersion: "2.1.0",
+                        services: [
+                            AccessoryService(
+                                id: "service-acc-1-light", name: "Living Room Lamp", serviceType: "Lightbulb",
+                                characteristics: [
+                                    CharacteristicRef(
+                                        id: "char-acc-1-on", type: "On", name: "On",
+                                        valueDescription: "1",
+                                        metadata: CharacteristicMetadata(format: "bool", validValues: [0, 1])
+                                    ),
+                                    CharacteristicRef(
+                                        id: "char-acc-1-brightness", type: "Brightness", name: "Brightness",
+                                        valueDescription: "65",
+                                        metadata: CharacteristicMetadata(
+                                            format: "float", units: "percentage",
+                                            minValue: 0, maxValue: 100, step: 1
+                                        )
+                                    ),
+                                ]
+                            ),
+                        ]
+                    ),
                     Accessory(id: "acc-2", name: "TV Backlight", services: [
                         AccessoryService(
                             id: "service-acc-2-light", name: "TV Backlight", serviceType: "Lightbulb",
@@ -68,7 +84,7 @@ extension HomeGraph {
                 Zone(id: "zone-1", name: "Downstairs", roomIds: ["room-1", "room-2"]),
             ],
             scenes: [
-                Scene(id: "scene-1", name: "Good Morning", type: "AppleScene", actions: [
+                Scene(id: "scene-1", name: "Good Morning", type: "AppleScene", lastExecutionDate: Date(timeIntervalSince1970: 75_343_200), actions: [
                     SceneAction(
                         accessoryId: "acc-4",
                         accessoryName: "Kitchen Lights",
@@ -99,6 +115,9 @@ extension HomeGraph {
                 ),
             ]
         )
-        return HomeGraph(homes: [home])
+        return HomeGraph(
+            homes: [home],
+            authorizationStatus: "authorized"
+        )
     }
 }
