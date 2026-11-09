@@ -1,17 +1,20 @@
 import SwiftUI
 
-/// Brand colors taken from the approved mockup (`art_tGBoUvEA`).
+/// Semantic design tokens from the approved mockup, resolved from the asset
+/// catalog (`Assets.xcassets`) so light and dark variants are correct by
+/// construction. Accent is Grappa #544556; red is reserved strictly for
+/// destructive actions and denials.
 enum NilesTheme {
-    static let brand = Color(red: 0x2E / 255, green: 0x5E / 255, blue: 0x4E / 255)
-    static let good = Color(red: 0x2E / 255, green: 0x7D / 255, blue: 0x4F / 255)
-    static let bad = Color(red: 0xC0 / 255, green: 0x39 / 255, blue: 0x2B / 255)
-    static let warn = Color(red: 0xB0 / 255, green: 0x78 / 255, blue: 0x18 / 255)
+    static let accent = Color("accent")
+    static let destructive = Color("destructive")
+    static let good = Color("good")
+    static let warn = Color("warn")
 }
 
 // MARK: - Card and scaffold
 
 /// White rounded card with the mockup's soft shadow; `accent` draws the
-/// 4pt left edge (brand for proposals, red for destructive ones).
+/// 4pt left edge (accent for proposals, red for destructive ones).
 private struct CardStyle: ViewModifier {
     var accent: Color?
 
@@ -84,7 +87,7 @@ struct ScreenScaffold<Content: View>: View {
 
 // MARK: - Buttons and chips
 
-/// The mockup's three button styles: filled brand, gray ghost, red danger.
+/// The mockup's three button styles: filled accent, gray ghost, red danger.
 struct ActionButton: View {
     enum Style { case primary, ghost, danger }
 
@@ -109,9 +112,9 @@ struct ActionButton: View {
 
     private var background: Color {
         switch style {
-        case .primary: NilesTheme.brand
+        case .primary: NilesTheme.accent
         case .ghost: Color.primary.opacity(0.06)
-        case .danger: NilesTheme.bad.opacity(0.1)
+        case .danger: NilesTheme.destructive.opacity(0.1)
         }
     }
 
@@ -119,7 +122,7 @@ struct ActionButton: View {
         switch style {
         case .primary: .white
         case .ghost: .primary
-        case .danger: NilesTheme.bad
+        case .danger: NilesTheme.destructive
         }
     }
 }
@@ -162,7 +165,7 @@ struct DiffLineList: View {
     private func background(for kind: ProposalDiffLine.Kind) -> Color {
         switch kind {
         case .add: NilesTheme.good.opacity(0.14)
-        case .remove: NilesTheme.bad.opacity(0.12)
+        case .remove: NilesTheme.destructive.opacity(0.12)
         case .note: NilesTheme.warn.opacity(0.14)
         case .plain: Color.primary.opacity(0.03)
         }
@@ -171,7 +174,7 @@ struct DiffLineList: View {
     private func foreground(for kind: ProposalDiffLine.Kind) -> Color {
         switch kind {
         case .add: NilesTheme.good
-        case .remove: NilesTheme.bad
+        case .remove: NilesTheme.destructive
         case .note: NilesTheme.warn
         case .plain: .primary
         }
@@ -185,9 +188,23 @@ struct DiffLineList: View {
     }
 }
 
+/// Plain empty-state card shared by screens with nothing to list yet.
+struct EmptyStateCard: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 13))
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 18)
+            .card()
+    }
+}
+
 // MARK: - Rows
 
-/// Avatar + name + detail + Active/Idle pill, shared by dashboard and pairing.
+/// Avatar + name + detail + Active/Idle pill, shared by agent lists.
 struct AgentRow: View {
     let agent: AgentConnection
 
@@ -197,7 +214,7 @@ struct AgentRow: View {
                 .font(.system(size: 15, weight: .bold))
                 .foregroundStyle(.white)
                 .frame(width: 36, height: 36)
-                .background(Circle().fill(NilesTheme.brand))
+                .background(Circle().fill(NilesTheme.accent))
             VStack(alignment: .leading, spacing: 1) {
                 Text(agent.name)
                     .font(.system(size: 15, weight: .semibold))

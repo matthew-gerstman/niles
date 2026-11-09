@@ -1,4 +1,5 @@
 import Foundation
+import MCP
 import NilesCore
 
 /// One line of a proposal's human-readable diff, as rendered on review cards.
@@ -35,8 +36,10 @@ struct NilesProposal: Identifiable, Hashable {
     /// Destructive proposals (room/zone/scene deletion) get the danger treatment:
     /// red edge on the card, danger-styled Deny in the detail sheet.
     let isDestructive: Bool
-    /// Post-execution read-back expectations shown in the detail sheet.
-    let evidence: String
+    /// Post-execution read-back evidence, structured: what each change
+    /// claimed, what the home actually showed, and whether they agree.
+    /// Empty until the proposal executes.
+    let evidence: [ProposalEvidence]
     /// Diff lines shown on the queue card.
     let diff: [ProposalDiffLine]
     /// Extra context lines shown only in the detail sheet.
@@ -45,6 +48,8 @@ struct NilesProposal: Identifiable, Hashable {
     var isPending: Bool { state == .staged }
     /// Defaults to staged — every proposal enters the pipeline staged.
     var state: ProposalState = .staged
+    /// Set on a revert proposal: the id of the executed proposal it reverts.
+    var revertsProposalId: String?
 }
 
 /// An agent seen on the LAN, for the dashboard and pairing lists.
@@ -55,9 +60,47 @@ struct AgentConnection: Identifiable, Hashable {
     let isActive: Bool
 }
 
-/// One row of the read-only home graph. All four graph sections render the
+/// What kind of graph entity a Home row represents. Only rows carrying a
+/// kind and entity id can stage actions — the swipe actions map a row to the
+/// same write tool call an agent would make.
+enum HomeRowKind: Hashable {
+    case room, zone, scene, trigger
+}
+
+/// A user-initiated action on a Home row. Rename carries no payload: the
+/// screen collects the new name in an alert and passes it to the stage call.
+enum HomeRowAction: Hashable {
+    case run
+    case rename
+    case delete
+    case setArmed(Bool)
+
+    /// Label and glyph for the swipe buttons.
+    var title: String {
+        switch self {
+        case .run: return "Run"
+        case .rename: return "Rename"
+        case .delete: return "Delete"
+        case .setArmed(true): return "Arm"
+        case .setArmed(false): return "Disarm"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .run: return "play.fill"
+        case .rename: return "pencil"
+        case .delete: return "trash"
+        case .setArmed(true): return "shield.fill"
+        case .setArmed(false): return "shield.slash.fill"
+        }
+    }
+}
+
+/// One row of the home graph. All four graph sections render the
 /// same row shape; disabled rows (e.g. an off trigger) gray out and show an
-/// OFF tag instead of a count.
+/// OFF tag instead of a count. `kind` + `entityId` make a row actionable:
+/// the swipe actions stage write-tool proposals against that entity.
 struct HomeRow: Identifiable, Hashable {
     let id = UUID()
     let name: String
@@ -65,13 +108,82 @@ struct HomeRow: Identifiable, Hashable {
     let systemImage: String
     var trailingCount: Int?
     var isEnabled: Bool = true
+    var kind: HomeRowKind?
+    var entityId: String?
 
-    init(name: String, subtitle: String, systemImage: String, trailingCount: Int? = nil, isEnabled: Bool = true) {
+    init(
+        name: String,
+        subtitle: String,
+        systemImage: String,
+        trailingCount: Int? = nil,
+        isEnabled: Bool = true,
+        kind: HomeRowKind? = nil,
+        entityId: String? = nil
+    ) {
         self.name = name
         self.subtitle = subtitle
         self.systemImage = systemImage
         self.trailingCount = trailingCount
         self.isEnabled = isEnabled
+        self.kind = kind
+        self.entityId = entityId
+    }
+
+    /// Whether this row can stage any action (has both kind and entity id).
+    var isActionable: Bool { kind != nil && entityId != nil }
+
+    /// The swipe-right action: Run for scenes, Arm/Disarm for triggers
+    /// (the opposite of its current state), Rename otherwise.
+    var primaryAction: HomeRowAction? {
+        guard isActionable else { return nil }
+        switch kind {
+        case .scene: return .run
+        case .trigger: return .setArmed(!isEnabled)
+        case .room, .zone: return .rename
+        case nil: return nil
+        }
+    }
+
+    /// The swipe-left quick actions, context-appropriate per row kind.
+    var quickActions: [HomeRowAction] {
+        guard isActionable else { return [] }
+        switch kind {
+        case .scene: return [.run, .rename, .delete]
+        case .room, .zone: return [.rename, .delete]
+        case .trigger: return [.setArmed(!isEnabled), .delete]
+        case nil: return []
+        }
+    }
+
+    /// The staged write tool this action maps to, with its MCP arguments —
+    /// the same call the agent's write tool would make, so the proposal
+    /// lands in the queue as a normal review card. Nil when the row kind
+    /// has no tool for the action (e.g. HomeKit has no trigger rename).
+    func stageRequest(for action: HomeRowAction, newName: String?) -> (tool: String, arguments: [String: MCP.Value])? {
+        guard let kind, let entityId else { return nil }
+        let id = MCP.Value.string(entityId)
+        switch (kind, action) {
+        case (.scene, .run):
+            return ("execute_scene", ["sceneId": id])
+        case (.scene, .rename):
+            return ("rename_scene", ["sceneId": id, "name": .string(newName ?? "")])
+        case (.scene, .delete):
+            return ("delete_scene", ["sceneId": id])
+        case (.trigger, .setArmed(let enabled)):
+            return ("set_trigger_state", ["triggerId": id, "enabled": .bool(enabled)])
+        case (.trigger, .delete):
+            return ("delete_trigger", ["triggerId": id])
+        case (.room, .rename):
+            return ("rename_room", ["roomId": id, "name": .string(newName ?? "")])
+        case (.room, .delete):
+            return ("delete_room", ["roomId": id])
+        case (.zone, .rename):
+            return ("rename_zone", ["zoneId": id, "name": .string(newName ?? "")])
+        case (.zone, .delete):
+            return ("delete_zone", ["zoneId": id])
+        default:
+            return nil
+        }
     }
 }
 

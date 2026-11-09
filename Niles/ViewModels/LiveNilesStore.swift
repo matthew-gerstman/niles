@@ -35,7 +35,7 @@ struct DeviceHomeKitService: HomeKitWriting {
 /// polls on a short interval; every read is in-memory and cheap.
 @MainActor
 @Observable
-final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphViewModel, PairingViewModel {
+final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewModel, HomeGraphViewModel, PairingViewModel {
 
     // MARK: - DashboardViewModel
 
@@ -47,13 +47,28 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
     private(set) var approvedTodayCount = 0
     private(set) var connectedAgents: [AgentConnection] = []
 
-    // MARK: - ApprovalsViewModel
+    // MARK: - QueueViewModel
 
     private(set) var proposals: [NilesProposal] = []
     /// Optimistic tap feedback: proposal id -> decision whose pipeline
     /// round-trip is still running. Set synchronously in the tap handler,
     /// cleared when the pipeline settles (or the decision fails).
     private(set) var decisionsInFlight: [String: ProposalDecision] = [:]
+    /// The activity timeline as of the last refresh, oldest first.
+    private(set) var activityEvents: [ActivityEvent] = []
+    /// True from the Approve-all tap until the whole batch settles — the
+    /// batch button shows progress and cannot re-enter.
+    private(set) var isApprovingAll = false
+    /// Undo bookkeeping (Queue): per-row divergences recorded from the
+    /// store's typed `undoConflict`, rows the store refused with
+    /// `notRevertable`, and taps whose revert is still running. All
+    /// in-memory, like the proposals themselves.
+    private var undoConflicts: [String: [ProposalEvidence]] = [:]
+    private var notRevertableIds: Set<String> = []
+    private var undosInFlight: Set<String> = []
+    /// Undo failures from each proposal's most recent tap, surfaced inline on
+    /// the activity card until the next attempt or dismissal.
+    private(set) var undoFailures: [String: ActivityUndoFailure] = [:]
 
     // MARK: - HomeGraphViewModel
 
@@ -81,6 +96,12 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
     /// Proposal id -> the agent that staged it, attributed from the newest
     /// session at detection time. In-memory only, like the proposal store.
     private var agentNamesByProposal: [String: String] = [:]
+    /// Last-seen proposal state per id — the poll diff that turns state
+    /// changes into activity events (the store is a snapshot, not a stream).
+    private var recordedStates: [String: ProposalState] = [:]
+    /// The persistent activity timeline, reloaded from disk at init and
+    /// appended to as decisions and state changes happen (see ActivityLog).
+    private let activityLog: ActivityLog
     /// The first refresh seeds every proposal already in the store (e.g. ones
     /// staged before a background/foreground cycle) without notifying — only
     /// arrivals after launch get banners.
@@ -96,12 +117,14 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
         coordinator: ServerCoordinator,
         notifier: ProposalNotifier,
         tokenStore: any TokenStoring = KeychainTokenStore(),
-        pollInterval: Duration = .seconds(1)
+        pollInterval: Duration = .seconds(1),
+        activityLog: ActivityLog? = nil
     ) {
         self.coordinator = coordinator
         self.notifier = notifier
         self.tokenStore = tokenStore
         self.pollInterval = pollInterval
+        self.activityLog = activityLog ?? ActivityLog()
         let host = LANAddress.primaryIPv4 ?? "127.0.0.1"
         endpoint = "http://\(host):\(LANServer.defaultPort)/mcp"
     }
@@ -158,7 +181,7 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
         }
     }
 
-    // MARK: - ApprovalsViewModel
+    // MARK: - QueueViewModel
 
     /// Approves and executes the staged operations; the result (state,
     /// evidence, error) appears on the card at the next refresh.
@@ -208,6 +231,13 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
             } else {
                 _ = try await store.deny(id: id)
             }
+            await appendActivity(
+                .decided,
+                proposalId: id,
+                title: proposals.first { $0.id == id }?.title ?? id,
+                agentName: agentNamesByProposal[id],
+                decision: approve ? "approved" : "denied"
+            )
         } catch {
             // Terminal-state violations and unknown ids are the expected
             // failures here; the card keeps its staged state either way.
@@ -221,16 +251,349 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
         decisionsInFlight[id] = nil
     }
 
+    // MARK: - Undo and approve-all
+
+    /// Undoes an executed proposal: its paired revert stages and executes
+    /// immediately as a forward-only proposal — the Undo tap IS the
+    /// approval. A conflicted revert throws and changes nothing; the row
+    /// renders the typed `undoConflict` divergences inline until the next
+    /// undo attempt on that row. A `notRevertable` refusal stops the row
+    /// from offering Undo at all.
+    func undo(_ id: String) {
+        // Optimistic tap feedback, synchronous like the decision taps: the
+        // row's Undoing… state renders before the pipeline task runs.
+        guard let proposal = proposals.first(where: { $0.id == id }),
+              Self.undoAvailable(for: proposal, proposals: proposals) else { return }
+        undosInFlight.insert(id)
+        undoConflicts[id] = nil
+        Task { await undoAndWait(id) }
+    }
+
+    func undoAndWait(_ id: String) async {
+        guard let store = coordinator.proposalStore else {
+            logger.error("Cannot undo \(id, privacy: .public): no proposal store")
+            return
+        }
+        undosInFlight.insert(id)
+        undoConflicts[id] = nil
+        defer { undosInFlight.remove(id) }
+        // A fresh tap clears the last failure before it runs.
+        undoFailures[id] = nil
+        do {
+            let revert = try await store.undo(proposalId: id)
+            await appendActivity(
+                .undone,
+                proposalId: id,
+                title: proposals.first { $0.id == id }?.title ?? id,
+                agentName: agentNamesByProposal[id],
+                detail: "Reverted — \(revert.title)"
+            )
+        } catch let error as ProposalStoreError {
+            switch error {
+            case .undoConflict(_, let divergences):
+                // The home diverged from what execution produced. Nothing
+                // was applied; the row names the divergence inline.
+                undoConflicts[id] = divergences
+            case .notRevertable:
+                // No paired revert exists (unrevertable operation, lost undo
+                // coverage, or a spent plan): the affordance goes away.
+                notRevertableIds.insert(id)
+            case .proposalNotFound, .proposalNotPending, .homeReadFailed:
+                logger.error("Undo failed for \(id, privacy: .public): \(String(describing: error))")
+            case .unknownTool, .invalidArguments, .validationFailed:
+                // Unreachable from undo — staging errors surface to agents,
+                // not to this tap path. Never silently swallowed: logged.
+                logger.error("Undo failed for \(id, privacy: .public): \(String(describing: error))")
+            }
+            // The typed failure surfaces inline on the activity card too —
+            // a conflict names the divergences; nothing was applied either way.
+            undoFailures[id] = Self.undoFailure(for: error)
+        } catch {
+            logger.error("Undo failed for \(id, privacy: .public): \(String(describing: error))")
+            // The typed failure surfaces inline on the card — a conflict
+            // names the divergences; nothing was applied either way.
+            undoFailures[id] = Self.undoFailure(for: error)
+        }
+        await refresh()
+    }
+
+    /// Whether an executed proposal still offers Undo — pure so the
+    /// affordance rules are directly testable:
+    /// - only executed rows offer it (staged rows decide; terminal rows are
+    ///   history);
+    /// - unrevertable operations never offer it — `RevertPlanBuilder` (the
+    ///   authority) builds no revert for scene execution, identify, unblock,
+    ///   or accessory removal, so the store would refuse with
+    ///   `notRevertable`;
+    /// - an EXECUTED revert child means the row is already undone and there
+    ///   is no undo of an undo. A failed revert child does not count: the
+    ///   store keeps the original's revert plan when its revert fails, so
+    ///   Undo still applies.
+    static func undoAvailable(for proposal: NilesProposal, proposals: [NilesProposal]) -> Bool {
+        guard proposal.state == .executed else { return false }
+        guard !unrevertableTools.contains(proposal.tool) else { return false }
+        return !proposals.contains { child in
+            child.revertsProposalId == proposal.id && child.state == .executed
+        }
+    }
+
+    /// The staged verbs whose operations have no meaningful inverse. Mirrors
+    /// `RevertPlanBuilder`'s unrevertable operation set (the only source of
+    /// truth for revertability); if a new unrevertable operation lands in the
+    /// store, add its tool here — until then the tap surfaces the store's
+    /// typed `notRevertable` and the row stops offering Undo.
+    private static let unrevertableTools: Set<String> = [
+        "execute_scene", "identify_accessory", "unblock_accessory", "remove_accessory",
+    ]
+
+    /// Per-row Undo affordance state: the availability rules above, overlaid
+    /// with this session's tap bookkeeping (in flight, divergences, refusals).
+    var undoStates: [String: UndoState] {
+        var states: [String: UndoState] = [:]
+        for proposal in proposals {
+            guard Self.undoAvailable(for: proposal, proposals: proposals) else { continue }
+            if undosInFlight.contains(proposal.id) {
+                states[proposal.id] = .inFlight
+            } else if let divergences = undoConflicts[proposal.id] {
+                states[proposal.id] = .conflict(divergences)
+            } else if notRevertableIds.contains(proposal.id) {
+                states[proposal.id] = .notRevertable
+            } else {
+                states[proposal.id] = .idle
+            }
+        }
+        return states
+    }
+
+    /// The card's inline failure from an Undo tap, mapped from the typed
+    /// store error. Pure, so tests can pin the wording per error kind.
+    static func undoFailure(for error: Error) -> ActivityUndoFailure {
+        guard let storeError = error as? ProposalStoreError else {
+            return ActivityUndoFailure(message: "Undo failed — nothing was changed.", divergences: [])
+        }
+        switch storeError {
+        case .undoConflict(_, let divergences):
+            return ActivityUndoFailure(
+                message: "Undo blocked — the home has changed since this was applied. Nothing was changed.",
+                divergences: divergences
+            )
+        case .notRevertable:
+            return ActivityUndoFailure(
+                message: "Undo is no longer available for this change — nothing was changed.",
+                divergences: []
+            )
+        case .homeReadFailed:
+            return ActivityUndoFailure(
+                message: "Undo failed — the home could not be read. Nothing was changed.",
+                divergences: []
+            )
+        default:
+            return ActivityUndoFailure(
+                message: "Undo failed — nothing was changed. (\(storeError))",
+                divergences: []
+            )
+        }
+    }
+
+    func clearUndoFailure(_ id: String) {
+        undoFailures[id] = nil
+    }
+
+    /// Approves and executes every staged proposal immediately —
+    /// destructive included. Undo afterwards is per-item, each with its
+    /// own conflict check.
+    func approveAll() {
+        guard let store = coordinator.proposalStore else {
+            logger.error("Cannot approve all: no proposal store")
+            return
+        }
+        let stagedIds = beginApproveAllBatch()
+        guard !stagedIds.isEmpty else { return }
+        Task { await approveAllBatch(on: store, clearing: stagedIds) }
+    }
+
+    /// Awaitable batch path — what the tap task spawns; tests await it
+    /// directly.
+    func approveAllAndWait() async {
+        guard let store = coordinator.proposalStore else {
+            logger.error("Cannot approve all: no proposal store")
+            return
+        }
+        let stagedIds = beginApproveAllBatch()
+        guard !stagedIds.isEmpty else { return }
+        await approveAllBatch(on: store, clearing: stagedIds)
+    }
+
+    /// Optimistic batch feedback, applied synchronously before the pipeline
+    /// task is even spawned — same contract as the single tap: every staged
+    /// row shows its in-progress chip on the next frame, one success haptic
+    /// fires for the whole batch, and the button cannot re-enter while the
+    /// batch runs. Returns the staged ids whose chips must settle.
+    @discardableResult
+    private func beginApproveAllBatch() -> [String] {
+        let stagedIds = proposals.filter(\.isPending).map(\.id)
+        guard !stagedIds.isEmpty else { return stagedIds }
+        for id in stagedIds {
+            decisionsInFlight[id] = .approving
+        }
+        isApprovingAll = true
+        let haptic = UINotificationFeedbackGenerator()
+        haptic.prepare()
+        haptic.notificationOccurred(.success)
+        return stagedIds
+    }
+
+    private func approveAllBatch(on store: ProposalStore, clearing stagedIds: [String]) async {
+        defer { isApprovingAll = false }
+        do {
+            let executed = try await store.approveAll()
+            for proposal in executed {
+                await appendActivity(
+                    .decided,
+                    proposalId: proposal.id,
+                    title: proposals.first { $0.id == proposal.id }?.title ?? proposal.id,
+                    agentName: agentNamesByProposal[proposal.id],
+                    decision: "approved"
+                )
+            }
+        } catch {
+            logger.error("Approve all failed: \(String(describing: error))")
+        }
+        await refresh()
+        // Settled: the refreshed states are authoritative.
+        for id in stagedIds {
+            decisionsInFlight[id] = nil
+        }
+    }
+
     // MARK: - PairingViewModel
 
     func toggleTokenRevealed() {
         isTokenRevealed.toggle()
     }
 
+    // MARK: - HomeGraphViewModel / swipe-to-stage
+
+    /// Stages a Home row's swipe action through the same public store path
+    /// the agent write tools use, so the swipe produces a normal proposal in
+    /// the queue and nothing touches HomeKit until it is approved.
+    func stage(row: HomeRow, action: HomeRowAction, newName: String? = nil) async {
+        guard let request = row.stageRequest(for: action, newName: newName) else {
+            logger.error("No write tool maps to \(String(describing: action), privacy: .public) on “\(row.name, privacy: .public)”")
+            return
+        }
+        guard let store = coordinator.proposalStore else {
+            logger.error("Cannot stage \(request.tool, privacy: .public): no proposal store")
+            return
+        }
+        do {
+            let proposal = try await store.stage(tool: request.tool, arguments: request.arguments)
+            // A swipe is a human action, not an agent's — attribute it as such
+            // before the next refresh fills unknown ids with a client name.
+            agentNamesByProposal[proposal.id] = "You"
+            await refresh()
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+        } catch {
+            // Staging rejections (validation, HomeKit state) surface here;
+            // nothing was applied either way — the queue stays authoritative.
+            logger.error("Staging \(request.tool, privacy: .public) for “\(row.name, privacy: .public)” failed: \(String(describing: error))")
+        }
+    }
+
     /// Awaitable token load — the polling task calls this once at start;
     /// tests call it directly.
     func loadTokenAndWait() async {
         await loadToken()
+    }
+
+    // MARK: - Simulator QA fixtures
+
+    /// Screenshots and device QA: with a `-UISeedQueue <fixture>` launch
+    /// argument, stages real proposals through the real pipeline (the same
+    /// registry the transport serves) so the Queue renders live states
+    /// without an MCP client — and, for the conflict fixture, diverges the
+    /// fake home and performs the Undo tap so the row shows the typed
+    /// divergence error. No-op without the argument.
+    func seedQueueFixtureIfRequested() async {
+        let args = ProcessInfo.processInfo.arguments
+        guard let index = args.firstIndex(of: "-UISeedQueue"), index + 1 < args.count else { return }
+        guard let store = coordinator.proposalStore else {
+            logger.error("Seed fixture requested but no proposal store is running")
+            return
+        }
+        // The app target does not link MCP, so fixtures stage hand-built
+        // Plans directly. Operations stay real — approve/undo exercise the
+        // same execution and revert-derivation paths as agent-staged writes.
+        func room(_ id: String, _ name: String?) -> ProposalObjectRef {
+            ProposalObjectRef(kind: .room, id: id, name: name)
+        }
+        func stage(_ plan: Plan) async -> String? {
+            _ = await store.stage(plan: plan)
+            await refresh()
+            return pendingProposals.first { $0.tool == plan.tool }?.id
+        }
+        func createRoomPlan() -> Plan {
+            Plan(
+                tool: "create_room",
+                title: "Create room Studio",
+                summary: "Adds the Studio room to the home.",
+                isDestructive: false,
+                operations: [.addRoom(homeId: "home-1", name: "Studio")],
+                entries: [.init(object: room("", "Studio"), op: .create, before: nil, after: "Studio")],
+                card: [.init(.add, "Add room Studio")]
+            )
+        }
+
+        switch args[index + 1] {
+        case "pending":
+            _ = await stage(createRoomPlan())
+            _ = await stage(Plan(
+                tool: "rename_room",
+                title: "Rename room to Cookery",
+                summary: "Renames room-2 to Cookery.",
+                isDestructive: false,
+                operations: [.renameRoom(homeId: "home-1", roomId: "room-2", to: "Cookery")],
+                entries: [.init(object: room("room-2", "Cookery"), op: .rename, before: nil, after: "Cookery")],
+                card: [.init(.plain, "Rename room to Cookery")]
+            ))
+
+        case "destructive":
+            _ = await stage(createRoomPlan())
+            _ = await stage(Plan(
+                tool: "delete_room",
+                title: "Delete room",
+                summary: "Removes room-3 and its accessory assignments.",
+                isDestructive: true,
+                operations: [.removeRoom(homeId: "home-1", roomId: "room-3")],
+                entries: [.init(object: room("room-3", nil), op: .delete, before: nil, after: nil)],
+                card: [.init(.remove, "Delete room-3"), .init(.note, "Accessories in this room become unassigned.")]
+            ))
+
+        case "undo":
+            guard let id = await stage(createRoomPlan()) else { return }
+            await approveAndWait(id)
+
+        case "conflict":
+            guard let id = await stage(createRoomPlan()) else { return }
+            await approveAndWait(id)
+            // Diverge the home out-of-band — the revert expects the created
+            // room to still exist, so removing it directly is exactly the
+            // "the world moved" case the conflict check exists for.
+            do {
+                let graph = try await store.homeKit.snapshot()
+                let home = graph.homes.first
+                guard let room = home?.rooms.first(where: { $0.name == "Studio" }) else { return }
+                _ = try await store.homeKit.perform(.removeRoom(homeId: home?.id ?? "", roomId: room.id))
+                // The Undo tap, performed exactly as the row's button does it.
+                await undoAndWait(id)
+            } catch {
+                logger.error("Conflict fixture diverge failed: \(String(describing: error))")
+            }
+
+        default:
+            logger.error("Unknown -UISeedQueue fixture: \(args[index + 1], privacy: .public)")
+        }
+        await refresh()
     }
 
     // MARK: - Refresh
@@ -258,13 +621,62 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
         let live = await store.allProposals()
 
         if !hasSeededExistingProposals {
-            for proposal in live { agentNamesByProposal[proposal.id] = newestClientName(from: sessions) }
+            for proposal in live {
+                agentNamesByProposal[proposal.id] = newestClientName(from: sessions)
+                // Seed the poll-diff baseline without recording history the
+                // log already holds (or that predates this launch).
+                recordedStates[proposal.id] = proposal.state
+            }
             hasSeededExistingProposals = true
         } else {
             for proposal in live where agentNamesByProposal[proposal.id] == nil {
                 agentNamesByProposal[proposal.id] = newestClientName(from: sessions) ?? "MCP agent"
-                if proposal.state == .staged {
+                // A revert proposal is the user's own Undo tap, staged and
+                // executed inside one store call — a poll can catch it
+                // mid-flight in .staged. It is never an agent arrival:
+                // no notification, no staged event.
+                if proposal.state == .staged, proposal.revertsProposalId == nil {
                     notifier.proposalArrived(title: proposal.title, summary: proposal.summary)
+                    await appendActivity(
+                        .staged,
+                        proposalId: proposal.id,
+                        title: proposal.title,
+                        agentName: agentNamesByProposal[proposal.id]
+                    )
+                }
+            }
+            // The poll diff: state changes become activity events. Decisions
+            // and undos are recorded by their verbs; execution and expiry
+            // happen inside the store, so only the next poll can see them.
+            for proposal in live {
+                let previous = recordedStates[proposal.id]
+                recordedStates[proposal.id] = proposal.state
+                guard previous != proposal.state else { continue }
+                switch proposal.state {
+                case .executed, .failed:
+                    var detail = Self.executionOutcome(of: proposal) ?? ""
+                    if let originalId = proposal.revertsProposalId {
+                        let originalTitle = live.first { $0.id == originalId }?.title ?? originalId
+                        detail += (detail.isEmpty ? "" : " — ") + "revert of “\(originalTitle)”"
+                    }
+                    await appendActivity(
+                        .executed,
+                        proposalId: proposal.id,
+                        title: proposal.title,
+                        agentName: agentNamesByProposal[proposal.id],
+                        detail: detail.isEmpty ? nil : detail,
+                        evidence: proposal.evidence
+                    )
+                case .expired:
+                    await appendActivity(
+                        .expired,
+                        proposalId: proposal.id,
+                        title: proposal.title,
+                        agentName: agentNamesByProposal[proposal.id],
+                        detail: "Expired after 24 hours — never executed"
+                    )
+                case .staged, .approved, .denied:
+                    break
                 }
             }
         }
@@ -278,6 +690,7 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
         approvedTodayCount = live.filter {
             $0.state == .executed && Calendar.current.isDateInToday($0.createdAt)
         }.count
+        activityEvents = await activityLog.allEvents()
 
         do {
             let graph = try await store.homeKit.snapshot()
@@ -292,6 +705,39 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
 
     private func newestClientName(from sessions: [MCPGateway.SessionInfo]) -> String? {
         sessions.max { $0.startedAt < $1.startedAt }?.clientName
+    }
+
+    /// Appends one event to the persistent activity log and mirrors it into
+    /// `activityEvents`. Append failures are logged by the log itself, never
+    /// thrown — the timeline must not take a decision down with it.
+    private func appendActivity(
+        _ kind: ActivityEvent.Kind,
+        proposalId: String,
+        title: String,
+        agentName: String?,
+        decision: String? = nil,
+        detail: String? = nil,
+        evidence: [ProposalEvidence] = []
+    ) async {
+        await activityLog.append(ActivityEvent(
+            at: Date(),
+            kind: kind,
+            proposalId: proposalId,
+            proposalTitle: title,
+            agentName: agentName,
+            decision: decision,
+            detail: detail,
+            evidence: evidence
+        ))
+        activityEvents = await activityLog.allEvents()
+    }
+
+    /// The `.executed` event's outcome line: the read-back tally when the
+    /// operations ran, the recorded HomeKit error when they failed mid-list.
+    private static func executionOutcome(of proposal: Proposal) -> String? {
+        if let error = proposal.error { return "Failed — \(error)" }
+        let confirmed = proposal.evidence.filter(\.confirmed).count
+        return "\(confirmed) of \(proposal.evidence.count) checks confirmed"
     }
 
     /// Serving keeps the screen awake (a locked phone suspends the LAN
@@ -319,25 +765,14 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
     // MARK: - Live -> UI mapping
 
     private static func uiProposal(for proposal: Proposal, agentName: String) -> NilesProposal {
+        // Context lines are the card's own notes; read-back evidence rides
+        // on NilesProposal.evidence in its structured form — no more "✓ …"
+        // strings glued into prose.
         var context: [ProposalDiffLine] = proposal.card
             .filter { $0.kind == .note || $0.kind == .plain }
             .map { ProposalDiffLine(ProposalDiffLine.Kind($0.kind), $0.text) }
-        for item in proposal.evidence {
-            let mark = item.confirmed ? "✓" : "✗"
-            context.append(ProposalDiffLine(.plain, "\(mark) \(item.claim) — \(item.observed)"))
-        }
         if let error = proposal.error {
             context.append(ProposalDiffLine(.note, "⚠ HomeKit error: \(error)"))
-        }
-
-        let evidence: String
-        if proposal.evidence.isEmpty {
-            evidence = "After approval, Niles re-reads the home from HomeKit and attaches the read-back "
-                + "evidence here. Denied and expired proposals never run anything."
-        } else {
-            let confirmed = proposal.evidence.filter(\.confirmed).count
-            evidence = "Read-back evidence: \(confirmed) of \(proposal.evidence.count) checks confirmed "
-                + "against the live home."
         }
 
         return NilesProposal(
@@ -347,12 +782,13 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
             agentName: agentName,
             createdAt: proposal.createdAt,
             isDestructive: proposal.isDestructive,
-            evidence: evidence,
+            evidence: proposal.evidence,
             diff: proposal.card
                 .filter { $0.kind == .add || $0.kind == .remove }
                 .map { ProposalDiffLine(ProposalDiffLine.Kind($0.kind), $0.text) },
             context: context,
-            state: proposal.state
+            state: proposal.state,
+            revertsProposalId: proposal.revertsProposalId
         )
     }
 
@@ -368,7 +804,9 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
                     name: room.name,
                     subtitle: zoneByRoom[room.id] ?? "No zone",
                     systemImage: "table.furniture",
-                    trailingCount: room.accessories.count
+                    trailingCount: room.accessories.count,
+                    kind: .room,
+                    entityId: room.id
                 )
             }),
             HomeSection(title: "Zones", rows: (home?.zones ?? []).map { zone in
@@ -379,7 +817,9 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
                     name: zone.name,
                     subtitle: names.isEmpty ? "No rooms" : names.joined(separator: ", "),
                     systemImage: "house",
-                    trailingCount: names.count
+                    trailingCount: names.count,
+                    kind: .zone,
+                    entityId: zone.id
                 )
             }),
             HomeSection(title: "Scenes", rows: (home?.scenes ?? []).map { scene in
@@ -388,7 +828,9 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
                     name: scene.name,
                     subtitle: "\(scene.actions.count) actions · \(accessories) accessories",
                     systemImage: "film",
-                    trailingCount: scene.actions.count
+                    trailingCount: scene.actions.count,
+                    kind: .scene,
+                    entityId: scene.id
                 )
             }),
             HomeSection(title: "Triggers", rows: (home?.triggers ?? []).map { trigger in
@@ -396,7 +838,9 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
                     name: trigger.name,
                     subtitle: Self.subtitle(for: trigger.detail),
                     systemImage: "clock",
-                    isEnabled: trigger.isEnabled
+                    isEnabled: trigger.isEnabled,
+                    kind: .trigger,
+                    entityId: trigger.id
                 )
             }),
         ]

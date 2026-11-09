@@ -1,15 +1,24 @@
 import CoreImage
-import SwiftUI
 import CoreImage.CIFilterBuiltins
+import SwiftUI
 
-/// Pairing: scannable QR of the bearer token, MCP connection details with
-/// token reveal, and the connected-agent list fed by live transport sessions.
-struct PairingScreen: View {
-    var model: any PairingViewModel
+/// Settings: the server control card (kill switch, endpoint, sessions,
+/// agents) and pairing (QR, token reveal, trusted agents) absorbed from the
+/// former Dashboard and Pairing screens, which are removed.
+struct SettingsScreen: View {
+    var model: any DashboardViewModel & PairingViewModel
 
     var body: some View {
-        ScreenScaffold(title: "Pairing", subtitle: "Connect an MCP agent to Niles") {
-            qrCard
+        ScreenScaffold(title: "Settings", subtitle: "Niles · HomeKit MCP proxy · \(model.homeName)") {
+            serverCard
+            SectionHeader(title: "Connected agents")
+            if model.connectedAgents.isEmpty {
+                EmptyStateCard(text: "No MCP agents are connected right now. Pair one below with the QR code.")
+            } else {
+                agentsCard
+            }
+            SectionHeader(title: "Pairing")
+            pairingCard
             SectionHeader(title: "Connection")
             connectionCard
             SectionHeader(title: "Trusted agents")
@@ -17,7 +26,50 @@ struct PairingScreen: View {
         }
     }
 
-    private var qrCard: some View {
+    /// The former Dashboard server card: serving state, the kill switch,
+    /// and the endpoint/sessions key-value rows.
+    private var serverCard: some View {
+        VStack(spacing: 0) {
+            HStack {
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(model.serverIsRunning ? NilesTheme.good : Color.secondary)
+                        .frame(width: 9, height: 9)
+                    Text(model.serverIsRunning ? "Serving" : "Stopped")
+                        .font(.system(size: 15, weight: .bold))
+                }
+                Spacer()
+                Toggle("", isOn: Binding(
+                    get: { model.serverIsRunning },
+                    set: { model.setServerRunning($0) }
+                ))
+                .labelsHidden()
+                .tint(NilesTheme.accent)
+            }
+            .padding(.bottom, 10)
+            KeyValueList(rows: [
+                KeyValueRow(key: "Endpoint", value: model.endpoint),
+                KeyValueRow(key: "Bonjour", value: model.bonjourService),
+                KeyValueRow(key: "Sessions", value: model.sessionsSummary),
+                KeyValueRow(key: "Approved today", value: "\(model.approvedTodayCount)"),
+            ])
+        }
+        .card()
+    }
+
+    private var agentsCard: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(model.connectedAgents.enumerated()), id: \.element.id) { index, agent in
+                AgentRow(agent: agent)
+                if index < model.connectedAgents.count - 1 {
+                    Divider()
+                }
+            }
+        }
+        .card()
+    }
+
+    private var pairingCard: some View {
         VStack(spacing: 6) {
             QRCodeView(string: model.token)
                 .frame(width: 160, height: 160)
@@ -108,6 +160,6 @@ struct QRCodeView: View {
     }
 }
 
-#Preview("Pairing") {
-    PairingScreen(model: InMemoryNilesStore())
+#Preview("Settings") {
+    SettingsScreen(model: InMemoryNilesStore())
 }

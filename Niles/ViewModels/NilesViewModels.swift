@@ -20,13 +20,21 @@ protocol DashboardViewModel: Observable {
 }
 
 @MainActor
-protocol ApprovalsViewModel: Observable {
+protocol QueueViewModel: Observable {
     var proposals: [NilesProposal] { get }
     /// Proposal id -> decision in flight; present from the tap until the
     /// pipeline settles (or the decision fails and the card reverts).
     var decisionsInFlight: [String: ProposalDecision] { get }
+    /// Per-row Undo affordance state. Only executed rows that currently
+    /// offer Undo appear: unrevertable operations, already-undone rows, and
+    /// refused rows render no Undo button.
+    var undoStates: [String: UndoState] { get }
+    /// True from the Approve-all tap until the whole batch settles.
+    var isApprovingAll: Bool { get }
     func approve(_ id: String)
     func deny(_ id: String)
+    func approveAll()
+    func undo(_ id: String)
 }
 
 /// The direction of a decision whose pipeline round-trip is still running.
@@ -37,9 +45,30 @@ enum ProposalDecision: Hashable {
     case denying
 }
 
+/// The Undo affordance's state on one executed Queue row. Tapping Undo
+/// applies the paired revert immediately — the tap IS the approval — and a
+/// refused undo renders its typed cause inline on the row.
+enum UndoState: Equatable {
+    /// Undo shown, not running.
+    case idle
+    /// The revert is staging and executing.
+    case inFlight
+    /// The store refused: the home has diverged from what execution
+    /// produced. The divergences name what moved; nothing was changed.
+    case conflict([ProposalEvidence])
+    /// The store refused: no paired revert exists for this row (its undo
+    /// coverage was lost, e.g. a failed read at execution time). The row
+    /// stops offering Undo.
+    case notRevertable
+}
+
 @MainActor
 protocol HomeGraphViewModel: Observable {
     var sections: [HomeSection] { get }
+    /// Stages a row's swipe action through the same proposal pipeline agents
+    /// use — the proposal lands in the queue and nothing applies until the
+    /// human approves it. Failures are logged, never applied.
+    func stage(row: HomeRow, action: HomeRowAction, newName: String?) async
 }
 
 @MainActor
@@ -56,7 +85,7 @@ protocol PairingViewModel: Observable {
 /// only: approving transitions the local state machine, nothing more.
 @MainActor
 @Observable
-final class InMemoryNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphViewModel, PairingViewModel {
+final class InMemoryNilesStore: DashboardViewModel, QueueViewModel, HomeGraphViewModel, PairingViewModel {
     private(set) var serverIsRunning = true
     let homeName = "Gerstman Home"
     let endpoint = "http://192.168.1.24:8901/mcp"
@@ -69,6 +98,9 @@ final class InMemoryNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGrap
     /// The in-memory store settles decisions synchronously, so nothing is
     /// ever in flight here.
     let decisionsInFlight: [String: ProposalDecision] = [:]
+    /// Previews set this directly to render the Undo affordance states.
+    var undoStates: [String: UndoState] = [:]
+    var isApprovingAll = false
 
     private(set) var sections: [HomeSection] = []
 
@@ -96,8 +128,7 @@ final class InMemoryNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGrap
                 agentName: "Claude Code",
                 createdAt: now.addingTimeInterval(-2 * minute),
                 isDestructive: false,
-                evidence: "After approval, Niles re-reads the zone from HomeKit and attaches the read-back "
-                    + "evidence to this proposal. Reversible by a follow-up proposal.",
+                evidence: [],
                 diff: [ProposalDiffLine(.add, "+ Upstairs · add room “Office”")],
                 context: [ProposalDiffLine(.plain, "No rooms removed — Master Bedroom and Guest stay.")]
             ),
@@ -108,8 +139,7 @@ final class InMemoryNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGrap
                 agentName: "Claude Code",
                 createdAt: now.addingTimeInterval(-14 * minute),
                 isDestructive: false,
-                evidence: "Creating a trigger stages one proposal. Enabling an existing trigger is always a "
-                    + "separate proposal — agents can never flip automations on silently.",
+                evidence: [],
                 diff: [
                     ProposalDiffLine(.add, "+ Timer “Weekday morning” · 06:45"),
                     ProposalDiffLine(.add, "+ Repeats Mon–Fri · runs scene “Good Morning”"),
@@ -123,8 +153,7 @@ final class InMemoryNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGrap
                 agentName: "Claude Code",
                 createdAt: now.addingTimeInterval(-31 * minute),
                 isDestructive: true,
-                evidence: "Same blast radius as deleting a room in the Home app. Denied proposals never "
-                    + "execute; pending proposals expire after 24 hours.",
+                evidence: [],
                 diff: [
                     ProposalDiffLine(.note, "⚠ 3 accessories will move to Default Room"),
                     ProposalDiffLine(.remove, "− Room “Storage”"),
@@ -135,29 +164,46 @@ final class InMemoryNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGrap
                         + "automations referencing this room will see the change immediately."
                 )]
             ),
+            // An already-executed change: the Queue row renders the executed
+            // chip with read-back evidence and the Undo affordance.
+            NilesProposal(
+                id: "prop_8f50",
+                tool: "create_room",
+                title: "Create room “Studio”",
+                agentName: "Obvious Agent",
+                createdAt: now.addingTimeInterval(-52 * minute),
+                isDestructive: false,
+                evidence: [
+                    ProposalEvidence(claim: "Room “Studio” exists", observed: "Confirmed in the live home", confirmed: true),
+                ],
+                diff: [ProposalDiffLine(.add, "+ Room “Studio”")],
+                context: [],
+                state: .executed
+            ),
         ]
+        undoStates = ["prop_8f50": .idle]
 
         sections = [
             HomeSection(title: "Rooms", rows: [
-                HomeRow(name: "Living Room", subtitle: "Upstairs · Default Room", systemImage: "sofa", trailingCount: 9),
-                HomeRow(name: "Kitchen", subtitle: "Downstairs", systemImage: "cooktop", trailingCount: 6),
-                HomeRow(name: "Office", subtitle: "No zone", systemImage: "laptopcomputer", trailingCount: 4),
-                HomeRow(name: "Master Bedroom", subtitle: "Upstairs", systemImage: "bed.double", trailingCount: 5),
-                HomeRow(name: "Storage", subtitle: "Delete pending", systemImage: "shippingbox", trailingCount: 2),
+                HomeRow(name: "Living Room", subtitle: "Upstairs · Default Room", systemImage: "sofa", trailingCount: 9, kind: .room, entityId: "room-1"),
+                HomeRow(name: "Kitchen", subtitle: "Downstairs", systemImage: "cooktop", trailingCount: 6, kind: .room, entityId: "room-2"),
+                HomeRow(name: "Office", subtitle: "No zone", systemImage: "laptopcomputer", trailingCount: 4, kind: .room, entityId: "room-3"),
+                HomeRow(name: "Master Bedroom", subtitle: "Upstairs", systemImage: "bed.double", trailingCount: 5, kind: .room, entityId: "room-4"),
+                HomeRow(name: "Storage", subtitle: "Delete pending", systemImage: "shippingbox", trailingCount: 2, kind: .room, entityId: "room-5"),
             ]),
             HomeSection(title: "Zones", rows: [
-                HomeRow(name: "Upstairs", subtitle: "Living Room, Master Bedroom", systemImage: "house", trailingCount: 2),
-                HomeRow(name: "Downstairs", subtitle: "Kitchen, Entry", systemImage: "house", trailingCount: 2),
+                HomeRow(name: "Upstairs", subtitle: "Living Room, Master Bedroom", systemImage: "house", trailingCount: 2, kind: .zone, entityId: "zone-1"),
+                HomeRow(name: "Downstairs", subtitle: "Kitchen, Entry", systemImage: "house", trailingCount: 2, kind: .zone, entityId: "zone-2"),
             ]),
             HomeSection(title: "Scenes", rows: [
-                HomeRow(name: "Good Morning", subtitle: "8 actions · 4 accessories", systemImage: "sunrise"),
-                HomeRow(name: "Goodnight", subtitle: "12 actions · 7 accessories", systemImage: "moon.stars"),
-                HomeRow(name: "Movie Time", subtitle: "5 actions · 3 accessories", systemImage: "film"),
+                HomeRow(name: "Good Morning", subtitle: "8 actions · 4 accessories", systemImage: "sunrise", kind: .scene, entityId: "scene-1"),
+                HomeRow(name: "Goodnight", subtitle: "12 actions · 7 accessories", systemImage: "moon.stars", kind: .scene, entityId: "scene-2"),
+                HomeRow(name: "Movie Time", subtitle: "5 actions · 3 accessories", systemImage: "film", kind: .scene, entityId: "scene-3"),
             ]),
             HomeSection(title: "Triggers", rows: [
-                HomeRow(name: "Weekday evening", subtitle: "Timer · 17:30 Mon–Fri", systemImage: "clock"),
-                HomeRow(name: "Away lights", subtitle: "Event · presence predicate", systemImage: "location"),
-                HomeRow(name: "Old porch light", subtitle: "Timer · disabled", systemImage: "lightbulb", isEnabled: false),
+                HomeRow(name: "Weekday evening", subtitle: "Timer · 17:30 Mon–Fri", systemImage: "clock", kind: .trigger, entityId: "trigger-1"),
+                HomeRow(name: "Away lights", subtitle: "Event · presence predicate", systemImage: "location", kind: .trigger, entityId: "trigger-2"),
+                HomeRow(name: "Old porch light", subtitle: "Timer · disabled", systemImage: "lightbulb", isEnabled: false, kind: .trigger, entityId: "trigger-3"),
             ]),
         ]
 
@@ -179,6 +225,16 @@ final class InMemoryNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGrap
         decide(id, to: .denied)
     }
 
+    /// Presentational: staged rows flip to approved so previews react.
+    func approveAll() {
+        for proposal in proposals where proposal.isPending {
+            decide(proposal.id, to: .approved)
+        }
+    }
+
+    /// Presentational: previews render whatever `undoStates` was seeded with.
+    func undo(_ id: String) {}
+
     private func decide(_ id: String, to next: ProposalState) {
         guard let index = proposals.firstIndex(where: { $0.id == id }),
               proposals[index].state.canTransition(to: next) else { return }
@@ -187,5 +243,23 @@ final class InMemoryNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGrap
 
     func toggleTokenRevealed() {
         isTokenRevealed.toggle()
+    }
+
+    func stage(row: HomeRow, action: HomeRowAction, newName: String?) async {
+        // Presentational only: append the proposal the swipe would stage so
+        // previews can show the queue badge reacting to a Home swipe.
+        guard let request = row.stageRequest(for: action, newName: newName) else { return }
+        proposals.append(
+            NilesProposal(
+                id: "prop_swipe_\(proposals.count + 1)",
+                tool: request.tool,
+                title: "\(action.title) “\(row.name)”",
+                agentName: "You",
+                createdAt: Date(),
+                isDestructive: action == .delete,
+                evidence: [],
+                diff: []
+            )
+        )
     }
 }
