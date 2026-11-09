@@ -32,7 +32,7 @@ final class HomeActionsUITests: XCTestCase {
         // so a failure still leaves visual evidence of the post-swipe state.
         let start = scene.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5))
         let end = scene.coordinate(withNormalizedOffset: CGVector(dx: 1.6, dy: 0.5))
-        start.press(forDuration: 0.05, thenDragTo: end)
+        start.press(forDuration: 0.1, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.3)
         sleep(2)
         capture("home-after-full-swipe", in: app)
 
@@ -54,7 +54,7 @@ final class HomeActionsUITests: XCTestCase {
         XCTAssertTrue(row.waitForExistence(timeout: 10))
         let revealStart = row.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5))
         let revealEnd = row.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.5))
-        revealStart.press(forDuration: 0.05, thenDragTo: revealEnd)
+        revealStart.press(forDuration: 0.1, thenDragTo: revealEnd, withVelocity: .slow, thenHoldForDuration: 0.3)
         sleep(1)
         capture("home-quick-actions", in: app)
     }

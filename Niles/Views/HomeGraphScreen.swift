@@ -146,13 +146,16 @@ private struct SwipeableHomeRow: View {
             .onEnded { value in
                 defer { isDraggingRight = false }
                 guard abs(value.translation.width) > abs(value.translation.height) else { return }
-                if value.translation.width > 0 {
+                // A quick flick ends with a small final translation; judge it
+                // by where the gesture was heading, not where it stopped.
+                let travel = max(value.translation.width, value.predictedEndTranslation.width)
+                if travel > 0 {
                     // Full swipe right: stage the primary action immediately.
-                    if dragX > stageThreshold, let action = row.primaryAction {
+                    if travel > stageThreshold, let action = row.primaryAction {
                         stage(action)
                     }
                     close()
-                } else if -dragX > openThreshold {
+                } else if -travel > openThreshold {
                     withAnimation(.spring(duration: 0.25)) { dragX = -openWidth }
                 } else {
                     close()
