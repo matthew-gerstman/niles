@@ -197,13 +197,14 @@ struct LiveNilesStoreTests {
         await store.approveAndWait(move!.id)
         try await waitUntil { store.proposals.first(where: { $0.id == move!.id })?.state == .executed }
 
-        // Authenticated read-back: the zone now contains Office, and the
-        // read-back evidence agrees.
+        // Authenticated read-back: QA Zone now contains exactly Office, and
+        // the read-back evidence agrees.
         let zonesAfterMove = await reads.call(name: "get_zones")
         #expect(zonesAfterMove.isError != true)
-        let office = try Self.roomRefs(named: "Office", in: zonesAfterMove)
-        #expect(office.count == 1)
-        #expect(office[0].id == "room-3")
+        let qaZoneRooms = try Self.roomRefs(named: "QA Zone", in: zonesAfterMove)
+        #expect(qaZoneRooms.count == 1)
+        #expect(qaZoneRooms[0].id == "room-3")
+        #expect(qaZoneRooms[0].name == "Office")
 
         let executed = store.proposals.first { $0.id == move!.id }
         // The app model summarizes evidence as a string; the structured
