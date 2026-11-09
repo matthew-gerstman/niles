@@ -156,9 +156,9 @@ struct QueueRow: View {
     }
 
     /// The first diff line stands in for the row's one-line summary; a
-    /// proposal without diff lines falls back to its planned summary.
+    /// proposal without diff lines falls back to its title.
     private var oneLineDiff: String {
-        proposal.diff.first?.text ?? proposal.summary
+        proposal.diff.first?.text ?? proposal.title
     }
 
     private var evidenceTally: String? {
