@@ -492,7 +492,7 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
     /// revocation where the credential outlives the connection it guards.
     func revokeAgent(_ id: UUID) async {
         do {
-            try tokenStore.revoke(id)
+            try tokenStore.revoke(id: id)
             await coordinator.closeSessions(tokenId: id)
         } catch {
             logger.error("Revoke failed for \(id.uuidString, privacy: .public): \(String(describing: error))")
