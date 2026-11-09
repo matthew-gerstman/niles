@@ -238,6 +238,65 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
         decisionsInFlight[id] = nil
     }
 
+    // MARK: - Undo and approve-all
+
+    /// Undoes an executed proposal: its paired revert stages and executes
+    /// immediately as a forward-only proposal — the Undo tap IS the
+    /// approval. A conflicted revert throws and changes nothing; the card
+    /// keeps its executed state at the next refresh.
+    func undo(_ id: String) {
+        Task { await undoAndWait(id) }
+    }
+
+    func undoAndWait(_ id: String) async {
+        guard let store = coordinator.proposalStore else {
+            logger.error("Cannot undo \(id, privacy: .public): no proposal store")
+            return
+        }
+        do {
+            let revert = try await store.undo(proposalId: id)
+            await appendActivity(
+                .undone,
+                proposalId: id,
+                title: proposals.first { $0.id == id }?.title ?? id,
+                agentName: agentNamesByProposal[id],
+                detail: "Reverted — \(revert.title)"
+            )
+        } catch {
+            logger.error("Undo failed for \(id, privacy: .public): \(String(describing: error))")
+        }
+        await refresh()
+    }
+
+    /// Approves and executes every staged proposal immediately —
+    /// destructive included. Undo afterwards is per-item, each with its
+    /// own conflict check.
+    func approveAll() {
+        Task { await approveAllAndWait() }
+    }
+
+    func approveAllAndWait() async {
+        guard let store = coordinator.proposalStore else {
+            logger.error("Cannot approve all: no proposal store")
+            return
+        }
+        do {
+            let executed = try await store.approveAll()
+            for proposal in executed {
+                await appendActivity(
+                    .decided,
+                    proposalId: proposal.id,
+                    title: proposals.first { $0.id == proposal.id }?.title ?? proposal.id,
+                    agentName: agentNamesByProposal[proposal.id],
+                    decision: "approved"
+                )
+            }
+        } catch {
+            logger.error("Approve all failed: \(String(describing: error))")
+        }
+        await refresh()
+    }
+
     // MARK: - PairingViewModel
 
     func toggleTokenRevealed() {
@@ -285,7 +344,11 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
         } else {
             for proposal in live where agentNamesByProposal[proposal.id] == nil {
                 agentNamesByProposal[proposal.id] = newestClientName(from: sessions) ?? "MCP agent"
-                if proposal.state == .staged {
+                // A revert proposal is the user's own Undo tap, staged and
+                // executed inside one store call — a poll can catch it
+                // mid-flight in .staged. It is never an agent arrival:
+                // no notification, no staged event.
+                if proposal.state == .staged, proposal.revertsProposalId == nil {
                     notifier.proposalArrived(title: proposal.title, summary: proposal.summary)
                     await appendActivity(
                         .staged,
@@ -304,12 +367,17 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
                 guard previous != proposal.state else { continue }
                 switch proposal.state {
                 case .executed, .failed:
+                    var detail = Self.executionOutcome(of: proposal) ?? ""
+                    if let originalId = proposal.revertsProposalId {
+                        let originalTitle = live.first { $0.id == originalId }?.title ?? originalId
+                        detail += (detail.isEmpty ? "" : " — ") + "revert of “\(originalTitle)”"
+                    }
                     await appendActivity(
                         .executed,
                         proposalId: proposal.id,
                         title: proposal.title,
                         agentName: agentNamesByProposal[proposal.id],
-                        detail: Self.executionOutcome(of: proposal),
+                        detail: detail.isEmpty ? nil : detail,
                         evidence: proposal.evidence
                     )
                 case .expired:
