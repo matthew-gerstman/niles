@@ -3,12 +3,11 @@ import NilesCore
 import Observation
 import OSLog
 
-/// A `HomeKitWriting` backed by the real home database for reads.
+/// A `HomeKitWriting` backed by the real home database.
 ///
-/// The adapter's write half (executing staged `HomeKitOperation`s against
-/// `HMHomeManager`) is not implemented yet, so approval on a real device
-/// records an explicit failure — the pipeline's designed behavior for a
-/// HomeKit rejection — instead of silently doing nothing.
+/// Reads and writes both run on `HomeManagerHomeKitService`: the actor owns
+/// the `HMHomeManager` and executes approved operations against it through
+/// the resolver + continuation executor (spec: write execution).
 struct DeviceHomeKitService: HomeKitWriting {
     private let reader = HomeManagerHomeKitService()
 
@@ -17,9 +16,7 @@ struct DeviceHomeKitService: HomeKitWriting {
     }
 
     func perform(_ operation: HomeKitOperation) async throws -> String? {
-        throw HomeKitWriteError.invalidOperation(
-            "Device-side HomeKit writes are not implemented yet — nothing was applied."
-        )
+        try await reader.perform(operation)
     }
 }
 
