@@ -2,6 +2,16 @@ import Foundation
 import MCP
 import Network
 
+/// One parsed request's answer, before wire serialization.
+///
+/// The pairing endpoint replies with its own status+JSON shape (the MCP SDK's
+/// response enum cannot express a non-200 body), so the runner carries both
+/// kinds until the wire write picks the serializer.
+enum HTTPRouteResponse: Sendable {
+    case pairing(PairingService.ExchangeResponse)
+    case gateway(MCP.HTTPResponse)
+}
+
 /// Serves one TCP connection: parse requests, route through the gateway, write responses.
 ///
 /// All I/O is confined to the task running `run()`; `@unchecked Sendable` covers only
@@ -11,17 +21,34 @@ final class HTTPConnectionRunner: @unchecked Sendable {
 
     private let connection: NWConnection
     private let gateway: MCPGateway
+    private let pairing: PairingService?
     private let maxBodySize: Int
 
-    init(connection: NWConnection, gateway: MCPGateway, maxBodySize: Int = HTTPRequestParser.defaultMaxBodySize) {
+    init(
+        connection: NWConnection,
+        gateway: MCPGateway,
+        pairing: PairingService? = nil,
+        maxBodySize: Int = HTTPRequestParser.defaultMaxBodySize
+    ) {
         self.connection = connection
         self.gateway = gateway
+        self.pairing = pairing
         self.maxBodySize = maxBodySize
     }
 
     /// Closes the connection; a pending receive ends with an error, unwinding `run()`.
     func cancel() {
         connection.cancel()
+    }
+
+    /// Routes one request: the pairing endpoint first — the gateway's auth
+    /// gate runs ahead of its path check, so an unauthenticated `POST /pairing`
+    /// could never be served through it — then the MCP gateway, unchanged.
+    func route(_ request: MCP.HTTPRequest) async -> HTTPRouteResponse {
+        if let pairing, let exchange = await pairing.handle(request) {
+            return .pairing(exchange)
+        }
+        return .gateway(await gateway.handle(request))
     }
 
     func run() async {
@@ -33,8 +60,18 @@ final class HTTPConnectionRunner: @unchecked Sendable {
             switch HTTPRequestParser.parse(Data(buffer), maxBodySize: maxBodySize) {
             case .complete(let request, let wantsKeepAlive, let consumedBytes):
                 buffer.removeFirst(consumedBytes)
-                let response = await gateway.handle(request)
-                guard await write(response, keepAlive: wantsKeepAlive), wantsKeepAlive else { return }
+                switch await route(request) {
+                case .pairing(let exchange):
+                    let wire = HTTPResponseWriter.serialize(
+                        statusCode: exchange.statusCode,
+                        body: exchange.body,
+                        headers: exchange.headers,
+                        keepAlive: wantsKeepAlive
+                    )
+                    guard await send(wire), wantsKeepAlive else { return }
+                case .gateway(let response):
+                    guard await write(response, keepAlive: wantsKeepAlive), wantsKeepAlive else { return }
+                }
             case .invalid(let parseError):
                 // The stream may be desynchronized — answer and close, never reuse.
                 await writeAndIgnoreFailure(Self.errorResponse(for: parseError))

@@ -24,6 +24,8 @@ public enum HTTPResponseWriter {
         415: "Unsupported Media Type",
         421: "Misdirected Request",
         431: "Request Header Fields Too Large",
+        429: "Too Many Requests",
+        410: "Gone",
         500: "Internal Server Error",
         501: "Not Implemented",
         503: "Service Unavailable",
@@ -39,21 +41,46 @@ public enum HTTPResponseWriter {
     /// `keepAlive` decides the `Connection` header; the caller's decision always wins
     /// over any header the SDK supplied.
     public static func head(_ response: MCP.HTTPResponse, keepAlive: Bool, chunked: Bool = false) -> Data {
-        var out = "HTTP/1.1 \(response.statusCode) \(reason(for: response.statusCode))\r\n"
+        head(
+            statusCode: response.statusCode,
+            headers: response.headers,
+            keepAlive: keepAlive,
+            bodyLength: chunked ? nil : response.bodyData?.count ?? 0
+        )
+    }
 
-        var headers = response.headers
+    /// Status line + headers for a complete body framed by `Content-Length`
+    /// (`bodyLength` set) or by chunked transfer encoding (`bodyLength` nil).
+    public static func head(statusCode: Int, headers: [String: String], keepAlive: Bool, bodyLength: Int?) -> Data {
+        var out = "HTTP/1.1 \(statusCode) \(reason(for: statusCode))\r\n"
+
+        var headers = headers
         headers["Connection"] = keepAlive ? (headers["Connection"] ?? "keep-alive") : "close"
         for name in headers.keys.sorted() {
             out += "\(name): \(headers[name] ?? "")\r\n"
         }
 
-        if chunked {
-            out += "Transfer-Encoding: chunked\r\n"
+        if let bodyLength {
+            out += "Content-Length: \(bodyLength)\r\n"
         } else {
-            out += "Content-Length: \(response.bodyData?.count ?? 0)\r\n"
+            out += "Transfer-Encoding: chunked\r\n"
         }
         out += "\r\n"
         return Data(out.utf8)
+    }
+
+    /// Head + complete body for a plain (non-MCP) response — the pairing
+    /// endpoint's status+JSON shapes, which `MCP.HTTPResponse` cannot express
+    /// for non-200 codes. Same deterministic header emission as `head`.
+    public static func serialize(
+        statusCode: Int,
+        body: Data,
+        headers: [String: String] = [:],
+        keepAlive: Bool
+    ) -> Data {
+        var out = head(statusCode: statusCode, headers: headers, keepAlive: keepAlive, bodyLength: body.count)
+        out.append(body)
+        return out
     }
 
     /// Head + complete body for non-stream responses.
