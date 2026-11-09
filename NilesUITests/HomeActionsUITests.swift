@@ -39,8 +39,18 @@ final class HomeActionsUITests: XCTestCase {
         capture("home-quick-actions", in: app)
 
         // The same action set is reachable from the row detail page, where
-        // the actions are plain buttons. Tap Run to stage a proposal.
-        scene.tap()
+        // the actions are plain buttons. Tap the row itself — activating the
+        // inner static text does not reliably trigger the NavigationLink in
+        // synthetic runs. Tap Run to stage a proposal.
+        let sceneRow = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Good Morning")
+        ).firstMatch
+        XCTAssertTrue(sceneRow.waitForExistence(timeout: 10))
+        sceneRow.tap()
+        XCTAssertTrue(
+            app.navigationBars["Good Morning"].waitForExistence(timeout: 10),
+            "Tapping the scene row should push its detail page"
+        )
         let detailRun = app.buttons["Run"].firstMatch
         XCTAssertTrue(detailRun.waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["Rename"].exists)
