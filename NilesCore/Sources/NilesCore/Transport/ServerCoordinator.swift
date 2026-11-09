@@ -21,6 +21,9 @@ public final class ServerCoordinator {
     private let port: UInt16
     private let tokenStore: any TokenStoring
     private var server: LANServer?
+    /// The gateway the current server serves through, if any — the live source
+    /// for session state on the dashboard and pairing screens.
+    private var gateway: MCPGateway?
 
     /// The proposal pipeline for the injected service, if any. Created once at
     /// init so staged proposals survive foreground cycles and expire only by
@@ -64,6 +67,7 @@ public final class ServerCoordinator {
             let server = LANServer(gateway: gateway, port: port)
             try await server.start()
             self.server = server
+            self.gateway = gateway
             status = .running(port: port)
         } catch {
             status = .failed(String(describing: error))
@@ -74,7 +78,13 @@ public final class ServerCoordinator {
     public func stop() async {
         guard let server else { return }
         self.server = nil
+        gateway = nil
         await server.stop()
         status = .stopped
+    }
+
+    /// The sessions currently connected to the running server, if any.
+    public func sessionInfos() async -> [MCPGateway.SessionInfo] {
+        await gateway?.sessionInfos() ?? []
     }
 }
