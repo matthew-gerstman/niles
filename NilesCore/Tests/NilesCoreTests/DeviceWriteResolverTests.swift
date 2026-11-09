@@ -234,6 +234,65 @@ import Testing
         } == .objectMissing("No scene scene-x."))
     }
 
+    // MARK: Scene rename, delete, execute
+
+    @Test func renameActionSetResolvesTheScene() throws {
+        let steps = try resolve(.renameActionSet(homeId: "home-1", sceneId: "scene-chill", to: "Evening"))
+        #expect(steps == [.renameActionSet(homeId: "home-1", sceneId: "scene-chill", to: "Evening")])
+    }
+
+    @Test func renameActionSetToTheSameNameResolves() throws {
+        // Case-insensitive no-op rename is legal — the executor's updateName
+        // accepts it; nothing here needs to reject.
+        let steps = try resolve(.renameActionSet(homeId: "home-1", sceneId: "scene-chill", to: "chill"))
+        #expect(steps == [.renameActionSet(homeId: "home-1", sceneId: "scene-chill", to: "chill")])
+    }
+
+    @Test func renameActionSetRejectsDuplicateNameAcrossHomes() {
+        #expect(error {
+            _ = try self.resolve(.renameActionSet(homeId: "home-1", sceneId: "scene-chill", to: "Beach Mode"))
+        } == .duplicateName("Home already has a scene named “Beach Mode”."))
+        #expect(error {
+            _ = try self.resolve(.renameActionSet(homeId: "home-2", sceneId: "scene-beach", to: "Chill"))
+        } == .duplicateName("Home already has a scene named “Chill”."))
+    }
+
+    @Test func renameActionSetRejectsMissingScene() {
+        #expect(error {
+            _ = try self.resolve(.renameActionSet(homeId: "home-1", sceneId: "scene-x", to: "Evening"))
+        } == .objectMissing("No scene scene-x."))
+    }
+
+    @Test func removeActionSetResolvesTheScene() throws {
+        let steps = try resolve(.removeActionSet(homeId: "home-1", sceneId: "scene-chill"))
+        #expect(steps == [.removeActionSet(homeId: "home-1", sceneId: "scene-chill")])
+    }
+
+    @Test func removeActionSetRejectsMissingScene() {
+        #expect(error {
+            _ = try self.resolve(.removeActionSet(homeId: "home-1", sceneId: "scene-x"))
+        } == .objectMissing("No scene scene-x."))
+    }
+
+    @Test func executeActionSetResolvesTheScene() throws {
+        let steps = try resolve(.executeActionSet(homeId: "home-1", sceneId: "scene-chill"))
+        #expect(steps == [.executeActionSet(homeId: "home-1", sceneId: "scene-chill")])
+    }
+
+    @Test func executeActionSetRejectsAnEmptyActionSet() {
+        var view = fixtureView()
+        view.homes[0].scenes.append(DeviceHomeView.Scene(id: "scene-empty", name: "Empty"))
+        #expect(error {
+            _ = try self.resolve(.executeActionSet(homeId: "home-1", sceneId: "scene-empty"), view: view)
+        }?.isInvalidOperation == true)
+    }
+
+    @Test func executeActionSetRejectsMissingScene() {
+        #expect(error {
+            _ = try self.resolve(.executeActionSet(homeId: "home-1", sceneId: "scene-x"))
+        } == .objectMissing("No scene scene-x."))
+    }
+
     // MARK: Service groups
 
     @Test func addServiceGroupRejectsDuplicateName() throws {
