@@ -40,8 +40,14 @@ jobs:
             -project Niles.xcodeproj \
             -scheme Niles \
             -destination 'platform=iOS Simulator,name=iPhone 16' \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGN_IDENTITY=- \
+            CODE_SIGNING_REQUIRED=NO
 
+      # Ad-hoc signed on purpose: SecItem fails with errSecMissingEntitlement
+      # (-34018) in an unsigned test host, which would skip verification of the
+      # Keychain-backed token-store tests. The entitlements and generated
+      # Info.plists live in project.yml.
       - name: Test
         run: |
           set -o pipefail
@@ -49,4 +55,6 @@ jobs:
             -project Niles.xcodeproj \
             -scheme Niles \
             -destination 'platform=iOS Simulator,name=iPhone 16' \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGN_IDENTITY=- \
+            CODE_SIGNING_REQUIRED=NO

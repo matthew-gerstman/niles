@@ -46,22 +46,28 @@ public final class ServerCoordinator {
     public func start() async {
         guard server == nil else { return }
         do {
-            // One token guards both entry points: the gateway's pre-transport gate
-            // and each session transport's validation pipeline.
-            let token = try tokenStore.loadOrCreate()
+            // Bootstrap the credential set (fresh installs have no Keychain
+            // items yet); the gate itself re-reads the live set on every
+            // request, so issuing and revoking tokens takes effect without a
+            // restart.
+            _ = try tokenStore.loadOrCreate()
+            let store = tokenStore
+            let tokenProvider: @Sendable () throws -> [String] = {
+                try store.listAgents().map(\.token)
+            }
             let gateway: MCPGateway
             if let proposalStore {
                 gateway = MCPGateway(
                     serverFactory: NilesServerFactory.makeFactory(store: proposalStore),
-                    validationPipeline: NilesValidationPipeline(expectedToken: token),
-                    auth: BearerTokenAuthMiddleware(expectedToken: token)
+                    validationPipeline: NilesValidationPipeline(tokenProvider: tokenProvider),
+                    auth: BearerTokenAuthMiddleware(tokenProvider: tokenProvider)
                 )
             } else {
                 // No service injected yet — serving with the empty default
                 // tool surface (the pre-tools behavior) rather than crashing.
                 gateway = MCPGateway(
-                    validationPipeline: NilesValidationPipeline(expectedToken: token),
-                    auth: BearerTokenAuthMiddleware(expectedToken: token)
+                    validationPipeline: NilesValidationPipeline(tokenProvider: tokenProvider),
+                    auth: BearerTokenAuthMiddleware(tokenProvider: tokenProvider)
                 )
             }
             let server = LANServer(gateway: gateway, port: port)
