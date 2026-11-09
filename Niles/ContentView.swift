@@ -18,8 +18,9 @@ struct ContentView: View {
     @State private var selectedTab: NilesTab = {
     // Test/screenshot hook: `simctl launch ... -UITabSelect activity` opens a
     // given tab so per-tab captures don't need UI automation.
-    if let arg = ProcessInfo.processInfo.arguments.firstMatch(of: /-UITabSelect (\w+)/) {
-        return NilesTab(rawValue: String(arg.1)) ?? .queue
+    let args = ProcessInfo.processInfo.arguments
+    if let i = args.firstIndex(of: "-UITabSelect"), i + 1 < args.count {
+        return NilesTab(rawValue: args[i + 1]) ?? .queue
     }
     return .queue
 }()
