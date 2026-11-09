@@ -35,7 +35,7 @@ struct DeviceHomeKitService: HomeKitWriting {
 /// polls on a short interval; every read is in-memory and cheap.
 @MainActor
 @Observable
-final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphViewModel, PairingViewModel {
+final class LiveNilesStore: DashboardViewModel, QueueViewModel, HomeGraphViewModel, PairingViewModel {
 
     // MARK: - DashboardViewModel
 
@@ -47,7 +47,7 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
     private(set) var approvedTodayCount = 0
     private(set) var connectedAgents: [AgentConnection] = []
 
-    // MARK: - ApprovalsViewModel
+    // MARK: - QueueViewModel
 
     private(set) var proposals: [NilesProposal] = []
     /// Optimistic tap feedback: proposal id -> decision whose pipeline
@@ -56,6 +56,16 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
     private(set) var decisionsInFlight: [String: ProposalDecision] = [:]
     /// The activity timeline as of the last refresh, oldest first.
     private(set) var activityEvents: [ActivityEvent] = []
+    /// True from the Approve-all tap until the whole batch settles — the
+    /// batch button shows progress and cannot re-enter.
+    private(set) var isApprovingAll = false
+    /// Undo bookkeeping (Queue): per-row divergences recorded from the
+    /// store's typed `undoConflict`, rows the store refused with
+    /// `notRevertable`, and taps whose revert is still running. All
+    /// in-memory, like the proposals themselves.
+    private var undoConflicts: [String: [ProposalEvidence]] = [:]
+    private var notRevertableIds: Set<String> = []
+    private var undosInFlight: Set<String> = []
 
     // MARK: - HomeGraphViewModel
 
@@ -168,7 +178,7 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
         }
     }
 
-    // MARK: - ApprovalsViewModel
+    // MARK: - QueueViewModel
 
     /// Approves and executes the staged operations; the result (state,
     /// evidence, error) appears on the card at the next refresh.
@@ -242,9 +252,17 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
 
     /// Undoes an executed proposal: its paired revert stages and executes
     /// immediately as a forward-only proposal — the Undo tap IS the
-    /// approval. A conflicted revert throws and changes nothing; the card
-    /// keeps its executed state at the next refresh.
+    /// approval. A conflicted revert throws and changes nothing; the row
+    /// renders the typed `undoConflict` divergences inline until the next
+    /// undo attempt on that row. A `notRevertable` refusal stops the row
+    /// from offering Undo at all.
     func undo(_ id: String) {
+        // Optimistic tap feedback, synchronous like the decision taps: the
+        // row's Undoing… state renders before the pipeline task runs.
+        guard let proposal = proposals.first(where: { $0.id == id }),
+              Self.undoAvailable(for: proposal, proposals: proposals) else { return }
+        undosInFlight.insert(id)
+        undoConflicts[id] = nil
         Task { await undoAndWait(id) }
     }
 
@@ -253,6 +271,9 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
             logger.error("Cannot undo \(id, privacy: .public): no proposal store")
             return
         }
+        undosInFlight.insert(id)
+        undoConflicts[id] = nil
+        defer { undosInFlight.remove(id) }
         do {
             let revert = try await store.undo(proposalId: id)
             await appendActivity(
@@ -262,24 +283,123 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
                 agentName: agentNamesByProposal[id],
                 detail: "Reverted — \(revert.title)"
             )
+        } catch let error as ProposalStoreError {
+            switch error {
+            case .undoConflict(_, let divergences):
+                // The home diverged from what execution produced. Nothing
+                // was applied; the row names the divergence inline.
+                undoConflicts[id] = divergences
+            case .notRevertable:
+                // No paired revert exists (unrevertable operation, lost undo
+                // coverage, or a spent plan): the affordance goes away.
+                notRevertableIds.insert(id)
+            case .proposalNotFound, .proposalNotPending, .homeReadFailed:
+                logger.error("Undo failed for \(id, privacy: .public): \(String(describing: error))")
+            case .unknownTool, .invalidArguments, .validationFailed:
+                // Unreachable from undo — staging errors surface to agents,
+                // not to this tap path. Never silently swallowed: logged.
+                logger.error("Undo failed for \(id, privacy: .public): \(String(describing: error))")
+            }
         } catch {
             logger.error("Undo failed for \(id, privacy: .public): \(String(describing: error))")
         }
         await refresh()
     }
 
+    /// Whether an executed proposal still offers Undo — pure so the
+    /// affordance rules are directly testable:
+    /// - only executed rows offer it (staged rows decide; terminal rows are
+    ///   history);
+    /// - unrevertable operations never offer it — `RevertPlanBuilder` (the
+    ///   authority) builds no revert for scene execution, identify, unblock,
+    ///   or accessory removal, so the store would refuse with
+    ///   `notRevertable`;
+    /// - an EXECUTED revert child means the row is already undone and there
+    ///   is no undo of an undo. A failed revert child does not count: the
+    ///   store keeps the original's revert plan when its revert fails, so
+    ///   Undo still applies.
+    static func undoAvailable(for proposal: NilesProposal, proposals: [NilesProposal]) -> Bool {
+        guard proposal.state == .executed else { return false }
+        guard !unrevertableTools.contains(proposal.tool) else { return false }
+        return !proposals.contains { child in
+            child.revertsProposalId == proposal.id && child.state == .executed
+        }
+    }
+
+    /// The staged verbs whose operations have no meaningful inverse. Mirrors
+    /// `RevertPlanBuilder`'s unrevertable operation set (the only source of
+    /// truth for revertability); if a new unrevertable operation lands in the
+    /// store, add its tool here — until then the tap surfaces the store's
+    /// typed `notRevertable` and the row stops offering Undo.
+    private static let unrevertableTools: Set<String> = [
+        "execute_scene", "identify_accessory", "unblock_accessory", "remove_accessory",
+    ]
+
+    /// Per-row Undo affordance state: the availability rules above, overlaid
+    /// with this session's tap bookkeeping (in flight, divergences, refusals).
+    var undoStates: [String: UndoState] {
+        var states: [String: UndoState] = [:]
+        for proposal in proposals {
+            guard Self.undoAvailable(for: proposal, proposals: proposals) else { continue }
+            if undosInFlight.contains(proposal.id) {
+                states[proposal.id] = .inFlight
+            } else if let divergences = undoConflicts[proposal.id] {
+                states[proposal.id] = .conflict(divergences)
+            } else if notRevertableIds.contains(proposal.id) {
+                states[proposal.id] = .notRevertable
+            } else {
+                states[proposal.id] = .idle
+            }
+        }
+        return states
+    }
+
     /// Approves and executes every staged proposal immediately —
     /// destructive included. Undo afterwards is per-item, each with its
     /// own conflict check.
     func approveAll() {
-        Task { await approveAllAndWait() }
+        guard let store = coordinator.proposalStore else {
+            logger.error("Cannot approve all: no proposal store")
+            return
+        }
+        let stagedIds = beginApproveAllBatch()
+        guard !stagedIds.isEmpty else { return }
+        Task { await approveAllBatch(on: store, clearing: stagedIds) }
     }
 
+    /// Awaitable batch path — what the tap task spawns; tests await it
+    /// directly.
     func approveAllAndWait() async {
         guard let store = coordinator.proposalStore else {
             logger.error("Cannot approve all: no proposal store")
             return
         }
+        let stagedIds = beginApproveAllBatch()
+        guard !stagedIds.isEmpty else { return }
+        await approveAllBatch(on: store, clearing: stagedIds)
+    }
+
+    /// Optimistic batch feedback, applied synchronously before the pipeline
+    /// task is even spawned — same contract as the single tap: every staged
+    /// row shows its in-progress chip on the next frame, one success haptic
+    /// fires for the whole batch, and the button cannot re-enter while the
+    /// batch runs. Returns the staged ids whose chips must settle.
+    @discardableResult
+    private func beginApproveAllBatch() -> [String] {
+        let stagedIds = proposals.filter(\.isPending).map(\.id)
+        guard !stagedIds.isEmpty else { return stagedIds }
+        for id in stagedIds {
+            decisionsInFlight[id] = .approving
+        }
+        isApprovingAll = true
+        let haptic = UINotificationFeedbackGenerator()
+        haptic.prepare()
+        haptic.notificationOccurred(.success)
+        return stagedIds
+    }
+
+    private func approveAllBatch(on store: ProposalStore, clearing stagedIds: [String]) async {
+        defer { isApprovingAll = false }
         do {
             let executed = try await store.approveAll()
             for proposal in executed {
@@ -295,6 +415,10 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
             logger.error("Approve all failed: \(String(describing: error))")
         }
         await refresh()
+        // Settled: the refreshed states are authoritative.
+        for id in stagedIds {
+            decisionsInFlight[id] = nil
+        }
     }
 
     // MARK: - PairingViewModel
@@ -335,6 +459,96 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
     /// tests call it directly.
     func loadTokenAndWait() async {
         await loadToken()
+    }
+
+    // MARK: - Simulator QA fixtures
+
+    /// Screenshots and device QA: with a `-UISeedQueue <fixture>` launch
+    /// argument, stages real proposals through the real pipeline (the same
+    /// registry the transport serves) so the Queue renders live states
+    /// without an MCP client — and, for the conflict fixture, diverges the
+    /// fake home and performs the Undo tap so the row shows the typed
+    /// divergence error. No-op without the argument.
+    func seedQueueFixtureIfRequested() async {
+        let args = ProcessInfo.processInfo.arguments
+        guard let index = args.firstIndex(of: "-UISeedQueue"), index + 1 < args.count else { return }
+        guard let store = coordinator.proposalStore else {
+            logger.error("Seed fixture requested but no proposal store is running")
+            return
+        }
+        // The app target does not link MCP, so fixtures stage hand-built
+        // Plans directly. Operations stay real — approve/undo exercise the
+        // same execution and revert-derivation paths as agent-staged writes.
+        func room(_ id: String, _ name: String?) -> ProposalObjectRef {
+            ProposalObjectRef(kind: .room, id: id, name: name)
+        }
+        func stage(_ plan: Plan) async -> String? {
+            _ = await store.stage(plan: plan)
+            await refresh()
+            return pendingProposals.first { $0.tool == plan.tool }?.id
+        }
+        func createRoomPlan() -> Plan {
+            Plan(
+                tool: "create_room",
+                title: "Create room Studio",
+                summary: "Adds the Studio room to the home.",
+                isDestructive: false,
+                operations: [.addRoom(homeId: "home-1", name: "Studio")],
+                entries: [.init(object: room("", "Studio"), op: .create, before: nil, after: "Studio")],
+                card: [.init(.add, "Add room Studio")]
+            )
+        }
+
+        switch args[index + 1] {
+        case "pending":
+            _ = await stage(createRoomPlan())
+            _ = await stage(Plan(
+                tool: "rename_room",
+                title: "Rename room to Cookery",
+                summary: "Renames room-2 to Cookery.",
+                isDestructive: false,
+                operations: [.renameRoom(homeId: "home-1", roomId: "room-2", to: "Cookery")],
+                entries: [.init(object: room("room-2", "Cookery"), op: .rename, before: nil, after: "Cookery")],
+                card: [.init(.plain, "Rename room to Cookery")]
+            ))
+
+        case "destructive":
+            _ = await stage(createRoomPlan())
+            _ = await stage(Plan(
+                tool: "delete_room",
+                title: "Delete room",
+                summary: "Removes room-3 and its accessory assignments.",
+                isDestructive: true,
+                operations: [.removeRoom(homeId: "home-1", roomId: "room-3")],
+                entries: [.init(object: room("room-3", nil), op: .delete, before: nil, after: nil)],
+                card: [.init(.remove, "Delete room-3"), .init(.note, "Accessories in this room become unassigned.")]
+            ))
+
+        case "undo":
+            guard let id = await stage(createRoomPlan()) else { return }
+            await approveAndWait(id)
+
+        case "conflict":
+            guard let id = await stage(createRoomPlan()) else { return }
+            await approveAndWait(id)
+            // Diverge the home out-of-band — the revert expects the created
+            // room to still exist, so removing it directly is exactly the
+            // "the world moved" case the conflict check exists for.
+            do {
+                let graph = try await store.homeKit.snapshot()
+                let home = graph.homes.first
+                guard let room = home?.rooms.first(where: { $0.name == "Studio" }) else { return }
+                _ = try await store.homeKit.perform(.removeRoom(homeId: home?.id ?? "", roomId: room.id))
+                // The Undo tap, performed exactly as the row's button does it.
+                await undoAndWait(id)
+            } catch {
+                logger.error("Conflict fixture diverge failed: \(String(describing: error))")
+            }
+
+        default:
+            logger.error("Unknown -UISeedQueue fixture: \(args[index + 1], privacy: .public)")
+        }
+        await refresh()
     }
 
     // MARK: - Refresh

@@ -1,9 +1,9 @@
 import SwiftUI
 
 /// Detail sheet for one proposal: full diff including context lines, evidence
-/// note, and the verdict buttons. Destructive proposals show a danger-styled
-/// Deny and no Approve here — approving a deletion happens on the queue card,
-/// matching the mockup.
+/// note, and the verdict buttons. Destructive proposals show Approve here too
+/// — they approve with a standard tap everywhere (user decision Nov 9), with
+/// a danger-styled Deny; severity is carried by the copy and the evidence.
 struct ProposalDetailSheet: View {
     let proposal: NilesProposal
     var onApprove: () -> Void = {}
@@ -45,19 +45,16 @@ struct ProposalDetailSheet: View {
                 .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
             }
             HStack(spacing: 8) {
-                if proposal.isDestructive {
-                    ActionButton(title: "Deny", style: .danger) {
-                        onDeny()
-                        dismiss()
-                    }
-                    .disabled(!proposal.isPending)
-                } else {
-                    ActionButton(title: "Approve", style: .primary) {
-                        onApprove()
-                        dismiss()
-                    }
-                    .disabled(!proposal.isPending)
+                ActionButton(title: "Approve", style: .primary) {
+                    onApprove()
+                    dismiss()
                 }
+                .disabled(!proposal.isPending)
+                ActionButton(title: "Deny", style: proposal.isDestructive ? .danger : .ghost) {
+                    onDeny()
+                    dismiss()
+                }
+                .disabled(!proposal.isPending)
                 ActionButton(title: "Close", style: .ghost) { dismiss() }
             }
             .padding(.top, 4)
