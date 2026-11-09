@@ -187,7 +187,7 @@ private struct HomeRowDetail: View {
                 LabeledContent("Type", value: row.kind.map(kindName) ?? "—")
                 LabeledContent("Status", value: row.isEnabled ? "Enabled" : "Disabled")
                 if let count = row.trailingCount {
-                    LabeledContent(countLabel, value: count.formatted(.number.notation(.plain)))
+                    LabeledContent(countLabel, value: "\(count)")
                 }
                 LabeledContent("Detail", value: row.subtitle)
             }
