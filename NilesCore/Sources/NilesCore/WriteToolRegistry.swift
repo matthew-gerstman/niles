@@ -1,7 +1,7 @@
 import Foundation
 import MCP
 
-/// The mutating MCP tools: twenty-five declarative write tools plus the
+/// The mutating MCP tools: twenty-six declarative write tools plus the
 /// `get_proposal` poll. None of them touches HomeKit — a call plans the
 /// request against the current graph and stages exactly one proposal
 /// (spec: "one agent request is always exactly one approval card"); the
@@ -185,6 +185,22 @@ public struct WriteToolRegistry: Sendable {
             inputSchema: objectSchema(
                 ["sceneId": stringProperty("The scene to run (from get_scenes).")],
                 required: ["sceneId"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false)
+        ),
+        Tool(
+            name: "write_characteristic",
+            description: "Write a value to one of an accessory's characteristics NOW — the change applies to the device as soon as a human approves it (device-immediate; the review card shows the current and target values). The target matches by friendly name or type UUID, e.g. On, Brightness, or 00000008-0000-1000-8000-0026BB765291. The value must fit the characteristic's declared metadata (type and range) or staging rejects it. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            inputSchema: objectSchema(
+                [
+                    "accessoryId": stringProperty("The accessory to write (from get_rooms)."),
+                    "service": stringProperty("Optional service name or type; defaults to the first service carrying the characteristic."),
+                    "characteristic": stringProperty("The characteristic to write, by friendly name or type UUID, e.g. On or Brightness."),
+                    "value": .object([
+                        "description": .string("The target value: number, string, or boolean."),
+                    ]),
+                ],
+                required: ["accessoryId", "characteristic", "value"]
             ),
             annotations: Tool.Annotations(readOnlyHint: false)
         ),

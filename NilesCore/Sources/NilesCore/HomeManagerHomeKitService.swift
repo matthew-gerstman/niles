@@ -635,6 +635,14 @@ extension HomeManagerHomeKitService: HomeKitWriting {
             let home = try Self.home(homeId, in: homes)
             try await Self.remove(try Self.accessory(accessoryId, in: home), from: home)
             return nil
+
+        case .writeCharacteristic(let homeId, let resolved):
+            let home = try Self.home(homeId, in: homes)
+            let characteristic = try Self.characteristic(resolved.characteristicId, in: home)
+            try await Self.write(
+                resolved.value, kind: resolved.kind, to: characteristic, named: resolved.characteristicType
+            )
+            return nil
         }
     }
 
@@ -658,33 +666,39 @@ extension HomeManagerHomeKitService: HomeKitWriting {
     /// way the read side enumerates specializations back out.
     private static func writeAction(for resolved: ResolvedAction, in home: HMHome) throws -> HMAction {
         let characteristic = try Self.characteristic(resolved.characteristicId, in: home)
-        switch (resolved.kind, resolved.value) {
-        case (.string, .string(let string)):
-            return HMCharacteristicWriteAction<NSString>(
-                characteristic: characteristic, targetValue: string as NSString
-            )
-        case (.number, .bool(let value)):
-            return HMCharacteristicWriteAction<NSNumber>(characteristic: characteristic, targetValue: NSNumber(value: value))
-        case (.number, .int(let value)):
-            return HMCharacteristicWriteAction<NSNumber>(characteristic: characteristic, targetValue: NSNumber(value: value))
-        case (.number, .double(let value)):
-            return HMCharacteristicWriteAction<NSNumber>(characteristic: characteristic, targetValue: NSNumber(value: value))
-        case (.unknown, .string(let string)):
-            // No metadata to consult — render a string value as a string.
-            return HMCharacteristicWriteAction<NSString>(
-                characteristic: characteristic, targetValue: string as NSString
-            )
-        case (.unknown, .bool(let value)):
-            return HMCharacteristicWriteAction<NSNumber>(characteristic: characteristic, targetValue: NSNumber(value: value))
-        case (.unknown, .int(let value)):
-            return HMCharacteristicWriteAction<NSNumber>(characteristic: characteristic, targetValue: NSNumber(value: value))
-        case (.unknown, .double(let value)):
-            return HMCharacteristicWriteAction<NSNumber>(characteristic: characteristic, targetValue: NSNumber(value: value))
+        switch try Self.cocoaValue(resolved.value, kind: resolved.kind, characteristicType: resolved.characteristicType) {
+        case .number(let number):
+            return HMCharacteristicWriteAction<NSNumber>(characteristic: characteristic, targetValue: number)
+        case .string(let string):
+            return HMCharacteristicWriteAction<NSString>(characteristic: characteristic, targetValue: string)
+        }
+    }
+
+    /// The concrete Cocoa value a characteristic write hands HomeKit —
+    /// NSNumber for the number family, NSString for strings. One rendering
+    /// rule for scene-action targets and direct writes alike.
+    private enum CocoaWriteValue {
+        case number(NSNumber)
+        case string(NSString)
+    }
+
+    private static func cocoaValue(
+        _ value: HomeKitValue, kind: DeviceHomeView.ValueKind, characteristicType: String
+    ) throws -> CocoaWriteValue {
+        switch (kind, value) {
+        case (.string, .string(let string)): .string(string as NSString)
+        case (.number, .bool(let value)): .number(NSNumber(value: value))
+        case (.number, .int(let value)): .number(NSNumber(value: value))
+        case (.number, .double(let value)): .number(NSNumber(value: value))
+        case (.unknown, .string(let string)): .string(string as NSString)
+        case (.unknown, .bool(let value)): .number(NSNumber(value: value))
+        case (.unknown, .int(let value)): .number(NSNumber(value: value))
+        case (.unknown, .double(let value)): .number(NSNumber(value: value))
         case (_, let wrong):
             // The resolver pre-checks this; a drift between resolve and run
             // must not send a wrong-typed value into HomeKit.
             throw HomeKitWriteError.invalidOperation(
-                "Characteristic \(resolved.characteristicType) cannot take the value \(wrong.rendered)."
+                "Characteristic \(characteristicType) cannot take the value \(wrong.rendered)."
             )
         }
     }
@@ -881,7 +895,8 @@ extension HomeManagerHomeKitService: HomeKitWriting {
                                         id: characteristic.uniqueIdentifier.uuidString,
                                         type: characteristic.characteristicType,
                                         name: characteristic.localizedDescription,
-                                        kind: Self.valueKind(from: characteristic.metadata?.format)
+                                        kind: DeviceHomeView.ValueKind(format: characteristic.metadata?.format),
+                                        metadata: Self.characteristicMetadata(from: characteristic.metadata)
                                     )
                                 }
                             )
@@ -890,21 +905,6 @@ extension HomeManagerHomeKitService: HomeKitWriting {
                 }
             )
         })
-    }
-
-    private static func valueKind(from format: String?) -> DeviceHomeView.ValueKind {
-        guard let format else { return .unknown }
-        if format == HMCharacteristicMetadataFormatString { return .string }
-        if format == HMCharacteristicMetadataFormatBool
-            || format == HMCharacteristicMetadataFormatInt
-            || format == HMCharacteristicMetadataFormatFloat
-            || format == HMCharacteristicMetadataFormatUInt8
-            || format == HMCharacteristicMetadataFormatUInt16
-            || format == HMCharacteristicMetadataFormatUInt32
-            || format == HMCharacteristicMetadataFormatUInt64 {
-            return .number
-        }
-        return .unknown
     }
 
     // MARK: - Continuation shell (no logic)
@@ -986,6 +986,28 @@ extension HomeManagerHomeKitService: HomeKitWriting {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             home.executeActionSet(actionSet) { error in
                 if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            }
+        }
+    }
+
+    /// A direct characteristic write — `HMCharacteristic.writeValue` with the
+    /// value rendered the way the metadata declares (the same rule
+    /// scene-action targets go through).
+    private static func write(
+        _ value: HomeKitValue, kind: DeviceHomeView.ValueKind, to characteristic: HMCharacteristic, named type: String
+    ) async throws {
+        switch try cocoaValue(value, kind: kind, characteristicType: type) {
+        case .number(let number):
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                characteristic.writeValue(number) { error in
+                    if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+                }
+            }
+        case .string(let string):
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                characteristic.writeValue(string) { error in
+                    if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+                }
             }
         }
     }

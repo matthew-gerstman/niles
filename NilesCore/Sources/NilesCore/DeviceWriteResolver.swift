@@ -90,6 +90,10 @@ struct DeviceHomeView: Equatable, Sendable {
         var name: String?
         /// The value family the characteristic's metadata declares.
         var kind: ValueKind = .unknown
+        /// The declared value constraints — bounds and valid values the
+        /// direct-write check enforces. Nil when HomeKit exposes none;
+        /// nil stays permissive, like other capability data.
+        var metadata: HomeGraph.CharacteristicMetadata?
     }
 
     /// How a characteristic renders values, from `HMCharacteristicMetadata.format`.
@@ -103,6 +107,19 @@ struct DeviceHomeView: Equatable, Sendable {
     }
 
     var homes: [Home] = []
+}
+
+extension DeviceHomeView.ValueKind {
+    /// The rendering family a metadata format string implies — one
+    /// derivation shared by the graph reads and the device view. A test
+    /// pins these literals to the HomeKit format constants.
+    init(format: String?) {
+        switch format {
+        case "string": self = .string
+        case "bool", "int", "float", "uint8", "uint16", "uint32", "uint64": self = .number
+        default: self = .unknown
+        }
+    }
 }
 
 // MARK: - Resolved steps
@@ -145,6 +162,7 @@ enum DeviceWriteStep: Equatable, Sendable {
     case assignAccessoryToRoom(homeId: String, accessoryId: String, roomId: String)
     case unblockAccessory(homeId: String, accessoryId: String)
     case removeAccessory(homeId: String, accessoryId: String)
+    case writeCharacteristic(homeId: String, action: ResolvedAction)
 }
 
 /// A scene action with its characteristic resolved and its value's rendering
@@ -327,6 +345,28 @@ enum DeviceWriteResolver {
             let resolvedHome = try home(id: homeId, in: view)
             let resolvedAccessory = try accessory(id: accessoryId, in: resolvedHome)
             return [.removeAccessory(homeId: resolvedHome.id, accessoryId: resolvedAccessory.id)]
+        case .writeCharacteristic(let homeId, let spec):
+            let home = try home(id: homeId, in: view)
+            let target = try resolveTarget(spec, in: home)
+            // The same value check staging runs — a proposal that passes
+            // staging must execute, and one that fails staging must fail
+            // everywhere.
+            if let why = valueViolation(spec.value, kind: target.characteristic.kind, metadata: target.characteristic.metadata) {
+                throw HomeKitWriteError.invalidOperation(
+                    "Characteristic \(spec.characteristic) on “\(target.accessory.name)” cannot take \(spec.value.rendered): \(why)."
+                )
+            }
+            return [.writeCharacteristic(
+                homeId: home.id,
+                action: ResolvedAction(
+                    accessoryId: target.accessory.id,
+                    serviceId: target.service.id,
+                    characteristicId: target.characteristic.id,
+                    characteristicType: target.characteristic.type,
+                    kind: target.characteristic.kind,
+                    value: spec.value
+                )
+            )]
         }
     }
 
@@ -437,12 +477,11 @@ enum DeviceWriteResolver {
     // MARK: Shared resolution helpers
 
     /// The heavy lookup: accessory -> service (by name or type, else the one
-    /// carrying the characteristic) -> characteristic (by type or name), with
-    /// the value rendering kind picked from metadata.
-    private static func resolveAction(_ spec: SceneActionSpec, in home: DeviceHomeView.Home) throws -> ResolvedAction {
+    /// carrying the characteristic) -> characteristic (by type or name).
+    private static func resolveTarget(
+        _ spec: SceneActionSpec, in home: DeviceHomeView.Home
+    ) throws -> (accessory: DeviceHomeView.Accessory, service: DeviceHomeView.Service, characteristic: DeviceHomeView.Characteristic) {
         let accessory = try accessory(id: spec.accessoryId, in: home)
-        let characteristic: DeviceHomeView.Characteristic
-        let service: DeviceHomeView.Service
         if let wanted = spec.service {
             let matching = accessory.services.filter {
                 $0.name.map { $0.caseInsensitiveCompare(wanted) == .orderedSame } == true
@@ -455,22 +494,30 @@ enum DeviceWriteResolver {
                     "Accessory “\(accessory.name)” has no service “\(wanted)” with characteristic \(spec.characteristic)."
                 )
             }
-            service = matched
-        } else if let matched = accessory.services.first(
+            guard let characteristic = matched.characteristics.first(where: { characteristicMatches($0, spec.characteristic) }) else {
+                throw HomeKitWriteError.objectMissing(
+                    "Service “\(matched.name ?? matched.serviceType)” has no characteristic \(spec.characteristic)."
+                )
+            }
+            return (accessory, matched, characteristic)
+        }
+        guard let matched = accessory.services.first(
             where: { $0.characteristics.contains { characteristicMatches($0, spec.characteristic) } }
-        ) {
-            service = matched
-        } else {
+        ) else {
             throw HomeKitWriteError.objectMissing(
                 "Accessory “\(accessory.name)” has no service with characteristic \(spec.characteristic)."
             )
         }
-        guard let matched = service.characteristics.first(where: { characteristicMatches($0, spec.characteristic) }) else {
+        guard let characteristic = matched.characteristics.first(where: { characteristicMatches($0, spec.characteristic) }) else {
             throw HomeKitWriteError.objectMissing(
-                "Service “\(service.name ?? service.serviceType)” has no characteristic \(spec.characteristic)."
+                "Service “\(matched.name ?? matched.serviceType)” has no characteristic \(spec.characteristic)."
             )
         }
-        characteristic = matched
+        return (accessory, matched, characteristic)
+    }
+
+    private static func resolveAction(_ spec: SceneActionSpec, in home: DeviceHomeView.Home) throws -> ResolvedAction {
+        let (accessory, service, characteristic) = try resolveTarget(spec, in: home)
         return ResolvedAction(
             accessoryId: accessory.id,
             serviceId: service.id,
@@ -537,18 +584,62 @@ enum DeviceWriteResolver {
     private static func checkedValue(
         _ value: HomeKitValue, kind: DeviceHomeView.ValueKind, characteristic: String
     ) throws -> HomeKitValue {
-        switch (kind, value) {
-        case (.string, .string):
-            return value
-        case (.number, .bool), (.number, .int), (.number, .double):
-            return value
-        case (.unknown, _):
-            return value
-        case (.string, let wrong), (.number, let wrong):
+        guard isKindCompatible(value, kind: kind) else {
             throw HomeKitWriteError.invalidOperation(
-                "Characteristic \(characteristic) cannot take the value \(wrong.rendered)."
+                "Characteristic \(characteristic) cannot take the value \(value.rendered)."
             )
         }
+        return value
+    }
+
+    /// Whether a value's type fits a characteristic's rendering family — one
+    /// rule for scene actions and direct writes alike.
+    static func isKindCompatible(_ value: HomeKitValue, kind: DeviceHomeView.ValueKind) -> Bool {
+        switch (kind, value) {
+        case (.string, .string): true
+        case (.number, .bool), (.number, .int), (.number, .double): true
+        case (.unknown, _): true
+        case (.string, _), (.number, _): false
+        }
+    }
+
+    /// Does the value fit the characteristic's declared metadata? The ONE
+    /// check staging (planner, over the graph) and resolution (executor,
+    /// over the device view) both run — a proposal that passes staging must
+    /// execute, and one that fails staging must fail everywhere. Returns the
+    /// reason the value is invalid, or nil when it fits.
+    static func valueViolation(
+        _ value: HomeKitValue, kind: DeviceHomeView.ValueKind, metadata: HomeGraph.CharacteristicMetadata?
+    ) -> String? {
+        guard isKindCompatible(value, kind: kind) else {
+            switch value {
+            case .string(let text): return "holds numbers, not the string “\(text)”"
+            case .bool, .int, .double: return "holds strings, not \(value.rendered)"
+            }
+        }
+        guard let metadata else { return nil }
+        let numeric: Double?
+        switch value {
+        case .bool(let flag): numeric = flag ? 1 : 0
+        case .int(let int): numeric = Double(int)
+        case .double(let double): numeric = double
+        case .string: numeric = nil
+        }
+        guard let numeric else { return nil }
+        if let minimum = metadata.minValue, let maximum = metadata.maxValue {
+            if numeric < minimum || numeric > maximum {
+                return "takes \(minimum)…\(maximum), so \(value.rendered) is out of range"
+            }
+        } else if let minimum = metadata.minValue, numeric < minimum {
+            return "takes at least \(minimum), so \(value.rendered) is out of range"
+        } else if let maximum = metadata.maxValue, numeric > maximum {
+            return "takes at most \(maximum), so \(value.rendered) is out of range"
+        }
+        if let valid = metadata.validValues, !valid.isEmpty,
+           !valid.contains(where: { Double($0) == numeric }) {
+            return "takes only \(valid.map(String.init).joined(separator: ", ")), and \(value.rendered) is not one of them"
+        }
+        return nil
     }
 
     /// Fire dates must sit on the minute boundary and recurrences must be

@@ -777,7 +777,7 @@ import Testing
         let writes = WriteToolRegistry(store: store)
 
         #expect(reads.tools.count == 6)
-        #expect(writes.tools.count == 26)
+        #expect(writes.tools.count == 27)
         #expect(reads.toolNames.isDisjoint(with: writes.toolNames))
         // Destructive hints land on exactly the six delete tools.
         let destructive = writes.tools.filter { $0.annotations.destructiveHint == true }

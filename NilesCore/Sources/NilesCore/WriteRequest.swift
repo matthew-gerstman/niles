@@ -34,6 +34,8 @@ public enum WriteRequest: Sendable, Equatable {
     case assignAccessoryToRoom(accessoryId: String, roomId: String)
     case unblockAccessory(accessoryId: String)
     case removeAccessory(accessoryId: String)
+    /// A direct characteristic write, staged as a device-immediate proposal.
+    case writeCharacteristic(accessoryId: String, service: String?, characteristic: String, value: HomeKitValue)
 
     public static func parse(tool: String, arguments: [String: MCP.Value]?) throws -> WriteRequest {
         let args = Args(arguments)
@@ -117,6 +119,13 @@ public enum WriteRequest: Sendable, Equatable {
             return .unblockAccessory(accessoryId: try args.string("accessoryId"))
         case "remove_accessory":
             return .removeAccessory(accessoryId: try args.string("accessoryId"))
+        case "write_characteristic":
+            return .writeCharacteristic(
+                accessoryId: try args.string("accessoryId"),
+                service: try args.optionalString("service"),
+                characteristic: try args.string("characteristic"),
+                value: try args.value("value")
+            )
         default:
             throw ProposalStoreError.unknownTool(tool)
         }
@@ -164,6 +173,14 @@ private struct Args {
             throw ProposalStoreError.invalidArguments("Argument “\(name)” must be a string.")
         }
         return string.isEmpty ? nil : string
+    }
+
+    /// A HomeKit value argument — a number, string, or boolean.
+    func value(_ name: String) throws -> HomeKitValue {
+        guard let parsed = Self.homeKitValue(raw?[name]) else {
+            throw ProposalStoreError.invalidArguments("Argument “\(name)” must be a number, string, or boolean.")
+        }
+        return parsed
     }
 
     /// An optional boolean flag; absent means false.
@@ -318,19 +335,8 @@ private struct Args {
             throw ProposalStoreError.invalidArguments(prefix + "characteristic is required (string).")
         }
         let service = object["service"]?.stringValue
-        guard let rawValue = object["value"] else {
-            throw ProposalStoreError.invalidArguments(prefix + "value is required.")
-        }
-        let value: HomeKitValue
-        switch rawValue {
-        case .bool(let bool): value = .bool(bool)
-        case .int(let int): value = .int(int)
-        case .double(let double): value = .double(double)
-        case .string(let string): value = .string(string)
-        case .null, .data, .array, .object:
-            throw ProposalStoreError.invalidArguments(
-                prefix + "value must be a number, string, or boolean."
-            )
+        guard let value = Self.homeKitValue(object["value"]) else {
+            throw ProposalStoreError.invalidArguments(prefix + "value must be a number, string, or boolean.")
         }
         return SceneActionSpec(
             accessoryId: accessoryId,
@@ -338,5 +344,17 @@ private struct Args {
             characteristic: characteristic,
             value: value
         )
+    }
+
+    /// The typed value behind an MCP scalar — nil for anything a
+    /// characteristic cannot take (null, data, array, object).
+    private static func homeKitValue(_ raw: MCP.Value?) -> HomeKitValue? {
+        switch raw {
+        case .bool(let bool): .bool(bool)
+        case .int(let int): .int(int)
+        case .double(let double): .double(double)
+        case .string(let string): .string(string)
+        case .none, .null, .data, .array, .object: nil
+        }
     }
 }
