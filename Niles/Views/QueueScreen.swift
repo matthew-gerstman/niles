@@ -1,47 +1,61 @@
 import SwiftUI
 import NilesCore
 
-/// Queue: the vertical proposal list, newest first — one row per proposal
-/// with its severity chip and one-line diff, inline Deny/Approve on staged
-/// rows, and Undo on executed rows whose paired revert still applies.
-/// Destructive rows approve with a standard tap everywhere (user decision
-/// Nov 9); severity is signaled by the red accent edge, the chip, and the
-/// destructive copy. Tapping a row opens the detail sheet with the full diff
-/// and structured read-back evidence.
+/// Queue: the vertical proposal list, newest first — one native list row per
+/// proposal with severity carried by a warning glyph, a one-line diff, and
+/// relative time. Decisions arrive as swipe actions (trailing Deny/Approve,
+/// leading Details, row tap for the detail sheet); Undo is a trailing swipe
+/// on executed rows that still offer it. Approve-all lives in the toolbar
+/// behind a confirmation dialog. Destructive rows approve with a standard
+/// tap everywhere (user decision Nov 9); severity is signaled by the red
+/// warning symbol plus its label, never by color alone.
 struct QueueScreen: View {
     var model: any QueueViewModel
 
     @State private var openDetail: NilesProposal?
+    @State private var confirmApproveAll = false
 
     /// Approve all batches every staged proposal — destructive included.
     private var stagedCount: Int { model.proposals.filter(\.isPending).count }
 
     var body: some View {
-        ScreenScaffold(title: "Queue", subtitle: "Nothing changes until you approve it") {
-            if stagedCount > 0 {
-                ActionButton(
-                    title: model.isApprovingAll ? "Approving…" : "Approve all \(stagedCount)",
-                    style: .primary
-                ) {
-                    model.approveAll()
+        NavigationStack {
+            List {
+                if model.proposals.isEmpty {
+                    emptyState
+                } else {
+                    Section {
+                        ForEach(model.proposals) { proposal in
+                            row(for: proposal)
+                        }
+                    } footer: {
+                        Text("Nothing changes until you approve it")
+                    }
                 }
-                .disabled(model.isApprovingAll)
-                .padding(.bottom, 12)
             }
-            if model.proposals.isEmpty {
-                EmptyStateCard(text: "No proposals yet. When an agent wants to change your home, its request shows up here.")
-            } else {
-                ForEach(model.proposals) { proposal in
-                    QueueRow(
-                        proposal: proposal,
-                        decision: model.decisionsInFlight[proposal.id],
-                        undoState: model.undoStates[proposal.id],
-                        onOpenDetail: { openDetail = proposal },
-                        onApprove: { model.approve(proposal.id) },
-                        onDeny: { model.deny(proposal.id) },
-                        onUndo: { model.undo(proposal.id) }
-                    )
+            .listStyle(.insetGrouped)
+            .navigationTitle("Queue")
+            .toolbar {
+                if stagedCount > 0 {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            confirmApproveAll = true
+                        } label: {
+                            Label("Approve All", systemImage: "checkmark.seal")
+                        }
+                        .disabled(model.isApprovingAll)
+                    }
                 }
+            }
+            .confirmationDialog(
+                "Approve all staged proposals?",
+                isPresented: $confirmApproveAll,
+                titleVisibility: .visible
+            ) {
+                Button("Approve all \(stagedCount)") { model.approveAll() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Every staged proposal is approved and executed — destructive ones included.")
             }
         }
         .sheet(item: $openDetail) { snapshot in
@@ -49,185 +63,173 @@ struct QueueScreen: View {
             if let proposal = model.proposals.first(where: { $0.id == snapshot.id }) {
                 ProposalDetailSheet(
                     proposal: proposal,
+                    undoState: model.undoStates[proposal.id],
                     onApprove: { model.approve(proposal.id) },
-                    onDeny: { model.deny(proposal.id) }
+                    onDeny: { model.deny(proposal.id) },
+                    onUndo: { model.undo(proposal.id) }
                 )
             }
         }
     }
-}
 
-/// One Queue row. Staged rows carry the severity chip, a one-line diff, and
-/// inline Deny/Approve; terminal rows carry a status chip; executed rows
-/// whose paired revert still applies carry Undo — a conflicted undo renders
-/// its divergences inline. While a decision's pipeline round-trip is still
-/// running, `decision` shows an in-progress chip and disables the buttons
-/// before the verdict state lands.
-struct QueueRow: View {
-    let proposal: NilesProposal
-    var decision: ProposalDecision?
-    var undoState: UndoState?
-    var onOpenDetail: () -> Void = {}
-    var onApprove: () -> Void = {}
-    var onDeny: () -> Void = {}
-    var onUndo: () -> Void = {}
+    // MARK: - Rows
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline) {
-                SeverityChip(isDestructive: proposal.isDestructive)
-                Spacer()
-                Text(RelativeTime.label(for: proposal.createdAt))
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
+    /// One standard list row: severity glyph, title, one-line diff, evidence
+    /// tally, and a trailing status — a spinner while a decision or undo is
+    /// in flight, otherwise the settled SF Symbol status label.
+    private func row(for proposal: NilesProposal) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Image(systemName: proposal.isDestructive ? "exclamationmark.triangle" : "doc.text")
+                .foregroundStyle(proposal.isDestructive ? Color.red : Color.accentColor)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(proposal.title)
+                    .font(.headline)
+                Text(oneLineDiff(of: proposal))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                metadataLine(for: proposal)
             }
-            Text(proposal.title)
-                .font(.system(size: 15, weight: .bold))
-            Text(oneLineDiff)
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-            if let tally = evidenceTally {
-                Text(tally)
-                    .font(.system(size: 12, weight: .semibold))
+            Spacer()
+            VStack(alignment: .trailing, spacing: 4) {
+                trailingStatus(for: proposal)
+                Text(RelativeTime.label(for: proposal.createdAt))
+                    .font(.footnote)
                     .foregroundStyle(.secondary)
             }
-            switch rowState {
-            case .deciding:
-                buttons
-            case .undoable:
-                HStack(spacing: 8) {
-                    ActionButton(title: "Undo", style: .ghost, action: onUndo)
-                        .disabled(undoState == .inFlight)
-                    if undoState == .inFlight {
-                        Text("Undoing…")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                    }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { openDetail = proposal }
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            trailingActions(for: proposal)
+        }
+        .swipeActions(edge: .leading, allowsFullSwipe: false) {
+            Button {
+                openDetail = proposal
+            } label: {
+                Label("Details", systemImage: "doc.text.magnifyingglass")
+            }
+            .tint(Color.accentColor)
+        }
+    }
+
+    /// Trailing swipes: Deny (destructive role) then Approve (tint) on staged
+    /// rows — full swipe is disabled so a thumb slip can never deny — and
+    /// Undo on executed rows that still offer it.
+    @ViewBuilder
+    private func trailingActions(for proposal: NilesProposal) -> some View {
+        let decision = model.decisionsInFlight[proposal.id]
+        let undoState = model.undoStates[proposal.id]
+        if proposal.isPending {
+            Button(role: .destructive) {
+                model.deny(proposal.id)
+            } label: {
+                Label("Deny", systemImage: "xmark.circle")
+            }
+            .disabled(decision != nil)
+            Button {
+                model.approve(proposal.id)
+            } label: {
+                Label("Approve", systemImage: "checkmark.circle")
+            }
+            .tint(Color.accentColor)
+            .disabled(decision != nil)
+        } else if undoState != nil {
+            Button {
+                model.undo(proposal.id)
+            } label: {
+                Label("Undo", systemImage: "arrow.uturn.backward")
+            }
+            .disabled(undoState == .inFlight)
+        }
+    }
+
+    /// Severity label, evidence tally, and no-revert note as caption text —
+    /// the words carry the meaning, the colors only reinforce it.
+    @ViewBuilder
+    private func metadataLine(for proposal: NilesProposal) -> some View {
+        let undoState = model.undoStates[proposal.id]
+        if proposal.isDestructive || !proposal.evidence.isEmpty || undoState == .notRevertable {
+            HStack(spacing: 12) {
+                if proposal.isDestructive {
+                    Text("Destructive")
+                        .font(.caption)
+                        .foregroundStyle(Color.red)
                 }
-                if case .conflict(let divergences) = undoState {
-                    UndoConflictBlock(divergences: divergences)
+                if let tally = evidenceTally(of: proposal) {
+                    Label(tally.text, systemImage: tally.symbol)
+                        .font(.caption)
+                        .foregroundStyle(tally.color)
                 }
                 if undoState == .notRevertable {
                     Text("No revert available for this change")
-                        .font(.system(size: 12))
+                        .font(.caption)
                         .foregroundStyle(.secondary)
-                }
-            case .settled:
-                if let chip = statusChip {
-                    Text(chip.text)
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(chip.color)
                 }
             }
         }
-        .card(accent: proposal.isDestructive ? NilesTheme.destructive : NilesTheme.accent)
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onOpenDetail)
+    }
+
+    /// Trailing region status: a spinner while a decision or an undo round
+    /// trips, "Undo conflicted" when the revert was refused, otherwise the
+    /// settled state's SF Symbol label.
+    @ViewBuilder
+    private func trailingStatus(for proposal: NilesProposal) -> some View {
+        let decision = model.decisionsInFlight[proposal.id]
+        let undoState = model.undoStates[proposal.id]
+        if decision != nil || undoState == .inFlight {
+            ProgressView()
+        } else if case .conflict = undoState {
+            Label("Undo conflicted", systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(Color.orange)
+        } else if let status = statusLabel(for: proposal.state) {
+            Label(status.text, systemImage: status.symbol)
+                .font(.caption)
+                .foregroundStyle(status.color)
+        }
     }
 
     // MARK: - Row pieces
 
-    private enum RowState { case deciding, undoable, settled }
-
-    /// Staged rows decide (with in-flight feedback), executed rows that still
-    /// offer Undo undo, and everything else renders its settled chip.
-    private var rowState: RowState {
-        if proposal.isPending || decision != nil { return .deciding }
-        if undoState != nil { return .undoable }
-        return .settled
-    }
-
-    @ViewBuilder
-    private var buttons: some View {
-        HStack(spacing: 8) {
-            ActionButton(title: "Approve", style: .primary, action: onApprove)
-                .disabled(!proposal.isPending || decision != nil)
-            ActionButton(title: "Deny", style: .ghost, action: onDeny)
-                .disabled(!proposal.isPending || decision != nil)
-        }
-        .padding(.top, 2)
-        if let chip = inFlightChip {
-            Text(chip.text)
-                .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(chip.color)
-        }
-    }
-
     /// The first diff line stands in for the row's one-line summary; a
     /// proposal without diff lines falls back to its title.
-    private var oneLineDiff: String {
+    private func oneLineDiff(of proposal: NilesProposal) -> String {
         proposal.diff.first?.text ?? proposal.title
     }
 
-    private var evidenceTally: String? {
+    /// Settled state → SF Symbol + label. Staged and approved rows are still
+    /// mid-decision, so they carry no settled status.
+    private func statusLabel(for state: ProposalState) -> (text: String, symbol: String, color: Color)? {
+        switch state {
+        case .staged, .approved: return nil
+        case .executed: return ("Executed", "checkmark.circle.fill", .green)
+        case .denied: return ("Denied", "xmark.circle.fill", .red)
+        case .expired: return ("Expired", "clock.badge.xmark", .orange)
+        case .failed: return ("Failed", "xmark.octagon.fill", .red)
+        }
+    }
+
+    /// "N of M checks confirmed" — the app's core trust signal. Green when
+    /// the read-back agreed on every check, amber the moment it didn't.
+    private func evidenceTally(of proposal: NilesProposal) -> (text: String, symbol: String, color: Color)? {
         guard !proposal.evidence.isEmpty else { return nil }
         let confirmed = proposal.evidence.filter(\.confirmed).count
-        return "\(confirmed) of \(proposal.evidence.count) checks confirmed"
+        let allConfirmed = confirmed == proposal.evidence.count
+        return (
+            "\(confirmed) of \(proposal.evidence.count) checks confirmed",
+            allConfirmed ? "checkmark.seal.fill" : "exclamationmark.triangle.fill",
+            allConfirmed ? Color.green : Color.orange
+        )
     }
 
-    private var inFlightChip: (text: String, color: Color)? {
-        switch decision {
-        case .approving: return ("Approving…", NilesTheme.accent)
-        case .denying: return ("Denying…", NilesTheme.destructive)
-        case nil: return nil
+    private var emptyState: some View {
+        ContentUnavailableView {
+            Label("No proposals yet", systemImage: "tray")
+        } description: {
+            Text("When an agent wants to change your home, its request shows up here.")
         }
-    }
-
-    private var statusChip: (text: String, color: Color)? {
-        switch proposal.state {
-        case .staged, .approved: return nil
-        case .executed: return ("Executed", NilesTheme.good)
-        case .denied: return ("Denied", NilesTheme.destructive)
-        case .expired: return ("Expired", NilesTheme.warn)
-        case .failed: return ("Failed", NilesTheme.destructive)
-        }
-    }
-}
-
-/// Severity at a glance, matching the mockup's chips: red for destructive
-/// rows, neutral for everything else — the edge color carries the same signal.
-private struct SeverityChip: View {
-    let isDestructive: Bool
-
-    var body: some View {
-        Text(isDestructive ? "Destructive" : "Standard")
-            .font(.system(size: 11, weight: .bold))
-            .tracking(0.3)
-            .textCase(.uppercase)
-            .foregroundStyle(isDestructive ? NilesTheme.destructive : .secondary)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(
-                (isDestructive ? NilesTheme.destructive : Color.primary).opacity(0.08),
-                in: Capsule()
-            )
-    }
-}
-
-/// The typed undo-conflict error, rendered inline: what execution produced,
-/// what the home shows now, per divergence. Nothing was changed.
-private struct UndoConflictBlock: View {
-    let divergences: [ProposalEvidence]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Can't undo — the home changed since this ran")
-                .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(NilesTheme.destructive)
-            ForEach(Array(divergences.enumerated()), id: \.offset) { _, divergence in
-                HStack(alignment: .top, spacing: 6) {
-                    Text("✗")
-                        .foregroundStyle(NilesTheme.destructive)
-                    Text("\(divergence.claim) — \(divergence.observed)")
-                        .font(.system(size: 12))
-                }
-            }
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(NilesTheme.destructive.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
     }
 }
 
