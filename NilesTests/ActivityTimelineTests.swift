@@ -23,6 +23,7 @@ private func waitUntil(
 /// grouping, verdict chips, undone rendering with the revert's linked
 /// evidence, and the undo-availability gates. Plus the live store's typed
 /// undo-conflict surfacing.
+@MainActor
 struct ActivityTimelineTests {
 
     // MARK: - Fixtures
@@ -269,7 +270,7 @@ struct ActivityTimelineTests {
         let registry = WriteToolRegistry(store: try #require(coordinator.proposalStore))
 
         // Create a room, approve it — the execution whose undo will conflict.
-        _ = await registry.call(
+        _ = try await registry.call(
             name: "create_room",
             arguments: ["homeId": .string("home-1"), "name": .string("Studio")]
         )
@@ -282,7 +283,7 @@ struct ActivityTimelineTests {
         // matches what the create produced.
         let home = try await fake.snapshot()
         let roomId = try #require(home.homes[0].rooms.first { $0.name == "Studio" }?.id)
-        _ = await registry.call(
+        _ = try await registry.call(
             name: "delete_room",
             arguments: ["roomId": .string(roomId)]
         )
