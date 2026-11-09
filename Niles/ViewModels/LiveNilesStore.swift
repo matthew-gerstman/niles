@@ -50,6 +50,10 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
     // MARK: - ApprovalsViewModel
 
     private(set) var proposals: [NilesProposal] = []
+    /// Optimistic tap feedback: proposal id -> decision whose pipeline
+    /// round-trip is still running. Set synchronously in the tap handler,
+    /// cleared when the pipeline settles (or the decision fails).
+    private(set) var decisionsInFlight: [String: ProposalDecision] = [:]
 
     // MARK: - HomeGraphViewModel
 
@@ -159,10 +163,12 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
     /// Approves and executes the staged operations; the result (state,
     /// evidence, error) appears on the card at the next refresh.
     func approve(_ id: String) {
+        beginDecision(.approving, id: id)
         Task { await approveAndWait(id) }
     }
 
     func deny(_ id: String) {
+        beginDecision(.denying, id: id)
         Task { await denyAndWait(id) }
     }
 
@@ -176,10 +182,24 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
         await decide(approve: false, id: id)
     }
 
+    /// Optimistic tap feedback, applied synchronously before the pipeline
+    /// task is even spawned: the card's in-progress chip and disabled
+    /// buttons render on the next frame and the haptic fires at the tap,
+    /// so the pipeline round-trip can never make a tap look dead.
+    /// `decide` clears the marker when the pipeline settles or fails.
+    private func beginDecision(_ decision: ProposalDecision, id: String) {
+        guard proposals.first(where: { $0.id == id })?.isPending == true else { return }
+        decisionsInFlight[id] = decision
+        let haptic = UINotificationFeedbackGenerator()
+        haptic.prepare()
+        haptic.notificationOccurred(decision == .approving ? .success : .warning)
+    }
+
     private func decide(approve: Bool, id: String) async {
         guard let store = coordinator.proposalStore else {
             let verb = approve ? "approve" : "deny"
             logger.error("Cannot \(verb, privacy: .public) \(id, privacy: .public): no proposal store")
+            decisionsInFlight[id] = nil
             return
         }
         do {
@@ -192,8 +212,13 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
             // Terminal-state violations and unknown ids are the expected
             // failures here; the card keeps its staged state either way.
             logger.error("Decision failed for \(id): \(String(describing: error))")
+            // The decision did not land — drop the optimistic chip so the
+            // card reverts to the store's real state at the next refresh.
+            decisionsInFlight[id] = nil
         }
         await refresh()
+        // Settled either way: the refreshed state is authoritative.
+        decisionsInFlight[id] = nil
     }
 
     // MARK: - PairingViewModel
