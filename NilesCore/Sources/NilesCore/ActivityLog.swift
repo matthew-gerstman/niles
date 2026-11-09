@@ -70,7 +70,11 @@ public actor ActivityLog {
     private let directory: URL
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
-    public private(set) var events: [ActivityEvent] = []
+    /// Assigned in init (which loads from disk). No default value: under
+    /// Swift 6 actor isolation a defaulted property is initialized before
+    /// the nonisolated init body runs, and reassigning it there would be an
+    /// isolated write from a nonisolated context.
+    public private(set) var events: [ActivityEvent]
 
     /// - Parameter directory: where the log lives. The app passes nil and
     ///   gets Application Support/Niles; tests pass a temp directory.
