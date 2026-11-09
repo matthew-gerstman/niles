@@ -58,7 +58,7 @@ import Testing
         return nil
     }
 
-    private func trigger(_ graph: HomeGraph) -> HomeGraph.Trigger? {
+    private func findTrigger(_ graph: HomeGraph) -> HomeGraph.Trigger? {
         graph.homes.first?.triggers.first
     }
 
@@ -84,14 +84,14 @@ import Testing
         #expect(staged.card.contains { $0.text.contains("DISABLED") })
         #expect(staged.card.contains { $0.kind == .note && $0.text.contains("separate") })
         let graphAtStaging = await fake.graph
-        #expect(trigger(graphAtStaging) == nil)
+        #expect(findTrigger(graphAtStaging) == nil)
 
         let approved = try await store.approve(id: staged.id)
         #expect(approved.state == .executed)
         #expect(approved.error == nil)
 
         let graph = await fake.graph
-        let created = try #require(trigger(graph))
+        let created = try #require(findTrigger(graph))
         // The locked rule holds after execution: creation never arms.
         #expect(created.isEnabled == false)
         #expect(created.name == "Wake Up")
@@ -136,7 +136,7 @@ import Testing
         #expect(approved.state == .executed)
 
         let graph = await fake.graph
-        let created = try #require(trigger(graph))
+        let created = try #require(findTrigger(graph))
         #expect(created.isEnabled == false)
         guard case .event(let events, let predicate) = created.detail else {
             Issue.record("Expected an event detail, got \(created.detail)")
@@ -217,14 +217,14 @@ import Testing
         #expect(enable.card.contains { $0.kind == .note && $0.text.contains("Arming") })
 
         let graphBeforeArm = await fake.graph
-        #expect(trigger(graphBeforeArm)?.isEnabled == false)
+        #expect(findTrigger(graphBeforeArm)?.isEnabled == false)
 
         let enabled = try await store.approve(id: enable.id)
         #expect(enabled.state == .executed)
         #expect(enabled.evidence.first?.confirmed == true)
 
         let graph = await fake.graph
-        #expect(trigger(graph)?.isEnabled == true)
+        #expect(findTrigger(graph)?.isEnabled == true)
     }
 
     @Test func deniedEnableLeavesTriggerUntouched() async throws {
@@ -251,8 +251,8 @@ import Testing
         #expect(denied.state.leftHomeUntouched)
         #expect(denied.evidence.isEmpty)
         let graph = await fake.graph
-        #expect(trigger(graph)?.isEnabled == false)
-        #expect(trigger(graph)?.name == "Wake Up")
+        #expect(findTrigger(graph)?.isEnabled == false)
+        #expect(findTrigger(graph)?.name == "Wake Up")
     }
 
     @Test func schedulingAnAlreadyEnabledTriggerIsNoChange() async throws {
@@ -313,7 +313,7 @@ import Testing
         #expect(updated.state == .executed)
 
         let graph = await fake.graph
-        let trigger = try #require(trigger(graph))
+        let trigger = try #require(findTrigger(graph))
         #expect(trigger.isEnabled == true)
         if case .timer(let fireDate, _) = trigger.detail {
             #expect(fireDate == Self.isoDate("2026-11-10T08:00:00Z"))
@@ -347,7 +347,7 @@ import Testing
         let deleted = try await store.approve(id: delete.id)
         #expect(deleted.state == .executed)
         let graph = await fake.graph
-        #expect(trigger(graph) == nil)
+        #expect(findTrigger(graph) == nil)
         #expect(deleted.evidence.first?.confirmed == true)
     }
 
@@ -371,8 +371,8 @@ import Testing
         _ = try await store.deny(id: delete.id)
 
         let graph = await fake.graph
-        #expect(trigger(graph)?.name == "Wake Up")
-        #expect(trigger(graph)?.isEnabled == false)
+        #expect(findTrigger(graph)?.name == "Wake Up")
+        #expect(findTriggger(graph)?.isEnabled == false)
     }
 
     // MARK: - Argument errors, reported in-band
