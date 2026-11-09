@@ -372,7 +372,7 @@ import Testing
 
         let graph = await fake.graph
         #expect(findTrigger(graph)?.name == "Wake Up")
-        #expect(findTriggger(graph)?.isEnabled == false)
+        #expect(findTrigger(graph)?.isEnabled == false)
     }
 
     // MARK: - Argument errors, reported in-band
