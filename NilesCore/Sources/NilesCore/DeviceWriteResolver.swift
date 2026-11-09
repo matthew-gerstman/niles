@@ -209,7 +209,19 @@ enum DeviceWriteResolver {
         case .addEventTrigger(let homeId, let name, let events, let sceneId):
             return [try resolveCreateEventTrigger(homeId: homeId, name: name, events: events, sceneId: sceneId, in: view)]
         case .setTriggerEnabled(let homeId, let triggerId, let enabled):
-            return [.setTriggerEnabled(homeId: try home(id: homeId, in: view).id, triggerId: try trigger(id: triggerId, in: view).id, enabled: enabled)]
+            let resolvedHome = try home(id: homeId, in: view)
+            let resolvedTrigger = try trigger(id: triggerId, in: view)
+            // Device law: HomeKit refuses to enable a trigger with no
+            // registered action sets (HMError "No registered action sets for
+            // trigger"). Reject it here — where the error reaches the agent
+            // as an actionable message — instead of a raw HomeKit error
+            // after approval. Disabling is always allowed.
+            if enabled, resolvedTrigger.linkedSceneIds.isEmpty {
+                throw HomeKitWriteError.invalidOperation(
+                    "Trigger “\(resolvedTrigger.name)” has no action sets — HomeKit cannot enable an automation that runs nothing. Recreate it with a scene (sceneId), then arm it."
+                )
+            }
+            return [.setTriggerEnabled(homeId: resolvedHome.id, triggerId: resolvedTrigger.id, enabled: enabled)]
         case .updateTimerTrigger(let homeId, let triggerId, let fireDate, let recurrence):
             return [try resolveReplaceTimerTrigger(homeId: homeId, triggerId: triggerId, fireDate: fireDate, recurrence: recurrence, in: view)]
         case .removeTrigger(let homeId, let triggerId):

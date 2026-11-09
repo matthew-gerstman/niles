@@ -479,6 +479,11 @@ public enum ProposalPlanner {
             ProposalCardLine(.plain, timerLine(fireDate: fireDate, recurrence: recurrence)),
         ]
         if let scene { card.append(ProposalCardLine(.plain, "Runs scene “\(scene.name)” when it fires.")) }
+        if scene == nil {
+            card.append(ProposalCardLine(
+                .note, "⚠ Created without a scene — HomeKit cannot arm it; recreate with a scene to enable it later."
+            ))
+        }
         card.append(ProposalCardLine(
             .note, "⚠ Created disabled — arming it takes a separate set_trigger_state approval."
         ))
@@ -514,6 +519,11 @@ public enum ProposalPlanner {
         ]
         card += events.map { ProposalCardLine(.plain, "Fires \($0.description(in: home))") }
         if let scene { card.append(ProposalCardLine(.plain, "Runs scene “\(scene.name)” when it fires.")) }
+        if scene == nil {
+            card.append(ProposalCardLine(
+                .note, "⚠ Created without a scene — HomeKit cannot arm it; recreate with a scene to enable it later."
+            ))
+        }
         card.append(ProposalCardLine(
             .note, "⚠ Created disabled — arming it takes a separate set_trigger_state approval."
         ))
@@ -543,6 +553,15 @@ public enum ProposalPlanner {
         let (home, trigger) = try self.trigger(id: triggerId, in: graph)
         if trigger.isEnabled == enabled {
             throw PlannerError.noChange("trigger “\(trigger.name)” is already \(enabled ? "enabled" : "disabled").")
+        }
+        // HomeKit law: a trigger with no registered action sets has nothing
+        // to run and cannot be enabled — the approval would always fail with
+        // "No registered action sets for trigger". Say so at staging, where
+        // the agent can act on it, instead of after a doomed approval.
+        if enabled, trigger.linkedSceneIds.isEmpty {
+            throw PlannerError.invalidInput(
+                "Trigger “\(trigger.name)” runs no scene — HomeKit cannot enable an automation with no action sets. Delete it and recreate it with a scene (sceneId), then arm it."
+            )
         }
         // Schedule updates ride the timer trigger only; an event trigger has
         // no fire date to update.

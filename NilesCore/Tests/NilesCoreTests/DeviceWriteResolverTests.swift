@@ -436,11 +436,33 @@ import Testing
     // MARK: Trigger state and deletion
 
     @Test func setTriggerEnabledResolvesTheTrigger() throws {
-        let steps = try resolve(.setTriggerEnabled(homeId: "home-1", triggerId: "trigger-event", enabled: true))
-        #expect(steps == [.setTriggerEnabled(homeId: "home-1", triggerId: "trigger-event", enabled: true)])
+        // A disabled trigger WITH a registered action set resolves to the
+        // plain enable step — the arm approval.
+        let armed = DeviceHomeView.Trigger(
+            id: "trigger-quiet", name: "Quiet", isEnabled: false,
+            timerFireDate: fireDate, timerRecurrence: [:], linkedSceneIds: ["scene-chill"]
+        )
+        var view = fixtureView()
+        view.homes[0].triggers.append(armed)
+        let steps = try resolve(.setTriggerEnabled(homeId: "home-1", triggerId: "trigger-quiet", enabled: true), view: view)
+        #expect(steps == [.setTriggerEnabled(homeId: "home-1", triggerId: "trigger-quiet", enabled: true)])
+
+        // Disabling never needs an action set.
+        #expect(try resolve(.setTriggerEnabled(homeId: "home-1", triggerId: "trigger-event", enabled: false))
+            == [.setTriggerEnabled(homeId: "home-1", triggerId: "trigger-event", enabled: false)])
+
         #expect(error {
             _ = try self.resolve(.setTriggerEnabled(homeId: "home-1", triggerId: "trigger-x", enabled: true))
         } == .objectMissing("No trigger trigger-x."))
+    }
+
+    @Test func enablingAScenelessTriggerIsRejectedWithAnActionableError() {
+        // Device law (HMError 26 on the QA run): HomeKit refuses to enable a
+        // trigger with no registered action sets. The resolver says so before
+        // any device call instead of failing the approval with a raw error.
+        #expect(error {
+            _ = try self.resolve(.setTriggerEnabled(homeId: "home-1", triggerId: "trigger-event", enabled: true))
+        }?.isInvalidOperation == true)
     }
 
     @Test func updateTimerTriggerResolvesRemoveAndReAddWithStateRestore() throws {

@@ -166,6 +166,7 @@ public actor HomeManagerHomeKitService: HomeKitService {
             id: trigger.uniqueIdentifier.uuidString,
             name: trigger.name,
             isEnabled: trigger.isEnabled,
+            linkedSceneIds: trigger.actionSets.map { $0.uniqueIdentifier.uuidString },
             detail: Self.detail(from: trigger)
         )
     }
