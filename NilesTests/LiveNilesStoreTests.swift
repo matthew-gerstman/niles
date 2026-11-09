@@ -123,6 +123,80 @@ struct LiveNilesStoreTests {
         #expect(reloaded.activityEvents == store.activityEvents)
     }
 
+    /// Undo on the live wiring: the paired revert runs as its own forward
+    /// proposal — executed immediately, read back, and linked to the
+    /// original in the activity log (the `.undone` event rides the undo tap).
+    @Test
+    func undoRecordsRevertLinkedToTheOriginal() async throws {
+        let fake = FakeHomeKitService(graph: .demoFixture)
+        let coordinator = ServerCoordinator(tokenStore: StaticTokenStore(token: "test-token"), homeKitService: fake)
+        let store = LiveNilesStore(coordinator: coordinator, notifier: .disabled)
+        await store.refresh()
+        let registry = WriteToolRegistry(store: try #require(coordinator.proposalStore))
+        _ = await registry.call(
+            name: "create_room",
+            arguments: ["homeId": .string("home-1"), "name": .string("Studio")]
+        )
+        await store.refresh()
+        let staged = try #require(store.pendingProposals.first)
+        await store.approveAndWait(staged.id)
+        try await waitUntil { store.proposals.first(where: { $0.id == staged.id })?.state == .executed }
+        #expect(try await fake.snapshot().homes[0].rooms.contains { $0.name == "Studio" })
+
+        // The Undo tap: the revert stages and executes immediately.
+        await store.undoAndWait(staged.id)
+        try await waitUntil {
+            store.proposals.first { $0.revertsProposalId == staged.id }?.state == .executed
+        }
+
+        // The revert is a linked, executed proposal with its own evidence.
+        let revert = try #require(store.proposals.first { $0.revertsProposalId == staged.id })
+        #expect(revert.state == .executed)
+        #expect(revert.evidence.allSatisfy { $0.confirmed })
+        #expect(try await fake.snapshot().homes[0].rooms.contains { $0.name == "Studio" } == false)
+
+        // The activity log tells the whole story: the original's life ends
+        // in an undone event, and the revert's executed event names what it
+        // reverted.
+        let kinds = store.activityEvents.filter { $0.proposalId == staged.id }.map(\.kind)
+        #expect(kinds == [.staged, .decided, .executed, .undone])
+        let revertEvent = try #require(
+            store.activityEvents.last { $0.proposalId == revert.id && $0.kind == .executed }
+        )
+        #expect(revertEvent.detail?.contains("revert of") == true)
+    }
+
+    /// Approve all executes every staged proposal immediately — destructive
+    /// included — and each decision lands as its own decided event.
+    @Test
+    func approveAllExecutesAllStagedImmediately() async throws {
+        let fake = FakeHomeKitService(graph: .demoFixture)
+        let coordinator = ServerCoordinator(tokenStore: StaticTokenStore(token: "test-token"), homeKitService: fake)
+        let store = LiveNilesStore(coordinator: coordinator, notifier: .disabled)
+        await store.refresh()
+        let registry = WriteToolRegistry(store: try #require(coordinator.proposalStore))
+        _ = await registry.call(
+            name: "create_room",
+            arguments: ["homeId": .string("home-1"), "name": .string("Studio")]
+        )
+        _ = await registry.call(
+            name: "rename_room",
+            arguments: ["roomId": .string("room-2"), "name": .string("Cookery")]
+        )
+        await store.refresh()
+        #expect(store.pendingProposals.count == 2)
+
+        await store.approveAllAndWait()
+        try await waitUntil { store.proposals.allSatisfy { $0.state == .executed } }
+
+        let after = try await fake.snapshot()
+        #expect(after.homes[0].rooms.contains { $0.name == "Studio" })
+        #expect(after.homes[0].rooms.first { $0.id == "room-2" }?.name == "Cookery")
+        let decided = store.activityEvents.filter { $0.kind == .decided }.map(\.proposalId)
+        #expect(Set(decided).count == 2)
+        #expect(store.pendingProposals.isEmpty)
+    }
+
     /// Regression for the device-QA latency finding: the tap path must give
     /// visible feedback synchronously — before the pipeline round-trip
     /// settles — and reconcile with the settled result.
