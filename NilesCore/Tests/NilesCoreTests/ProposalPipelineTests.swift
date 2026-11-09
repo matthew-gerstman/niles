@@ -158,6 +158,167 @@ import Testing
         #expect(graph.homes.first!.rooms.map(\.name).sorted() == ["Kitchen", "Living Room", "Office"])
     }
 
+    // MARK: - Approval ordering (device QA F3: zone membership vs zone delete)
+
+    /// Forwards to the fake, but suspends the next `setZoneRooms` perform
+    /// between an `arm()` and a `release()` — letting a test pin the exact
+    /// approval ordering the device QA wave observed (a second approval
+    /// completing while the first is still mid-execution).
+    private final class GatedHomeKitService: HomeKitWriting, @unchecked Sendable {
+        private let fake: FakeHomeKitService
+        private let lock = NSLock()
+        private var armed = false
+        private var hit = false
+        private var continuation: CheckedContinuation<Void, Never>?
+
+        init(fake: FakeHomeKitService) { self.fake = fake }
+
+        /// Arms the gate: the next `setZoneRooms` perform suspends.
+        func arm() {
+            lock.lock()
+            armed = true
+            lock.unlock()
+        }
+
+        /// Releases a suspended `setZoneRooms` perform. Idempotent.
+        func release() {
+            lock.lock()
+            continuation?.resume()
+            continuation = nil
+            lock.unlock()
+        }
+
+        /// True once a `setZoneRooms` perform is suspended in the gate.
+        var gateHit: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return hit
+        }
+
+        func perform(_ operation: HomeKitOperation) async throws -> String? {
+            if case .setZoneRooms = operation {
+                lock.lock()
+                let shouldWait = armed
+                if shouldWait { armed = false; hit = true }
+                lock.unlock()
+                if shouldWait {
+                    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                        lock.lock()
+                        self.continuation = continuation
+                        lock.unlock()
+                    }
+                }
+            }
+            return try await fake.perform(operation)
+        }
+
+        func snapshot() async throws -> HomeGraph {
+            try await fake.snapshot()
+        }
+    }
+
+    /// Waits until the gate reports a hit or the timeout expires — the
+    /// gate's suspension is asynchronous by design, never pollable
+    /// synchronously.
+    private struct GateTimeout: Error {}
+    private func waitForGate(
+        timeout: TimeInterval = 5, service: GatedHomeKitService
+    ) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !service.gateHit {
+            guard Date() < deadline else { throw GateTimeout() }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+    }
+
+    @Test func zoneMoveReadBackIsNotPollutedByAConcurrentZoneDeleteApproval() async throws {
+        // The device-QA wave's shape: a disposable zone, a membership move
+        // into it, and a zone delete approved while the move is still
+        // executing. The move's read-back must reflect what the move did —
+        // not whatever a later approval changed in the meantime.
+        var graph = fixtureGraph()
+        graph.homes[0].zones.append(HomeGraph.Zone(id: "zone-qa", name: "Niles QA Zone", roomIds: []))
+        let service = GatedHomeKitService(fake: FakeHomeKitService(graph: graph))
+        let store = ProposalStore(homeKit: service, now: { Date() })
+        let registry = WriteToolRegistry(store: store)
+
+        let moveProposal = try proposal(from: await registry.call(
+            name: "set_zone_rooms",
+            arguments: ["zoneId": .string("zone-qa"), "roomIds": .array([.string("room-office")])]
+        ))
+        let deleteProposal = try proposal(from: await registry.call(
+            name: "delete_zone", arguments: ["zoneId": .string("zone-qa")]
+        ))
+
+        await service.arm()
+        defer { service.release() }
+        async let moveApproved = store.approve(id: moveProposal.id)
+        try await waitForGate(service: service) // the move is suspended mid-execution
+
+        // The delete is approved while the move's execution is suspended —
+        // the double-tap ordering the device QA observed (F1b/F3).
+        async let deleteApproved = store.approve(id: deleteProposal.id)
+        // Give the racing delete every chance to complete before the move's
+        // execution resumes.
+        try await Task.sleep(for: .milliseconds(200))
+        await service.release()
+
+        let (move, delete) = try await (moveApproved, deleteApproved)
+        #expect(delete.state == .executed)
+
+        // The move executed while its zone still existed; its own read-back
+        // must confirm the membership it applied — never report the zone the
+        // LATER approval deleted as "execution failed".
+        #expect(move.state == .executed)
+        #expect(move.evidence.first?.confirmed == true)
+        #expect(move.evidence.first?.observed.contains("Niles QA Zone") == true)
+
+        // Forward-only: the delete still wins — the zone is gone and the
+        // room survives it.
+        let final = try await service.snapshot()
+        #expect(!final.homes[0].zones.contains { $0.id == "zone-qa" })
+        #expect(final.homes[0].rooms.contains { $0.id == "room-office" })
+    }
+
+    @Test func zoneMoveEvidenceNamesABatchDeleteInsteadOfExecutionFailure() throws {
+        // Read-back taken after a later operation in the same approval batch
+        // deleted the zone: the final graph cannot confirm membership, but
+        // the evidence must say the batch deleted the zone — not that the
+        // write failed.
+        let graph = fixtureGraph() // no zone-qa — the batch deleted it
+
+        let evidence = ProposalEvidenceCollector.collect(
+            operations: [
+                .setZoneRooms(homeId: "home-1", zoneId: "zone-qa", addRoomIds: ["room-office"], removeRoomIds: []),
+                .removeZone(homeId: "home-1", zoneId: "zone-qa"),
+            ],
+            createdIds: [nil, nil],
+            graph: graph
+        )
+
+        #expect(evidence[1].confirmed == true) // the delete itself reads back
+        #expect(evidence[0].observed.contains("deleted by a later operation in this batch"))
+        #expect(evidence[0].observed.contains("not found after execution") == false)
+        #expect(evidence[0].confirmed == false)
+    }
+
+    @Test func zoneMoveEvidenceStillReportsAMissingZoneWhenTheBatchNeverDeletedIt() throws {
+        // No later delete in the batch: a missing zone IS an execution
+        // failure — the honest wording stays.
+        let graph = fixtureGraph()
+
+        let evidence = ProposalEvidenceCollector.collect(
+            operations: [
+                .setZoneRooms(homeId: "home-1", zoneId: "zone-qa", addRoomIds: ["room-office"], removeRoomIds: []),
+            ],
+            createdIds: [nil],
+            graph: graph
+        )
+
+        #expect(evidence[0].observed == "Zone zone-qa not found after execution")
+        #expect(evidence[0].confirmed == false)
+    }
+
     @Test func approvedZoneRenameAppliesAndConfirms() async throws {
         let (fake, store, registry, _) = makeContext()
 

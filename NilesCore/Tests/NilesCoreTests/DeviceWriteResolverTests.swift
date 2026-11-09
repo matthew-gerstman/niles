@@ -154,6 +154,16 @@ import Testing
         } == .objectMissing("No room room-x to add to zone “Upstairs”."))
     }
 
+    @Test func setZoneRoomsRejectsAZoneThatVanishedSinceStaging() {
+        // Execution re-resolves every id against the live graph; a zone
+        // deleted between staging and approval fails loudly, naming the id.
+        #expect(error {
+            _ = try self.resolve(.setZoneRooms(
+                homeId: "home-1", zoneId: "zone-gone", addRoomIds: ["room-kitchen"], removeRoomIds: []
+            ))
+        } == .objectMissing("No zone zone-gone."))
+    }
+
     // MARK: Zone create, rename, delete
 
     @Test func createZoneResolvesAndRejectsDuplicateName() throws {
