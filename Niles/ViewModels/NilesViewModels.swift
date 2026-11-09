@@ -202,7 +202,7 @@ final class InMemoryNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGrap
                 agentName: "You",
                 createdAt: Date(),
                 isDestructive: action == .delete,
-                evidence: "",
+                evidence: [],
                 diff: []
             )
         )
