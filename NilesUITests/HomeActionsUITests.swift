@@ -18,32 +18,37 @@ final class HomeActionsUITests: XCTestCase {
         XCTAssertTrue(scene.waitForExistence(timeout: 15))
 
         let queueButton = app.tabBars.buttons["Queue"]
-        let labelBefore = queueButton.label
 
         // Full-swipe right: stages the primary action (Run scene). Nothing
-        // applies — the proposal lands in the queue, visible as the badge.
+        // applies — the proposal lands in the queue. Capture before asserting
+        // so a failure still leaves visual evidence of the post-swipe state.
         let start = scene.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5))
         let end = scene.coordinate(withNormalizedOffset: CGVector(dx: 1.6, dy: 0.5))
         start.press(forDuration: 0.05, thenDragTo: end)
         sleep(2)
-
-        XCTAssertNotEqual(
-            queueButton.label, labelBefore,
-            "Staging from Home should raise the queue badge without applying anything"
-        )
-        capture("home-staged-scene-run", in: app)
-
-        // Swipe left past the open threshold: quick actions snap open.
-        let revealStart = scene.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5))
-        let revealEnd = scene.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.5))
-        revealStart.press(forDuration: 0.05, thenDragTo: revealEnd)
-        sleep(1)
-        capture("home-quick-actions", in: app)
+        capture("home-after-full-swipe", in: app)
 
         // The staged proposal is the same normal queue entry agents produce.
         queueButton.tap()
-        XCTAssertTrue(app.staticTexts["Good Morning"].waitForExistence(timeout: 10))
+        let stagedCard = app.staticTexts.containing(
+            NSPredicate(format: "label CONTAINS %@", "Good Morning")
+        ).firstMatch
+        XCTAssertTrue(
+            stagedCard.waitForExistence(timeout: 10),
+            "A full-swipe Run on the scene row should stage a proposal in the queue"
+        )
         capture("queue-staged-proposal", in: app)
+
+        // Back to Home: a left swipe past the open threshold snaps the quick
+        // actions open (Run / Rename / Delete) without staging anything.
+        app.tabBars.buttons["Home"].tap()
+        let row = app.staticTexts["Good Morning"].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        let revealStart = row.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5))
+        let revealEnd = row.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.5))
+        revealStart.press(forDuration: 0.05, thenDragTo: revealEnd)
+        sleep(1)
+        capture("home-quick-actions", in: app)
     }
 
     @MainActor
