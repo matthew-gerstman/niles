@@ -1,4 +1,5 @@
 import SwiftUI
+import os
 
 /// Home graph: Rooms, Zones, Scenes and Triggers — exactly what agents see
 /// through the read tools. Rows are actionable: swipe right full-swipes the
