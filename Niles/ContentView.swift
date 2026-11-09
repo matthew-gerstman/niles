@@ -2,11 +2,10 @@ import SwiftUI
 import NilesCore
 
 /// Root tab view: Queue, Activity, Home, Settings — matching the approved
-/// queue-first mockup, with a pending-count badge on Queue. Activity and
-/// Settings are placeholder stubs until later PRs in the rebuild; the
-/// Dashboard and Pairing screens remain in the tree for that work. Holds the
-/// live store; previews substitute it for the in-memory one behind the same
-/// view-model protocols.
+/// queue-first mockup, with a pending-count badge on Queue. Settings holds
+/// the former Dashboard server card and pairing; Dashboard and Pairing are
+/// gone. Activity is a placeholder stub until a later PR. Holds the live
+/// store; previews substitute the in-memory one behind the same protocols.
 struct ContentView: View {
     @State private var store: LiveNilesStore
 
@@ -43,7 +42,7 @@ struct ContentView: View {
             HomeGraphScreen(model: store)
                 .tabItem { Label("Home", systemImage: "square.grid.3x3") }
                 .tag(NilesTab.home)
-            SettingsScreenPlaceholder(model: store)
+            SettingsScreen(model: store)
                 .tabItem { Label("Settings", systemImage: "gearshape") }
                 .tag(NilesTab.settings)
         }
