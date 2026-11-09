@@ -35,7 +35,7 @@ struct DeviceHomeKitService: HomeKitWriting {
 /// polls on a short interval; every read is in-memory and cheap.
 @MainActor
 @Observable
-final class LiveNilesStore: DashboardViewModel, QueueViewModel, HomeGraphViewModel, PairingViewModel {
+final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewModel, HomeGraphViewModel, PairingViewModel {
 
     // MARK: - DashboardViewModel
 
@@ -66,6 +66,9 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, HomeGraphViewMod
     private var undoConflicts: [String: [ProposalEvidence]] = [:]
     private var notRevertableIds: Set<String> = []
     private var undosInFlight: Set<String> = []
+    /// Undo failures from each proposal's most recent tap, surfaced inline on
+    /// the activity card until the next attempt or dismissal.
+    private(set) var undoFailures: [String: ActivityUndoFailure] = [:]
 
     // MARK: - HomeGraphViewModel
 
@@ -274,6 +277,8 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, HomeGraphViewMod
         undosInFlight.insert(id)
         undoConflicts[id] = nil
         defer { undosInFlight.remove(id) }
+        // A fresh tap clears the last failure before it runs.
+        undoFailures[id] = nil
         do {
             let revert = try await store.undo(proposalId: id)
             await appendActivity(
@@ -300,8 +305,14 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, HomeGraphViewMod
                 // not to this tap path. Never silently swallowed: logged.
                 logger.error("Undo failed for \(id, privacy: .public): \(String(describing: error))")
             }
+            // The typed failure surfaces inline on the activity card too —
+            // a conflict names the divergences; nothing was applied either way.
+            undoFailures[id] = Self.undoFailure(for: error)
         } catch {
             logger.error("Undo failed for \(id, privacy: .public): \(String(describing: error))")
+            // The typed failure surfaces inline on the card — a conflict
+            // names the divergences; nothing was applied either way.
+            undoFailures[id] = Self.undoFailure(for: error)
         }
         await refresh()
     }
@@ -352,6 +363,40 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, HomeGraphViewMod
             }
         }
         return states
+    }
+
+    /// The card's inline failure from an Undo tap, mapped from the typed
+    /// store error. Pure, so tests can pin the wording per error kind.
+    static func undoFailure(for error: Error) -> ActivityUndoFailure {
+        guard let storeError = error as? ProposalStoreError else {
+            return ActivityUndoFailure(message: "Undo failed — nothing was changed.", divergences: [])
+        }
+        switch storeError {
+        case .undoConflict(_, let divergences):
+            return ActivityUndoFailure(
+                message: "Undo blocked — the home has changed since this was applied. Nothing was changed.",
+                divergences: divergences
+            )
+        case .notRevertable:
+            return ActivityUndoFailure(
+                message: "Undo is no longer available for this change — nothing was changed.",
+                divergences: []
+            )
+        case .homeReadFailed:
+            return ActivityUndoFailure(
+                message: "Undo failed — the home could not be read. Nothing was changed.",
+                divergences: []
+            )
+        default:
+            return ActivityUndoFailure(
+                message: "Undo failed — nothing was changed. (\(storeError))",
+                divergences: []
+            )
+        }
+    }
+
+    func clearUndoFailure(_ id: String) {
+        undoFailures[id] = nil
     }
 
     /// Approves and executes every staged proposal immediately —

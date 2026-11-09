@@ -8,6 +8,15 @@ import NilesCore
 /// store; previews substitute the in-memory one behind the same protocols.
 struct ContentView: View {
     @State private var store: LiveNilesStore
+    /// Screenshot/preview hook: `-UIActivityFixtures` renders the Activity tab
+    /// on the fixture store instead of the live one, so a fresh simulator has
+    /// a populated timeline to capture.
+    @State private var fixtureActivityStore: FixtureActivityStore? = {
+        if ProcessInfo.processInfo.arguments.contains("-UIActivityFixtures") {
+            return FixtureActivityStore()
+        }
+        return nil
+    }()
 
     enum NilesTab: String, CaseIterable, Identifiable {
         case queue, activity, home, settings
@@ -36,9 +45,15 @@ struct ContentView: View {
                 .tabItem { Label("Queue", systemImage: "list.bullet.rectangle") }
                 .badge(pendingCount)
                 .tag(NilesTab.queue)
-            ActivityScreenPlaceholder(model: store)
-                .tabItem { Label("Activity", systemImage: "clock.arrow.circlepath") }
-                .tag(NilesTab.activity)
+            if let fixture = fixtureActivityStore {
+                ActivityScreen(model: fixture)
+                    .tabItem { Label("Activity", systemImage: "clock.arrow.circlepath") }
+                    .tag(NilesTab.activity)
+            } else {
+                ActivityScreen(model: store)
+                    .tabItem { Label("Activity", systemImage: "clock.arrow.circlepath") }
+                    .tag(NilesTab.activity)
+            }
             HomeGraphScreen(model: store)
                 .tabItem { Label("Home", systemImage: "square.grid.3x3") }
                 .tag(NilesTab.home)
