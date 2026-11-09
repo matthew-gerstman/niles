@@ -407,4 +407,103 @@ struct LiveNilesStoreTests {
         await store.handleScene(isActive: false)
         try await waitUntil { !UIApplication.shared.isIdleTimerDisabled && !store.serverIsRunning }
     }
+
+    // MARK: - Home swipe-to-stage
+
+    /// The Home screen's single stage funnel: a swipe stages a normal
+    /// proposal through the same store path agents use, the proposal appears
+    /// in the queue, and the home graph is unchanged before approval.
+    @Test
+    func swipeToRunSceneStagesProposalWithoutApplyingIt() async throws {
+        let fake = FakeHomeKitService(graph: .demoFixture)
+        let coordinator = ServerCoordinator(tokenStore: StaticTokenStore(token: "test-token"), homeKitService: fake)
+        let store = LiveNilesStore(coordinator: coordinator, notifier: .disabled)
+        await store.refresh()
+        #expect(store.pendingProposals.isEmpty)
+        let before = try await fake.snapshot()
+
+        let sceneRow = try #require(
+            store.sections.first { $0.title == "Scenes" }?.rows.first { $0.entityId == "scene-1" }
+        )
+        await store.stage(row: sceneRow, action: .run)
+
+        // The staged proposal lands in the queue the Approvals screen renders.
+        let pending = store.pendingProposals
+        #expect(pending.count == 1)
+        #expect(pending[0].tool == "execute_scene")
+        #expect(pending[0].state == .staged)
+        // Attributed to the human who swiped, not an agent.
+        #expect(store.proposals.first { $0.id == pending[0].id }?.agentName == "You")
+
+        // Nothing applied: the fake home is byte-identical to before.
+        let after = try await fake.snapshot()
+        #expect(after == before)
+    }
+
+    @Test
+    func swipeToArmTriggerStagesSetTriggerStateWithoutArming() async throws {
+        let fake = FakeHomeKitService(graph: .demoFixture)
+        let coordinator = ServerCoordinator(tokenStore: StaticTokenStore(token: "test-token"), homeKitService: fake)
+        let store = LiveNilesStore(coordinator: coordinator, notifier: .disabled)
+        await store.refresh()
+
+        // An enabled trigger's primary swipe is Disarm; staging never flips it.
+        let triggerRow = try #require(
+            store.sections.first { $0.title == "Triggers" }?.rows.first { $0.isEnabled }
+        )
+        #expect(triggerRow.primaryAction == .setArmed(false))
+        await store.stage(row: triggerRow, action: .setArmed(false))
+
+        let pending = store.pendingProposals
+        #expect(pending.count == 1)
+        #expect(pending[0].tool == "set_trigger_state")
+
+        let graph = try await fake.snapshot()
+        #expect(graph.homes[0].triggers.first { $0.id == triggerRow.entityId }?.isEnabled == true)
+    }
+
+    @Test
+    func swipeToDeleteStagesDestructiveProposalWithoutApplyingIt() async throws {
+        let fake = FakeHomeKitService(graph: .demoFixture)
+        let coordinator = ServerCoordinator(tokenStore: StaticTokenStore(token: "test-token"), homeKitService: fake)
+        let store = LiveNilesStore(coordinator: coordinator, notifier: .disabled)
+        await store.refresh()
+
+        let roomRow = try #require(
+            store.sections.first { $0.title == "Rooms" }?.rows.first { $0.entityId == "room-1" }
+        )
+        await store.stage(row: roomRow, action: .delete)
+
+        let pending = store.pendingProposals
+        #expect(pending.count == 1)
+        #expect(pending[0].tool == "delete_room")
+        #expect(pending[0].isDestructive)
+
+        // The room survives until the proposal is approved.
+        let graph = try await fake.snapshot()
+        #expect(graph.homes[0].rooms.contains { $0.id == "room-1" })
+    }
+
+    @Test
+    func swipedRenameStagesRenameWithThePromptedName() async throws {
+        let fake = FakeHomeKitService(graph: .demoFixture)
+        let coordinator = ServerCoordinator(tokenStore: StaticTokenStore(token: "test-token"), homeKitService: fake)
+        let store = LiveNilesStore(coordinator: coordinator, notifier: .disabled)
+        await store.refresh()
+
+        let zoneRow = try #require(
+            store.sections.first { $0.title == "Zones" }?.rows.first
+        )
+        await store.stage(row: zoneRow, action: .rename, newName: "Top Floor")
+
+        let pending = store.pendingProposals
+        #expect(pending.count == 1)
+        #expect(pending[0].tool == "rename_zone")
+
+        // Approving applies it — proving the swipe went through the pipeline.
+        await store.approveAndWait(pending[0].id)
+        try await waitUntil { store.proposals.first { $0.id == pending[0].id }?.state == .executed }
+        let graph = try await fake.snapshot()
+        #expect(graph.homes[0].zones.contains { $0.name == "Top Floor" })
+    }
 }
