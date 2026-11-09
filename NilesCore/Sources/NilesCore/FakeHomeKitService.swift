@@ -91,6 +91,40 @@ public actor FakeHomeKitService: HomeKitWriting {
             }
             return nil
 
+        case .renameActionSet(_, let sceneId, let to):
+            let (h, s) = try indexOfScene(id: sceneId)
+            // Duplicate scene names are rejected the way HomeKit's are,
+            // across all homes — the renamed scene cannot collide with another.
+            if graph.homes.contains(where: {
+                $0.scenes.contains { $0.id != sceneId && $0.name.caseInsensitiveCompare(to) == .orderedSame }
+            }) {
+                throw HomeKitWriteError.duplicateName("Home already has a scene named “\(to)”.")
+            }
+            graph.homes[h].scenes[s].name = to
+            return nil
+
+        case .removeActionSet(_, let sceneId):
+            let (h, s) = try indexOfScene(id: sceneId)
+            graph.homes[h].scenes.remove(at: s)
+            // HomeKit detaches a removed action set from every trigger;
+            // the fake mirrors that observable behavior.
+            for t in graph.homes[h].triggers.indices {
+                graph.homes[h].triggers[t].linkedSceneIds.removeAll { $0 == sceneId }
+            }
+            return nil
+
+        case .executeActionSet(_, let sceneId):
+            let (h, s) = try indexOfScene(id: sceneId)
+            guard !graph.homes[h].scenes[s].actions.isEmpty else {
+                throw HomeKitWriteError.invalidOperation(
+                    "Scene “\(graph.homes[h].scenes[s].name)” has no actions — HomeKit refuses to execute an empty scene."
+                )
+            }
+            // Execution has no graph-observable effect yet (no
+            // lastExecutionDate in the model); the evidence read-back
+            // confirms the scene is present and accepted the run.
+            return nil
+
         case .addServiceGroup(_, let name):
             let h = try indexOfHome(havingServiceGroupNamed: name)
             let id = nextId(prefix: "group", existing: graph.homes[h].serviceGroups.map(\.id))
@@ -121,21 +155,26 @@ public actor FakeHomeKitService: HomeKitWriting {
             graph.homes[h].serviceGroups.remove(at: g)
             return nil
 
-        case .addTimerTrigger(let homeId, let name, let fireDate, let recurrence, _):
+        case .addTimerTrigger(let homeId, let name, let fireDate, let recurrence, let sceneId):
             let h = try indexOfHome(id: homeId)
             let id = nextId(prefix: "trigger", existing: graph.homes[h].triggers.map(\.id))
             // Locked rule: triggers are born disabled, whatever the plan said.
             graph.homes[h].triggers.append(
-                HomeGraph.Trigger(id: id, name: name, isEnabled: false, detail: .timer(fireDate: fireDate, recurrence: recurrence))
+                HomeGraph.Trigger(
+                    id: id, name: name, isEnabled: false,
+                    linkedSceneIds: sceneId.map { [$0] } ?? [],
+                    detail: .timer(fireDate: fireDate, recurrence: recurrence)
+                )
             )
             return id
 
-        case .addEventTrigger(let homeId, let name, let events, _):
+        case .addEventTrigger(let homeId, let name, let events, let sceneId):
             let h = try indexOfHome(id: homeId)
             let id = nextId(prefix: "trigger", existing: graph.homes[h].triggers.map(\.id))
             graph.homes[h].triggers.append(
                 HomeGraph.Trigger(
                     id: id, name: name, isEnabled: false,
+                    linkedSceneIds: sceneId.map { [$0] } ?? [],
                     detail: .event(events: events.map(Self.eventRef(from:)), predicate: Self.predicateDescription(events))
                 )
             )
@@ -143,6 +182,15 @@ public actor FakeHomeKitService: HomeKitWriting {
 
         case .setTriggerEnabled(_, let triggerId, let enabled):
             let (h, t) = try indexOfTrigger(id: triggerId)
+            // Device law mirrored: HomeKit refuses to enable a trigger with
+            // no registered action sets (HMError "No registered action sets
+            // for trigger") — an automation that runs nothing cannot arm.
+            // Disabling is always allowed.
+            if enabled, graph.homes[h].triggers[t].linkedSceneIds.isEmpty {
+                throw HomeKitWriteError.invalidOperation(
+                    "Trigger “\(graph.homes[h].triggers[t].name)” has no action sets — HomeKit cannot enable an automation that runs nothing."
+                )
+            }
             graph.homes[h].triggers[t].isEnabled = enabled
             return nil
 

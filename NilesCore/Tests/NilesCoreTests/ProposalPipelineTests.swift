@@ -677,17 +677,107 @@ import Testing
         #expect(text.contains("get_proposal"))
     }
 
-    @Test func toolSurfaceIsSixReadsAndFourteenWrites() async throws {
+    @Test func toolSurfaceIsSixReadsAndSeventeenWrites() async throws {
         let (_, store, _, _) = makeContext()
         let reads = ReadToolRegistry(service: await store.homeKit)
         let writes = WriteToolRegistry(store: store)
 
         #expect(reads.tools.count == 6)
-        #expect(writes.tools.count == 14)
+        #expect(writes.tools.count == 17)
         #expect(reads.toolNames.isDisjoint(with: writes.toolNames))
-        // Destructive hints land on exactly the three delete tools.
+        // Destructive hints land on exactly the four delete tools.
         let destructive = writes.tools.filter { $0.annotations.destructiveHint == true }
-        #expect(Set(destructive.map(\.name)) == ["delete_room", "delete_service_group", "delete_trigger"])
+        #expect(Set(destructive.map(\.name)) == ["delete_room", "delete_service_group", "delete_trigger", "delete_scene"])
+    }
+
+    // MARK: - Trigger arm path
+
+    /// The arm approval end to end: a scene to run, an automation created
+    /// disabled that runs it, then the separate enable approval — and the
+    /// enabled state must stick, confirmed by read-back evidence. This is
+    /// the QA scenario that failed on device (prop_8ef1230a8d71).
+    @Test func enableAfterCreateSticksWithConfirmedReadBack() async throws {
+        let (fake, store, registry, _) = makeContext()
+
+        // A scene for the automation to run.
+        let scene = try proposal(from: await registry.call(
+            name: "create_scene",
+            arguments: [
+                "homeId": .string("home-1"),
+                "name": .string("Movie Night"),
+                "actions": .array([.object([
+                    "accessoryId": .string("acc-light-a"),
+                    "characteristic": .string("On"),
+                    "value": .bool(true),
+                ])]),
+            ]
+        ))
+        _ = try await store.approve(id: scene.id)
+        let sceneId = await fake.graph.homes.first!.scenes.first!.id
+
+        // The automation: created DISABLED, running the scene.
+        let created = try proposal(from: await registry.call(
+            name: "create_timer_trigger",
+            arguments: [
+                "homeId": .string("home-1"),
+                "name": .string("Sunset"),
+                "fireDate": .string("2026-11-10T07:30:00Z"),
+                "sceneId": .string(sceneId),
+            ]
+        ))
+        let createdResult = try await store.approve(id: created.id)
+        #expect(createdResult.state == .executed)
+
+        var trigger = await fake.graph.homes.first!.triggers.first!
+        // The create/arm firewall: born disabled, scene linked.
+        #expect(trigger.isEnabled == false)
+        #expect(trigger.linkedSceneIds == [sceneId])
+
+        // The arm approval — its own proposal, its own human approval.
+        let armed = try proposal(from: await registry.call(
+            name: "set_trigger_state",
+            arguments: ["triggerId": .string(trigger.id), "enabled": .bool(true)]
+        ))
+        let armedResult = try await store.approve(id: armed.id)
+        #expect(armedResult.state == .executed)
+        #expect(armedResult.error == nil)
+
+        // The enabled state must stick, and read-back evidence must confirm it.
+        trigger = await fake.graph.homes.first!.triggers.first!
+        #expect(trigger.isEnabled == true)
+        #expect(armedResult.evidence.count == 1)
+        #expect(armedResult.evidence.first?.confirmed == true)
+    }
+
+    /// Staging rejects the doomed arm up front: an automation with no scene
+    /// can never be enabled (HomeKit: "No registered action sets for
+    /// trigger"), so the agent learns before a human approves anything.
+    @Test func stagingAnArmForAScenelessAutomationIsRejectedWithGuidance() async throws {
+        let (fake, store, registry, _) = makeContext()
+
+        let created = try proposal(from: await registry.call(
+            name: "create_timer_trigger",
+            arguments: [
+                "homeId": .string("home-1"),
+                "name": .string("Bare"),
+                "fireDate": .string("2026-11-10T07:30:00Z"),
+            ]
+        ))
+        _ = try await store.approve(id: created.id)
+        let trigger = await fake.graph.homes.first!.triggers.first!
+
+        let armed = await registry.call(
+            name: "set_trigger_state",
+            arguments: ["triggerId": .string(trigger.id), "enabled": .bool(true)]
+        )
+        #expect(armed.isError == true)
+        let text = errorText(of: armed) ?? ""
+        #expect(text.contains("no action sets"))
+        #expect(text.contains("scene"))
+
+        // Nothing was staged and the trigger stays as it was.
+        #expect(await store.allProposals().count == 1)
+        #expect(await fake.graph.homes.first!.triggers.first!.isEnabled == false)
     }
 
     @MainActor

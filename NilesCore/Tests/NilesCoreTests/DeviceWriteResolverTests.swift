@@ -294,6 +294,65 @@ import Testing
         )])
     }
 
+    // MARK: Scene rename, delete, execute
+
+    @Test func renameActionSetResolvesTheScene() throws {
+        let steps = try resolve(.renameActionSet(homeId: "home-1", sceneId: "scene-chill", to: "Evening"))
+        #expect(steps == [.renameActionSet(homeId: "home-1", sceneId: "scene-chill", to: "Evening")])
+    }
+
+    @Test func renameActionSetToTheSameNameResolves() throws {
+        // Case-insensitive no-op rename is legal — the executor's updateName
+        // accepts it; nothing here needs to reject.
+        let steps = try resolve(.renameActionSet(homeId: "home-1", sceneId: "scene-chill", to: "chill"))
+        #expect(steps == [.renameActionSet(homeId: "home-1", sceneId: "scene-chill", to: "chill")])
+    }
+
+    @Test func renameActionSetRejectsDuplicateNameAcrossHomes() {
+        #expect(error {
+            _ = try self.resolve(.renameActionSet(homeId: "home-1", sceneId: "scene-chill", to: "Beach Mode"))
+        } == .duplicateName("Home already has a scene named “Beach Mode”."))
+        #expect(error {
+            _ = try self.resolve(.renameActionSet(homeId: "home-2", sceneId: "scene-beach", to: "Chill"))
+        } == .duplicateName("Home already has a scene named “Chill”."))
+    }
+
+    @Test func renameActionSetRejectsMissingScene() {
+        #expect(error {
+            _ = try self.resolve(.renameActionSet(homeId: "home-1", sceneId: "scene-x", to: "Evening"))
+        } == .objectMissing("No scene scene-x."))
+    }
+
+    @Test func removeActionSetResolvesTheScene() throws {
+        let steps = try resolve(.removeActionSet(homeId: "home-1", sceneId: "scene-chill"))
+        #expect(steps == [.removeActionSet(homeId: "home-1", sceneId: "scene-chill")])
+    }
+
+    @Test func removeActionSetRejectsMissingScene() {
+        #expect(error {
+            _ = try self.resolve(.removeActionSet(homeId: "home-1", sceneId: "scene-x"))
+        } == .objectMissing("No scene scene-x."))
+    }
+
+    @Test func executeActionSetResolvesTheScene() throws {
+        let steps = try resolve(.executeActionSet(homeId: "home-1", sceneId: "scene-chill"))
+        #expect(steps == [.executeActionSet(homeId: "home-1", sceneId: "scene-chill")])
+    }
+
+    @Test func executeActionSetRejectsAnEmptyActionSet() {
+        var view = fixtureView()
+        view.homes[0].scenes.append(DeviceHomeView.Scene(id: "scene-empty", name: "Empty"))
+        #expect(error {
+            _ = try self.resolve(.executeActionSet(homeId: "home-1", sceneId: "scene-empty"), view: view)
+        }?.isInvalidOperation == true)
+    }
+
+    @Test func executeActionSetRejectsMissingScene() {
+        #expect(error {
+            _ = try self.resolve(.executeActionSet(homeId: "home-1", sceneId: "scene-x"))
+        } == .objectMissing("No scene scene-x."))
+    }
+
     // MARK: Service groups
 
     @Test func addServiceGroupRejectsDuplicateName() throws {
@@ -496,11 +555,33 @@ import Testing
     // MARK: Trigger state and deletion
 
     @Test func setTriggerEnabledResolvesTheTrigger() throws {
-        let steps = try resolve(.setTriggerEnabled(homeId: "home-1", triggerId: "trigger-event", enabled: true))
-        #expect(steps == [.setTriggerEnabled(homeId: "home-1", triggerId: "trigger-event", enabled: true)])
+        // A disabled trigger WITH a registered action set resolves to the
+        // plain enable step — the arm approval.
+        let armed = DeviceHomeView.Trigger(
+            id: "trigger-quiet", name: "Quiet", isEnabled: false,
+            timerFireDate: fireDate, timerRecurrence: [:], linkedSceneIds: ["scene-chill"]
+        )
+        var view = fixtureView()
+        view.homes[0].triggers.append(armed)
+        let steps = try resolve(.setTriggerEnabled(homeId: "home-1", triggerId: "trigger-quiet", enabled: true), view: view)
+        #expect(steps == [.setTriggerEnabled(homeId: "home-1", triggerId: "trigger-quiet", enabled: true)])
+
+        // Disabling never needs an action set.
+        #expect(try resolve(.setTriggerEnabled(homeId: "home-1", triggerId: "trigger-event", enabled: false))
+            == [.setTriggerEnabled(homeId: "home-1", triggerId: "trigger-event", enabled: false)])
+
         #expect(error {
             _ = try self.resolve(.setTriggerEnabled(homeId: "home-1", triggerId: "trigger-x", enabled: true))
         } == .objectMissing("No trigger trigger-x."))
+    }
+
+    @Test func enablingAScenelessTriggerIsRejectedWithAnActionableError() {
+        // Device law (HMError 26 on the QA run): HomeKit refuses to enable a
+        // trigger with no registered action sets. The resolver says so before
+        // any device call instead of failing the approval with a raw error.
+        #expect(error {
+            _ = try self.resolve(.setTriggerEnabled(homeId: "home-1", triggerId: "trigger-event", enabled: true))
+        }?.isInvalidOperation == true)
     }
 
     @Test func updateTimerTriggerResolvesRemoveAndReAddWithStateRestore() throws {

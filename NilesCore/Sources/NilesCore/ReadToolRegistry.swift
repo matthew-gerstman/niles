@@ -63,7 +63,7 @@ public struct ReadToolRegistry: Sendable {
         ),
         Tool(
             name: "get_scenes",
-            description: "List scenes (HomeKit action sets) with their characteristic-write actions and target values. Niles reads scenes; it cannot execute them.",
+            description: "List scenes (HomeKit action sets) with their characteristic-write actions and target values.",
             inputSchema: emptyObjectSchema,
             annotations: Tool.Annotations(readOnlyHint: true)
         ),

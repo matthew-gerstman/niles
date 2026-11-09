@@ -115,6 +115,9 @@ public enum HomeKitOperation: Sendable, Equatable, Hashable {
     case setZoneRooms(homeId: String, zoneId: String, addRoomIds: [String], removeRoomIds: [String])
     case addActionSet(homeId: String, name: String, actions: [SceneActionSpec])
     case setSceneActions(homeId: String, sceneId: String, add: [SceneActionSpec], remove: [SceneActionKey])
+    case renameActionSet(homeId: String, sceneId: String, to: String)
+    case removeActionSet(homeId: String, sceneId: String)
+    case executeActionSet(homeId: String, sceneId: String)
     case addServiceGroup(homeId: String, name: String)
     case setServiceGroupMembers(
         homeId: String, groupId: String, addServiceIds: [String], removeServiceIds: [String]

@@ -72,6 +72,12 @@ public enum ProposalPlanner {
             return try createScene(homeId: homeId, name: name, actions: actions, graph: graph)
         case .setSceneActions(let sceneId, let actions):
             return try setSceneActions(sceneId: sceneId, actions: actions, graph: graph)
+        case .renameScene(let sceneId, let name):
+            return try renameScene(sceneId: sceneId, name: name, graph: graph)
+        case .deleteScene(let sceneId, let deleteLinkedTriggers):
+            return try deleteScene(sceneId: sceneId, deleteLinkedTriggers: deleteLinkedTriggers, graph: graph)
+        case .executeScene(let sceneId):
+            return try executeScene(sceneId: sceneId, graph: graph)
         case .createServiceGroup(let homeId, let name):
             return try createServiceGroup(homeId: homeId, name: name, graph: graph)
         case .setServiceGroupMembers(let groupId, let serviceIds):
@@ -280,9 +286,9 @@ public enum ProposalPlanner {
         ]
         card += actions.map { ProposalCardLine(.add, describe(spec: $0, home: home)) }
         card += capabilityNotes
-        // Scope note: execute is deliberately out of v1 (spec) — the card
-        // preempts the "did it run?" question.
-        card.append(ProposalCardLine(.note, "⚠ Niles stages scenes; it never runs one."))
+        // Scope note: the card preempts the "did it run?" question —
+        // running the scene is a separate approval (execute_scene).
+        card.append(ProposalCardLine(.note, "⚠ To run this scene later, use execute_scene after approval."))
 
         return Plan(
             tool: "create_scene",
@@ -351,6 +357,130 @@ public enum ProposalPlanner {
                 add: additions, remove: removals.map(SceneActionKey.init(action:))
             )],
             entries: entries,
+            card: card
+        )
+    }
+
+    private static func renameScene(sceneId: String, name: String, graph: HomeGraph) throws -> Plan {
+        let trimmed = try requiredName(name, kind: "scene")
+        let (home, scene) = try self.scene(id: sceneId, in: graph)
+        if scene.name.caseInsensitiveCompare(trimmed) == .orderedSame {
+            throw PlannerError.noChange("scene “\(scene.name)” is already named “\(trimmed)”.")
+        }
+        // Scene names are unique across all homes (HomeKit's rule); the new
+        // name cannot collide with another scene — this one included.
+        let otherScenes = graph.homes.flatMap(\.scenes).filter { $0.id != scene.id }
+        try rejectDuplicate(kind: "scene", name: trimmed, in: otherScenes.map(\.name), homeName: home.name)
+        return Plan(
+            tool: "rename_scene",
+            title: "Rename scene “\(scene.name)”",
+            summary: "Rename scene “\(scene.name)” to “\(trimmed)”",
+            isDestructive: false,
+            operations: [.renameActionSet(homeId: home.id, sceneId: scene.id, to: trimmed)],
+            entries: [ProposalDiffEntry(
+                object: ProposalObjectRef(kind: .scene, id: scene.id, name: scene.name),
+                op: .rename,
+                before: scene.name,
+                after: trimmed
+            )],
+            card: [ProposalCardLine(.plain, "Scene “\(scene.name)” → “\(trimmed)”")]
+        )
+    }
+
+    /// Spec (destructive staging): the card lists the scene's current actions
+    /// and every trigger that links it — a dangling automation is the silent
+    /// blast radius of a scene delete. The `deleteLinkedTriggers` flag is the
+    /// spec's “delete trigger too / keep trigger” offer, and the card says
+    /// which way it goes.
+    private static func deleteScene(
+        sceneId: String, deleteLinkedTriggers: Bool, graph: HomeGraph
+    ) throws -> Plan {
+        let (home, scene) = try self.scene(id: sceneId, in: graph)
+        let linked = home.triggers.filter { $0.linkedSceneIds.contains(scene.id) }
+
+        var operations: [HomeKitOperation] = [.removeActionSet(homeId: home.id, sceneId: scene.id)]
+        if deleteLinkedTriggers {
+            operations += linked.map { .removeTrigger(homeId: home.id, triggerId: $0.id) }
+        }
+
+        var card: [ProposalCardLine] = [ProposalCardLine(.remove, "Scene “\(scene.name)” · deleted")]
+        if scene.actions.isEmpty {
+            card.append(ProposalCardLine(.plain, "The scene has no actions."))
+        } else {
+            card += scene.actions.map { ProposalCardLine(.remove, describe(action: $0, home: home)) }
+        }
+        for trigger in linked {
+            if deleteLinkedTriggers {
+                card.append(ProposalCardLine(.remove, "Trigger “\(trigger.name)” · deleted too — it runs this scene"))
+            } else {
+                card.append(ProposalCardLine(
+                    .note,
+                    "⚠ Trigger “\(trigger.name)” no longer runs anything — its scene is gone. Pass deleteLinkedTriggers to delete it too."
+                ))
+            }
+        }
+        card.append(ProposalCardLine(
+            .plain,
+            "The scene stops working immediately — visible to the Home app and Siri."
+        ))
+
+        let entries: [ProposalDiffEntry] = [ProposalDiffEntry(
+            object: ProposalObjectRef(kind: .scene, id: scene.id, name: scene.name),
+            op: .delete,
+            before: scene.name,
+            after: nil
+        )] + (deleteLinkedTriggers ? linked.map { trigger in
+            ProposalDiffEntry(
+                object: ProposalObjectRef(kind: .trigger, id: trigger.id, name: trigger.name),
+                op: .delete,
+                before: trigger.name,
+                after: nil
+            )
+        } : [])
+
+        let triggerNoun = linked.count == 1 ? "1 trigger" : "\(linked.count) triggers"
+        let title = deleteLinkedTriggers && !linked.isEmpty
+            ? "Delete scene “\(scene.name)” and \(triggerNoun)"
+            : "Delete scene “\(scene.name)”"
+        return Plan(
+            tool: "delete_scene",
+            title: title,
+            summary: "Delete scene “\(scene.name)”" + (deleteLinkedTriggers && !linked.isEmpty ? " with \(triggerNoun)" : ""),
+            isDestructive: true,
+            operations: operations,
+            entries: entries,
+            card: card
+        )
+    }
+
+    private static func executeScene(sceneId: String, graph: HomeGraph) throws -> Plan {
+        let (home, scene) = try self.scene(id: sceneId, in: graph)
+        if scene.actions.isEmpty {
+            throw PlannerError.invalidInput(
+                "Scene “\(scene.name)” has no actions — HomeKit refuses to execute an empty scene."
+            )
+        }
+        let actionNoun = scene.actions.count == 1 ? "action" : "actions"
+        var card: [ProposalCardLine] = [
+            ProposalCardLine(.add, "Scene “\(scene.name)” · runs on approval")
+        ]
+        card += scene.actions.map { ProposalCardLine(.plain, describe(action: $0, home: home)) }
+        card.append(ProposalCardLine(
+            .note,
+            "⚠ Device-immediate — every action above applies to the devices the moment this is approved."
+        ))
+        return Plan(
+            tool: "execute_scene",
+            title: "Run scene “\(scene.name)”",
+            summary: "Run scene “\(scene.name)” now (\(scene.actions.count) \(actionNoun))",
+            isDestructive: false,
+            operations: [.executeActionSet(homeId: home.id, sceneId: scene.id)],
+            entries: [ProposalDiffEntry(
+                object: ProposalObjectRef(kind: .scene, id: scene.id, name: scene.name),
+                op: .update,
+                before: "not running",
+                after: "runs on approval"
+            )],
             card: card
         )
     }
@@ -488,6 +618,11 @@ public enum ProposalPlanner {
             ProposalCardLine(.plain, timerLine(fireDate: fireDate, recurrence: recurrence)),
         ]
         if let scene { card.append(ProposalCardLine(.plain, "Runs scene “\(scene.name)” when it fires.")) }
+        if scene == nil {
+            card.append(ProposalCardLine(
+                .note, "⚠ Created without a scene — HomeKit cannot arm it; recreate with a scene to enable it later."
+            ))
+        }
         card.append(ProposalCardLine(
             .note, "⚠ Created disabled — arming it takes a separate set_trigger_state approval."
         ))
@@ -524,6 +659,11 @@ public enum ProposalPlanner {
         card += events.map { ProposalCardLine(.plain, "Fires \($0.description(in: home))") }
         card += capabilityNotes
         if let scene { card.append(ProposalCardLine(.plain, "Runs scene “\(scene.name)” when it fires.")) }
+        if scene == nil {
+            card.append(ProposalCardLine(
+                .note, "⚠ Created without a scene — HomeKit cannot arm it; recreate with a scene to enable it later."
+            ))
+        }
         card.append(ProposalCardLine(
             .note, "⚠ Created disabled — arming it takes a separate set_trigger_state approval."
         ))
@@ -553,6 +693,15 @@ public enum ProposalPlanner {
         let (home, trigger) = try self.trigger(id: triggerId, in: graph)
         if trigger.isEnabled == enabled {
             throw PlannerError.noChange("trigger “\(trigger.name)” is already \(enabled ? "enabled" : "disabled").")
+        }
+        // HomeKit law: a trigger with no registered action sets has nothing
+        // to run and cannot be enabled — the approval would always fail with
+        // "No registered action sets for trigger". Say so at staging, where
+        // the agent can act on it, instead of after a doomed approval.
+        if enabled, trigger.linkedSceneIds.isEmpty {
+            throw PlannerError.invalidInput(
+                "Trigger “\(trigger.name)” runs no scene — HomeKit cannot enable an automation with no action sets. Delete it and recreate it with a scene (sceneId), then arm it."
+            )
         }
         // Schedule updates ride the timer trigger only; an event trigger has
         // no fire date to update.
