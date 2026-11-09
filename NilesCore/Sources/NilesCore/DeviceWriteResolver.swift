@@ -65,6 +65,11 @@ struct DeviceHomeView: Equatable, Sendable {
     struct Accessory: Equatable, Sendable {
         var id: String
         var name: String
+        /// `HMAccessory.supportsIdentify` — false means the accessory has no
+        /// Identify characteristic and cannot flash or beep. Nil in fixtures
+        /// that predate the field; nil stays permissive like other
+        /// capability data.
+        var supportsIdentify: Bool?
         var services: [Service] = []
     }
 
@@ -85,6 +90,10 @@ struct DeviceHomeView: Equatable, Sendable {
         var name: String?
         /// The value family the characteristic's metadata declares.
         var kind: ValueKind = .unknown
+        /// The declared value constraints — bounds and valid values the
+        /// direct-write check enforces. Nil when HomeKit exposes none;
+        /// nil stays permissive, like other capability data.
+        var metadata: HomeGraph.CharacteristicMetadata?
     }
 
     /// How a characteristic renders values, from `HMCharacteristicMetadata.format`.
@@ -100,6 +109,19 @@ struct DeviceHomeView: Equatable, Sendable {
     var homes: [Home] = []
 }
 
+extension DeviceHomeView.ValueKind {
+    /// The rendering family a metadata format string implies — one
+    /// derivation shared by the graph reads and the device view. A test
+    /// pins these literals to the HomeKit format constants.
+    init(format: String?) {
+        switch format {
+        case "string": self = .string
+        case "bool", "int", "float", "uint8", "uint16", "uint32", "uint64": self = .number
+        default: self = .unknown
+        }
+    }
+}
+
 // MARK: - Resolved steps
 
 /// One concretely-resolved HomeKit call: every staged id has been matched
@@ -111,13 +133,27 @@ enum DeviceWriteStep: Equatable, Sendable {
     case renameRoom(homeId: String, roomId: String, to: String)
     case removeRoom(homeId: String, roomId: String)
     case updateZoneRooms(homeId: String, zoneId: String, addRoomIds: [String], removeRoomIds: [String])
+    case createZone(homeId: String, name: String)
+    case renameZone(homeId: String, zoneId: String, to: String)
+    case removeZone(homeId: String, zoneId: String)
     case createActionSet(homeId: String, name: String, actions: [ResolvedAction])
     case updateSceneActions(homeId: String, sceneId: String, add: [ResolvedAction], remove: [SceneActionKey])
+    case renameActionSet(homeId: String, sceneId: String, to: String)
+    case removeActionSet(homeId: String, sceneId: String)
+    case executeActionSet(homeId: String, sceneId: String)
     case addServiceGroup(homeId: String, name: String)
     case updateServiceGroupMembers(homeId: String, groupId: String, addServiceIds: [String], removeServiceIds: [String])
+    case renameServiceGroup(homeId: String, groupId: String, to: String)
     case removeServiceGroup(homeId: String, groupId: String)
     case createTimerTrigger(homeId: String, name: String, fireDate: Date, recurrence: DateComponents?, sceneId: String?)
-    case createEventTrigger(homeId: String, name: String, events: [ResolvedEvent], sceneId: String?)
+    case createEventTrigger(
+        homeId: String, name: String, events: [ResolvedEvent], endEvents: [ResolvedEvent],
+        executeOnce: Bool, sceneId: String?
+    )
+    case updateEventTrigger(
+        homeId: String, triggerId: String, events: [ResolvedEvent], endEvents: [ResolvedEvent]?,
+        recurrences: [DateComponents]?, executeOnce: Bool?, sceneId: String?
+    )
     case setTriggerEnabled(homeId: String, triggerId: String, enabled: Bool)
     /// `HMTimerTrigger.fireDate` is readonly — a schedule change removes the
     /// old trigger and re-adds a new one with the same shape, then restores
@@ -128,6 +164,12 @@ enum DeviceWriteStep: Equatable, Sendable {
         wasEnabled: Bool, linkedSceneIds: [String]
     )
     case removeTrigger(homeId: String, triggerId: String)
+    case renameAccessory(homeId: String, accessoryId: String, to: String)
+    case identifyAccessory(homeId: String, accessoryId: String)
+    case assignAccessoryToRoom(homeId: String, accessoryId: String, roomId: String)
+    case unblockAccessory(homeId: String, accessoryId: String)
+    case removeAccessory(homeId: String, accessoryId: String)
+    case writeCharacteristic(homeId: String, action: ResolvedAction)
 }
 
 /// A scene action with its characteristic resolved and its value's rendering
@@ -192,10 +234,49 @@ enum DeviceWriteResolver {
             return [.removeRoom(homeId: home.id, roomId: room.id)]
         case .setZoneRooms(let homeId, let zoneId, let addRoomIds, let removeRoomIds):
             return [try resolveZoneRooms(homeId: homeId, zoneId: zoneId, addRoomIds: addRoomIds, removeRoomIds: removeRoomIds, in: view)]
+        case .createZone(let homeId, let name):
+            let home = try home(id: homeId, in: view)
+            if home.zones.contains(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
+                throw HomeKitWriteError.duplicateName("Home already has a zone named “\(name)”.")
+            }
+            return [.createZone(homeId: home.id, name: name)]
+        case .renameZone(let homeId, let zoneId, let to):
+            let home = try home(id: homeId, in: view)
+            let zone = try zone(id: zoneId, in: home)
+            // Zone names are unique within a home; the new name cannot
+            // collide with another zone — this one included.
+            if home.zones.contains(where: { $0.id != zone.id && $0.name.caseInsensitiveCompare(to) == .orderedSame }) {
+                throw HomeKitWriteError.duplicateName("Home already has a zone named “\(to)”.")
+            }
+            return [.renameZone(homeId: home.id, zoneId: zone.id, to: to)]
+        case .removeZone(let homeId, let zoneId):
+            let home = try home(id: homeId, in: view)
+            let zone = try zone(id: zoneId, in: home)
+            // Rooms survive untouched — removing a zone dissolves only the
+            // grouping; the review card says so.
+            return [.removeZone(homeId: home.id, zoneId: zone.id)]
         case .addActionSet(let homeId, let name, let actions):
             return [try resolveCreateActionSet(homeId: homeId, name: name, actions: actions, in: view)]
         case .setSceneActions(let homeId, let sceneId, let add, let remove):
             return [try resolveSceneActions(homeId: homeId, sceneId: sceneId, add: add, remove: remove, in: view)]
+        case .renameActionSet(let homeId, let sceneId, let to):
+            return [try resolveRenameActionSet(homeId: homeId, sceneId: sceneId, to: to, in: view)]
+        case .removeActionSet(let homeId, let sceneId):
+            let home = try home(id: homeId, in: view)
+            let scene = try scene(id: sceneId, in: home)
+            // Triggers linking this scene keep pointing at it — HomeKit
+            // detaches the action set itself; the card says so. Keeping is
+            // legal, so nothing here blocks or warns.
+            return [.removeActionSet(homeId: home.id, sceneId: scene.id)]
+        case .executeActionSet(let homeId, let sceneId):
+            let home = try home(id: homeId, in: view)
+            let scene = try scene(id: sceneId, in: home)
+            if scene.actionKeys.isEmpty {
+                throw HomeKitWriteError.invalidOperation(
+                    "Scene “\(scene.name)” has no actions — HomeKit refuses to execute an empty scene."
+                )
+            }
+            return [.executeActionSet(homeId: home.id, sceneId: scene.id)]
         case .addServiceGroup(let homeId, let name):
             let home = try home(id: homeId, in: view)
             if home.serviceGroups.contains(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
@@ -208,16 +289,101 @@ enum DeviceWriteResolver {
             let home = try home(id: homeId, in: view)
             let group = try serviceGroup(id: groupId, in: home)
             return [.removeServiceGroup(homeId: home.id, groupId: group.id)]
+        case .renameServiceGroup(let homeId, let groupId, let to):
+            let home = try home(id: homeId, in: view)
+            let group = try serviceGroup(id: groupId, in: home)
+            // Group names are unique within a home; the new name cannot
+            // collide with another group — this one included.
+            if home.serviceGroups.contains(where: { $0.id != group.id && $0.name.caseInsensitiveCompare(to) == .orderedSame }) {
+                throw HomeKitWriteError.duplicateName("Home already has a service group named “\(to)”.")
+            }
+            return [.renameServiceGroup(homeId: home.id, groupId: group.id, to: to)]
         case .addTimerTrigger(let homeId, let name, let fireDate, let recurrence, let sceneId):
             return [try resolveCreateTimerTrigger(homeId: homeId, name: name, fireDate: fireDate, recurrence: recurrence, sceneId: sceneId, in: view)]
-        case .addEventTrigger(let homeId, let name, let events, let sceneId):
-            return [try resolveCreateEventTrigger(homeId: homeId, name: name, events: events, sceneId: sceneId, in: view)]
+        case .addEventTrigger(let homeId, let name, let events, let endEvents, let executeOnce, let sceneId):
+            return [try resolveCreateEventTrigger(
+                homeId: homeId, name: name, events: events, endEvents: endEvents,
+                executeOnce: executeOnce, sceneId: sceneId, in: view
+            )]
+        case .updateEventTrigger(
+            let homeId, let triggerId, let events, let endEvents, let recurrences, let executeOnce, let sceneId
+        ):
+            return [try resolveUpdateEventTrigger(
+                homeId: homeId, triggerId: triggerId, events: events, endEvents: endEvents,
+                recurrences: recurrences, executeOnce: executeOnce, sceneId: sceneId, in: view
+            )]
         case .setTriggerEnabled(let homeId, let triggerId, let enabled):
-            return [.setTriggerEnabled(homeId: try home(id: homeId, in: view).id, triggerId: try trigger(id: triggerId, in: view).id, enabled: enabled)]
+            let resolvedHome = try home(id: homeId, in: view)
+            let resolvedTrigger = try trigger(id: triggerId, in: view)
+            // Device law: HomeKit refuses to enable a trigger with no
+            // registered action sets (HMError "No registered action sets for
+            // trigger"). Reject it here — where the error reaches the agent
+            // as an actionable message — instead of a raw HomeKit error
+            // after approval. Disabling is always allowed.
+            if enabled, resolvedTrigger.linkedSceneIds.isEmpty {
+                throw HomeKitWriteError.invalidOperation(
+                    "Trigger “\(resolvedTrigger.name)” has no action sets — HomeKit cannot enable an automation that runs nothing. Recreate it with a scene (sceneId), then arm it."
+                )
+            }
+            return [.setTriggerEnabled(homeId: resolvedHome.id, triggerId: resolvedTrigger.id, enabled: enabled)]
         case .updateTimerTrigger(let homeId, let triggerId, let fireDate, let recurrence):
             return [try resolveReplaceTimerTrigger(homeId: homeId, triggerId: triggerId, fireDate: fireDate, recurrence: recurrence, in: view)]
         case .removeTrigger(let homeId, let triggerId):
             return [.removeTrigger(homeId: try home(id: homeId, in: view).id, triggerId: try trigger(id: triggerId, in: view).id)]
+        case .renameAccessory(let homeId, let accessoryId, let to):
+            let resolvedHome = try home(id: homeId, in: view)
+            let resolvedAccessory = try accessory(id: accessoryId, in: resolvedHome)
+            return [.renameAccessory(homeId: resolvedHome.id, accessoryId: resolvedAccessory.id, to: to)]
+        case .identifyAccessory(let homeId, let accessoryId):
+            let resolvedHome = try home(id: homeId, in: view)
+            let resolvedAccessory = try accessory(id: accessoryId, in: resolvedHome)
+            // Device law: identifying means flashing the Identify
+            // characteristic; accessories without one reject the call. Say
+            // so at resolution where the typed error reaches the agent.
+            if resolvedAccessory.supportsIdentify == false {
+                throw HomeKitWriteError.invalidOperation(
+                    "Accessory “\(resolvedAccessory.name)” does not support identify — it has no Identify characteristic."
+                )
+            }
+            return [.identifyAccessory(homeId: resolvedHome.id, accessoryId: resolvedAccessory.id)]
+        case .assignAccessoryToRoom(let homeId, let accessoryId, let roomId):
+            let resolvedHome = try home(id: homeId, in: view)
+            let resolvedAccessory = try accessory(id: accessoryId, in: resolvedHome)
+            let resolvedRoom = try resolvedRoom(id: roomId, in: resolvedHome)
+            return [.assignAccessoryToRoom(homeId: resolvedHome.id, accessoryId: resolvedAccessory.id, roomId: resolvedRoom.id)]
+        case .unblockAccessory(let homeId, let accessoryId):
+            let resolvedHome = try home(id: homeId, in: view)
+            let resolvedAccessory = try accessory(id: accessoryId, in: resolvedHome)
+            // Blocked state is not tracked in the view (the read flags are
+            // the read-depth group's); unblocking an unblocked accessory is
+            // a harmless no-op in HomeKit, so only existence is checked.
+            return [.unblockAccessory(homeId: resolvedHome.id, accessoryId: resolvedAccessory.id)]
+        case .removeAccessory(let homeId, let accessoryId):
+            let resolvedHome = try home(id: homeId, in: view)
+            let resolvedAccessory = try accessory(id: accessoryId, in: resolvedHome)
+            return [.removeAccessory(homeId: resolvedHome.id, accessoryId: resolvedAccessory.id)]
+        case .writeCharacteristic(let homeId, let spec):
+            let home = try home(id: homeId, in: view)
+            let target = try resolveTarget(spec, in: home)
+            // The same value check staging runs — a proposal that passes
+            // staging must execute, and one that fails staging must fail
+            // everywhere.
+            if let why = valueViolation(spec.value, kind: target.characteristic.kind, metadata: target.characteristic.metadata) {
+                throw HomeKitWriteError.invalidOperation(
+                    "Characteristic \(spec.characteristic) on “\(target.accessory.name)” cannot take \(spec.value.rendered): \(why)."
+                )
+            }
+            return [.writeCharacteristic(
+                homeId: home.id,
+                action: ResolvedAction(
+                    accessoryId: target.accessory.id,
+                    serviceId: target.service.id,
+                    characteristicId: target.characteristic.id,
+                    characteristicType: target.characteristic.type,
+                    kind: target.characteristic.kind,
+                    value: spec.value
+                )
+            )]
         }
     }
 
@@ -258,6 +424,23 @@ enum DeviceWriteResolver {
         let resolved = try add.map { try resolveAction($0, in: home) }
         return .updateSceneActions(homeId: home.id, sceneId: scene.id, add: resolved, remove: remove)
     }
+    private static func resolveRenameActionSet(
+        homeId: String, sceneId: String, to: String, in view: DeviceHomeView
+    ) throws -> DeviceWriteStep {
+        let home = try home(id: homeId, in: view)
+        let scene = try scene(id: sceneId, in: home)
+        if scene.name.caseInsensitiveCompare(to) == .orderedSame {
+            return .renameActionSet(homeId: home.id, sceneId: scene.id, to: to)
+        }
+        // Duplicate scene names are rejected the way HomeKit's are, across
+        // all homes — the renamed scene cannot collide with another.
+        if view.homes.contains(where: {
+            $0.scenes.contains { $0.id != scene.id && $0.name.caseInsensitiveCompare(to) == .orderedSame }
+        }) {
+            throw HomeKitWriteError.duplicateName("Home already has a scene named “\(to)”.")
+        }
+        return .renameActionSet(homeId: home.id, sceneId: scene.id, to: to)
+    }
 
     private static func resolveServiceGroupMembers(
         homeId: String, groupId: String, addServiceIds: [String], removeServiceIds: [String], in view: DeviceHomeView
@@ -285,12 +468,57 @@ enum DeviceWriteResolver {
     }
 
     private static func resolveCreateEventTrigger(
-        homeId: String, name: String, events: [TriggerEventSpec], sceneId: String?, in view: DeviceHomeView
+        homeId: String, name: String, events: [TriggerEventSpec], endEvents: [TriggerEventSpec],
+        executeOnce: Bool, sceneId: String?, in view: DeviceHomeView
     ) throws -> DeviceWriteStep {
         let home = try home(id: homeId, in: view)
         let resolved = try resolveEvents(events, in: home)
+        let resolvedEndEvents = try resolveEvents(endEvents, in: home)
         let scene = try optionalScene(id: sceneId, in: home)
-        return .createEventTrigger(homeId: home.id, name: name, events: resolved, sceneId: scene?.id)
+        return .createEventTrigger(
+            homeId: home.id, name: name, events: resolved, endEvents: resolvedEndEvents,
+            executeOnce: executeOnce, sceneId: scene?.id
+        )
+    }
+
+    private static func resolveUpdateEventTrigger(
+        homeId: String, triggerId: String, events: [TriggerEventSpec], endEvents: [TriggerEventSpec]?,
+        recurrences: [[String: Int]]?, executeOnce: Bool?, sceneId: String?, in view: DeviceHomeView
+    ) throws -> DeviceWriteStep {
+        let home = try home(id: homeId, in: view)
+        let old = try trigger(id: triggerId, in: view)
+        guard !old.isTimer else {
+            throw HomeKitWriteError.invalidOperation(
+                "Trigger \(old.name) is a timer trigger — set_trigger_state moves its schedule; event triggers have no fire date."
+            )
+        }
+        let resolvedEvents = try resolveEvents(events, in: home)
+        let resolvedEndEvents = try endEvents.map { try resolveEvents($0, in: home) }
+        let components = try eventTriggerRecurrences(recurrences)
+        let scene = try optionalScene(id: sceneId, in: home)
+        return .updateEventTrigger(
+            homeId: home.id, triggerId: old.id, events: resolvedEvents,
+            endEvents: resolvedEndEvents, recurrences: components,
+            executeOnce: executeOnce, sceneId: scene?.id
+        )
+    }
+
+    /// Event-trigger recurrences are days of the week — HomeKit honors only
+    /// the `weekday` component (`HMEventTrigger.updateRecurrences`). The same
+    /// JSON shape timers use, one weekday (1…7, 1 = Sunday) per entry; an
+    /// empty array clears the recurrence.
+    private static func eventTriggerRecurrences(_ recurrences: [[String: Int]]?) throws -> [DateComponents]? {
+        guard let recurrences else { return nil }
+        return try recurrences.map { components in
+            guard components.count == 1, let weekday = components["weekday"], (1...7).contains(weekday) else {
+                throw HomeKitWriteError.invalidOperation(
+                    "Event-trigger recurrences are days of the week — one “weekday” component (1…7, 1 = Sunday) per entry."
+                )
+            }
+            var dateComponents = DateComponents()
+            dateComponents.weekday = weekday
+            return dateComponents
+        }
     }
 
     private static func resolveReplaceTimerTrigger(
@@ -311,14 +539,11 @@ enum DeviceWriteResolver {
     // MARK: Shared resolution helpers
 
     /// The heavy lookup: accessory -> service (by name or type, else the one
-    /// carrying the characteristic) -> characteristic (by type or name), with
-    /// the value rendering kind picked from metadata.
-    private static func resolveAction(_ spec: SceneActionSpec, in home: DeviceHomeView.Home) throws -> ResolvedAction {
-        guard let accessory = accessory(id: spec.accessoryId, in: home) else {
-            throw HomeKitWriteError.objectMissing("No accessory \(spec.accessoryId) in home “\(home.name)”.")
-        }
-        let characteristic: DeviceHomeView.Characteristic
-        let service: DeviceHomeView.Service
+    /// carrying the characteristic) -> characteristic (by type or name).
+    private static func resolveTarget(
+        _ spec: SceneActionSpec, in home: DeviceHomeView.Home
+    ) throws -> (accessory: DeviceHomeView.Accessory, service: DeviceHomeView.Service, characteristic: DeviceHomeView.Characteristic) {
+        let accessory = try accessory(id: spec.accessoryId, in: home)
         if let wanted = spec.service {
             let matching = accessory.services.filter {
                 $0.name.map { $0.caseInsensitiveCompare(wanted) == .orderedSame } == true
@@ -331,22 +556,30 @@ enum DeviceWriteResolver {
                     "Accessory “\(accessory.name)” has no service “\(wanted)” with characteristic \(spec.characteristic)."
                 )
             }
-            service = matched
-        } else if let matched = accessory.services.first(
+            guard let characteristic = matched.characteristics.first(where: { characteristicMatches($0, spec.characteristic) }) else {
+                throw HomeKitWriteError.objectMissing(
+                    "Service “\(matched.name ?? matched.serviceType)” has no characteristic \(spec.characteristic)."
+                )
+            }
+            return (accessory, matched, characteristic)
+        }
+        guard let matched = accessory.services.first(
             where: { $0.characteristics.contains { characteristicMatches($0, spec.characteristic) } }
-        ) {
-            service = matched
-        } else {
+        ) else {
             throw HomeKitWriteError.objectMissing(
                 "Accessory “\(accessory.name)” has no service with characteristic \(spec.characteristic)."
             )
         }
-        guard let matched = service.characteristics.first(where: { characteristicMatches($0, spec.characteristic) }) else {
+        guard let characteristic = matched.characteristics.first(where: { characteristicMatches($0, spec.characteristic) }) else {
             throw HomeKitWriteError.objectMissing(
-                "Service “\(service.name ?? service.serviceType)” has no characteristic \(spec.characteristic)."
+                "Service “\(matched.name ?? matched.serviceType)” has no characteristic \(spec.characteristic)."
             )
         }
-        characteristic = matched
+        return (accessory, matched, characteristic)
+    }
+
+    private static func resolveAction(_ spec: SceneActionSpec, in home: DeviceHomeView.Home) throws -> ResolvedAction {
+        let (accessory, service, characteristic) = try resolveTarget(spec, in: home)
         return ResolvedAction(
             accessoryId: accessory.id,
             serviceId: service.id,
@@ -367,9 +600,7 @@ enum DeviceWriteResolver {
         return try events.map { event in
             switch event {
             case .characteristic(let accessoryId, let characteristicType, let value):
-                guard let accessory = accessory(id: accessoryId, in: home) else {
-                    throw HomeKitWriteError.objectMissing("No accessory \(accessoryId) in home “\(home.name)”.")
-                }
+                let accessory = try accessory(id: accessoryId, in: home)
                 guard let characteristic = accessory.services.flatMap(\.characteristics)
                     .first(where: { characteristicMatches($0, characteristicType) }) else {
                     throw HomeKitWriteError.objectMissing(
@@ -415,18 +646,62 @@ enum DeviceWriteResolver {
     private static func checkedValue(
         _ value: HomeKitValue, kind: DeviceHomeView.ValueKind, characteristic: String
     ) throws -> HomeKitValue {
-        switch (kind, value) {
-        case (.string, .string):
-            return value
-        case (.number, .bool), (.number, .int), (.number, .double):
-            return value
-        case (.unknown, _):
-            return value
-        case (.string, let wrong), (.number, let wrong):
+        guard isKindCompatible(value, kind: kind) else {
             throw HomeKitWriteError.invalidOperation(
-                "Characteristic \(characteristic) cannot take the value \(wrong.rendered)."
+                "Characteristic \(characteristic) cannot take the value \(value.rendered)."
             )
         }
+        return value
+    }
+
+    /// Whether a value's type fits a characteristic's rendering family — one
+    /// rule for scene actions and direct writes alike.
+    static func isKindCompatible(_ value: HomeKitValue, kind: DeviceHomeView.ValueKind) -> Bool {
+        switch (kind, value) {
+        case (.string, .string): true
+        case (.number, .bool), (.number, .int), (.number, .double): true
+        case (.unknown, _): true
+        case (.string, _), (.number, _): false
+        }
+    }
+
+    /// Does the value fit the characteristic's declared metadata? The ONE
+    /// check staging (planner, over the graph) and resolution (executor,
+    /// over the device view) both run — a proposal that passes staging must
+    /// execute, and one that fails staging must fail everywhere. Returns the
+    /// reason the value is invalid, or nil when it fits.
+    static func valueViolation(
+        _ value: HomeKitValue, kind: DeviceHomeView.ValueKind, metadata: HomeGraph.CharacteristicMetadata?
+    ) -> String? {
+        guard isKindCompatible(value, kind: kind) else {
+            switch value {
+            case .string(let text): return "holds numbers, not the string “\(text)”"
+            case .bool, .int, .double: return "holds strings, not \(value.rendered)"
+            }
+        }
+        guard let metadata else { return nil }
+        let numeric: Double?
+        switch value {
+        case .bool(let flag): numeric = flag ? 1 : 0
+        case .int(let int): numeric = Double(int)
+        case .double(let double): numeric = double
+        case .string: numeric = nil
+        }
+        guard let numeric else { return nil }
+        if let minimum = metadata.minValue, let maximum = metadata.maxValue {
+            if numeric < minimum || numeric > maximum {
+                return "takes \(minimum)…\(maximum), so \(value.rendered) is out of range"
+            }
+        } else if let minimum = metadata.minValue, numeric < minimum {
+            return "takes at least \(minimum), so \(value.rendered) is out of range"
+        } else if let maximum = metadata.maxValue, numeric > maximum {
+            return "takes at most \(maximum), so \(value.rendered) is out of range"
+        }
+        if let valid = metadata.validValues, !valid.isEmpty,
+           !valid.contains(where: { Double($0) == numeric }) {
+            return "takes only \(valid.map(String.init).joined(separator: ", ")), and \(value.rendered) is not one of them"
+        }
+        return nil
     }
 
     /// Fire dates must sit on the minute boundary and recurrences must be
@@ -542,8 +817,11 @@ enum DeviceWriteResolver {
         return trigger
     }
 
-    private static func accessory(id: String, in home: DeviceHomeView.Home) -> DeviceHomeView.Accessory? {
-        home.accessories.first { $0.id == id }
+    private static func accessory(id: String, in home: DeviceHomeView.Home) throws -> DeviceHomeView.Accessory {
+        guard let accessory = home.accessories.first(where: { $0.id == id }) else {
+            throw HomeKitWriteError.objectMissing("No accessory \(id) in home “\(home.name)”.")
+        }
+        return accessory
     }
 
     private static func service(id: String, in home: DeviceHomeView.Home) -> DeviceHomeView.Service? {

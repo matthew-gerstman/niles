@@ -1,7 +1,7 @@
 import Foundation
 import MCP
 
-/// The mutating MCP tools: thirteen declarative write tools plus the
+/// The mutating MCP tools: twenty-six declarative write tools plus the
 /// `get_proposal` poll. None of them touches HomeKit — a call plans the
 /// request against the current graph and stages exactly one proposal
 /// (spec: "one agent request is always exactly one approval card"); the
@@ -19,7 +19,7 @@ public struct WriteToolRegistry: Sendable {
     /// The write tools, in listing order.
     public var tools: [Tool] { Self.toolDefinitions }
 
-    /// The names `call` answers: the nine write tools plus `get_proposal`.
+    /// The names `call` answers: the write tools plus `get_proposal`.
     public var toolNames: Set<String> { Set(Self.toolDefinitions.map(\.name)) }
 
     /// Answers one `tools/call` for a write tool or `get_proposal`. Every
@@ -95,6 +95,39 @@ public struct WriteToolRegistry: Sendable {
             annotations: Tool.Annotations(readOnlyHint: false)
         ),
         Tool(
+            name: "create_zone",
+            description: "Create an empty zone (e.g. 'Upstairs'); add rooms with set_zone_rooms. Zone names are unique within a home. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            inputSchema: objectSchema(
+                [
+                    "homeId": stringProperty("The home to create the zone in (from get_homes)."),
+                    "name": stringProperty("The new zone's name."),
+                ],
+                required: ["homeId", "name"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false)
+        ),
+        Tool(
+            name: "rename_zone",
+            description: "Rename a zone. Its rooms are unaffected. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            inputSchema: objectSchema(
+                [
+                    "zoneId": stringProperty("The zone to rename (from get_zones)."),
+                    "name": stringProperty("The zone's new name."),
+                ],
+                required: ["zoneId", "name"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false)
+        ),
+        Tool(
+            name: "delete_zone",
+            description: "Delete a zone. Its rooms survive untouched — only the grouping is removed (the review card says which rooms were grouped). DESTRUCTIVE. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            inputSchema: objectSchema(
+                ["zoneId": stringProperty("The zone to delete (from get_zones).")],
+                required: ["zoneId"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false, destructiveHint: true)
+        ),
+        Tool(
             name: "create_scene",
             description: "Create a scene (HomeKit action set) whose actions are characteristic writes. Niles stages scenes; it never executes them — running the scene stays in the Home app or Siri. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
             inputSchema: objectSchema(
@@ -120,6 +153,58 @@ public struct WriteToolRegistry: Sendable {
             annotations: Tool.Annotations(readOnlyHint: false)
         ),
         Tool(
+            name: "rename_scene",
+            description: "Rename a scene (HomeKit action set). Scene names are unique across all homes. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            inputSchema: objectSchema(
+                [
+                    "sceneId": stringProperty("The scene to rename (from get_scenes)."),
+                    "name": stringProperty("The scene's new name."),
+                ],
+                required: ["sceneId", "name"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false)
+        ),
+        Tool(
+            name: "delete_scene",
+            description: "Delete a scene. Any trigger that runs it keeps existing but no longer runs anything — the review card names every linked trigger; pass deleteLinkedTriggers to delete those too. DESTRUCTIVE. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            inputSchema: objectSchema(
+                [
+                    "sceneId": stringProperty("The scene to delete (from get_scenes)."),
+                    "deleteLinkedTriggers": .object([
+                        "type": .string("boolean"),
+                        "description": .string("true also deletes every trigger that runs this scene; omit or false keeps them (they run nothing)."),
+                    ]),
+                ],
+                required: ["sceneId"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false, destructiveHint: true)
+        ),
+        Tool(
+            name: "execute_scene",
+            description: "Run a scene NOW — every action applies to the devices as soon as a human approves it (device-immediate; the review card says so). HomeKit refuses to execute an empty scene. STAGES A PROPOSAL — nothing runs until a human approves it in Niles. Poll get_proposal afterwards.",
+            inputSchema: objectSchema(
+                ["sceneId": stringProperty("The scene to run (from get_scenes).")],
+                required: ["sceneId"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false)
+        ),
+        Tool(
+            name: "write_characteristic",
+            description: "Write a value to one of an accessory's characteristics NOW — the change applies to the device as soon as a human approves it (device-immediate; the review card shows the current and target values). The target matches by friendly name or type UUID, e.g. On, Brightness, or 00000008-0000-1000-8000-0026BB765291. The value must fit the characteristic's declared metadata (type and range) or staging rejects it. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            inputSchema: objectSchema(
+                [
+                    "accessoryId": stringProperty("The accessory to write (from get_rooms)."),
+                    "service": stringProperty("Optional service name or type; defaults to the first service carrying the characteristic."),
+                    "characteristic": stringProperty("The characteristic to write, by friendly name or type UUID, e.g. On or Brightness."),
+                    "value": .object([
+                        "description": .string("The target value: number, string, or boolean."),
+                    ]),
+                ],
+                required: ["accessoryId", "characteristic", "value"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false)
+        ),
+        Tool(
             name: "create_service_group",
             description: "Create an empty service group (e.g. 'Desk Lamps'); add members with set_service_group_members. Groups contain services, not accessories. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
             inputSchema: objectSchema(
@@ -128,6 +213,18 @@ public struct WriteToolRegistry: Sendable {
                     "name": stringProperty("The new group's name."),
                 ],
                 required: ["homeId", "name"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false)
+        ),
+        Tool(
+            name: "rename_service_group",
+            description: "Rename a service group. Its members and devices are unaffected. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            inputSchema: objectSchema(
+                [
+                    "groupId": stringProperty("The group to rename (from get_service_groups)."),
+                    "name": stringProperty("The group's new name."),
+                ],
+                required: ["groupId", "name"]
             ),
             annotations: Tool.Annotations(readOnlyHint: false)
         ),
@@ -176,15 +273,51 @@ public struct WriteToolRegistry: Sendable {
         ),
         Tool(
             name: "create_event_trigger",
-            description: "Create an event automation (HomeKit HMEventTrigger): characteristic events and/or presence events (atHome/away — presence is evaluated by HomeKit itself, no location access). Created DISABLED — arming it requires a separate set_trigger_state approval. Optionally runs an existing scene (sceneId from get_scenes). STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            description: "Create an event automation (HomeKit HMEventTrigger): characteristic events and/or presence events (atHome/away — presence is evaluated by HomeKit itself, no location access). Optionally restores the prior state after a duration (endEvents) and optionally runs once (executeOnce — HomeKit disables the trigger after its first fire). Created DISABLED — arming it requires a separate set_trigger_state approval. Optionally runs an existing scene (sceneId from get_scenes). STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
             inputSchema: objectSchema(
                 [
                     "homeId": stringProperty("The home to create the trigger in (from get_homes)."),
                     "name": stringProperty("The new trigger's name."),
-                    "events": triggerEventsProperty,
+                    "events": triggerEventsProperty("Every event that can activate the trigger."),
+                    "endEvents": triggerEventsProperty(
+                        "Optional events that end the effect and restore the prior state — e.g. end events on the same characteristics the trigger raised."
+                    ),
+                    "executeOnce": .object([
+                        "type": .string("boolean"),
+                        "description": .string("true runs the trigger once and HomeKit disables it afterwards."),
+                    ]),
                     "sceneId": stringProperty("Optional scene the trigger runs when it fires (from get_scenes)."),
                 ],
                 required: ["homeId", "name", "events"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false)
+        ),
+        Tool(
+            name: "update_event_trigger",
+            description: "Edit an event automation's contents: replace its events (declarative — the full list; presence events re-derive their predicate), and optionally its end events, days-of-week recurrences, or run-once behavior, and optionally re-point it at a different scene. Editing never changes the trigger's armed state — a disabled trigger stays disabled; arming stays a separate set_trigger_state approval. Timer triggers have no events; use set_trigger_state to move their schedule. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            inputSchema: objectSchema(
+                [
+                    "triggerId": stringProperty("The event trigger to edit (from get_triggers)."),
+                    "events": triggerEventsProperty("The full replacement event list that can activate the trigger."),
+                    "endEvents": triggerEventsProperty(
+                        "Optional replacement end events; omit to leave them unchanged, pass [] to clear."
+                    ),
+                    "recurrences": .object([
+                        "type": .string("array"),
+                        "items": .object(["type": .string("object")]),
+                        "description": .string(
+                            "Optional days of the week when the trigger is evaluated, e.g. [{\"weekday\": 1}] (1 = Sunday). Omit to leave unchanged; pass [] to clear."
+                        ),
+                    ]),
+                    "executeOnce": .object([
+                        "type": .string("boolean"),
+                        "description": .string("true runs the trigger once and HomeKit disables it afterwards; omit to leave unchanged."),
+                    ]),
+                    "sceneId": stringProperty(
+                        "Optional scene the trigger runs when it fires (from get_scenes); re-points the trigger when passed, leaves the current scene untouched when omitted."
+                    ),
+                ],
+                required: ["triggerId", "events"]
             ),
             annotations: Tool.Annotations(readOnlyHint: false)
         ),
@@ -211,6 +344,57 @@ public struct WriteToolRegistry: Sendable {
             inputSchema: objectSchema(
                 ["triggerId": stringProperty("The trigger to delete (from get_triggers).")],
                 required: ["triggerId"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false, destructiveHint: true)
+        ),
+        Tool(
+            name: "rename_accessory",
+            description: "Rename an accessory (e.g. a lamp) as it appears across HomeKit. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            inputSchema: objectSchema(
+                [
+                    "accessoryId": stringProperty("The accessory to rename (from get_rooms)."),
+                    "name": stringProperty("The new accessory name."),
+                ],
+                required: ["accessoryId", "name"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false)
+        ),
+        Tool(
+            name: "identify_accessory",
+            description: "Identify an accessory: it flashes its light or beeps so a human can spot it. Harmless but physical. Rejected at staging when the accessory has no Identify capability. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            inputSchema: objectSchema(
+                ["accessoryId": stringProperty("The accessory to identify (from get_rooms).")],
+                required: ["accessoryId"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false)
+        ),
+        Tool(
+            name: "assign_accessory_to_room",
+            description: "Move an accessory to a different room. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            inputSchema: objectSchema(
+                [
+                    "accessoryId": stringProperty("The accessory to move (from get_rooms)."),
+                    "roomId": stringProperty("The destination room (from get_rooms)."),
+                ],
+                required: ["accessoryId", "roomId"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false)
+        ),
+        Tool(
+            name: "unblock_accessory",
+            description: "Unblock an accessory HomeKit has blocked (e.g. a paused or misbehaving bridge device) so it runs again. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            inputSchema: objectSchema(
+                ["accessoryId": stringProperty("The accessory to unblock (from get_rooms).")],
+                required: ["accessoryId"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false)
+        ),
+        Tool(
+            name: "remove_accessory",
+            description: "Remove an accessory from the home — its services leave their service groups, its scene actions die, and triggers watching its characteristics stop working. The review card lists every affected scene, group, and trigger. DESTRUCTIVE. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            inputSchema: objectSchema(
+                ["accessoryId": stringProperty("The accessory to remove (from get_rooms).")],
+                required: ["accessoryId"]
             ),
             annotations: Tool.Annotations(readOnlyHint: false, destructiveHint: true)
         ),
@@ -251,33 +435,35 @@ public struct WriteToolRegistry: Sendable {
         "description": .string("Every characteristic write the scene should perform."),
     ])
 
-    private static let triggerEventsProperty: Value = .object([
-        "type": .string("array"),
-        "items": .object([
-            "type": .string("object"),
-            "description": .string(
-                "Either a characteristic event {accessoryId, characteristic, value?} — value omitted means the event fires on any change — or a presence event {presence: \"atHome\" | \"away\"}."
-            ),
-            "properties": .object([
-                "accessoryId": .object([
-                    "type": .string("string"),
-                    "description": .string("The accessory whose characteristic is watched (from get_rooms)."),
-                ]),
-                "characteristic": .object([
-                    "type": .string("string"),
-                    "description": .string("The characteristic type to watch, e.g. On or MotionDetected."),
-                ]),
-                "value": .object([
-                    "description": .string("Optional threshold value: number, string, or boolean."),
-                ]),
-                "presence": .object([
-                    "type": .string("string"),
-                    "description": .string("\"atHome\" or \"away\" — HomeKit evaluates presence itself; Niles never requests location access."),
+    private static func triggerEventsProperty(_ description: String) -> Value {
+        .object([
+            "type": .string("array"),
+            "items": .object([
+                "type": .string("object"),
+                "description": .string(
+                    "Either a characteristic event {accessoryId, characteristic, value?} — value omitted means the event fires on any change — or a presence event {presence: \"atHome\" | \"away\"}."
+                ),
+                "properties": .object([
+                    "accessoryId": .object([
+                        "type": .string("string"),
+                        "description": .string("The accessory whose characteristic is watched (from get_rooms)."),
+                    ]),
+                    "characteristic": .object([
+                        "type": .string("string"),
+                        "description": .string("The characteristic type to watch, e.g. On or MotionDetected."),
+                    ]),
+                    "value": .object([
+                        "description": .string("Optional threshold value: number, string, or boolean."),
+                    ]),
+                    "presence": .object([
+                        "type": .string("string"),
+                        "description": .string("\"atHome\" or \"away\" — HomeKit evaluates presence itself; Niles never requests location access."),
+                    ]),
                 ]),
             ]),
-        ]),
-        "description": .string("Every event that can activate the trigger."),
-    ])
+            "description": .string(description),
+        ])
+    }
 
     private static func objectSchema(_ properties: [String: Value], required: [String]) -> Value {
         .object([

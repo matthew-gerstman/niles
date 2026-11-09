@@ -68,12 +68,26 @@ public enum ProposalPlanner {
             return try deleteRoom(roomId: roomId, graph: graph)
         case .setZoneRooms(let zoneId, let roomIds):
             return try setZoneRooms(zoneId: zoneId, roomIds: roomIds, graph: graph)
+        case .createZone(let homeId, let name):
+            return try createZone(homeId: homeId, name: name, graph: graph)
+        case .renameZone(let zoneId, let name):
+            return try renameZone(zoneId: zoneId, name: name, graph: graph)
+        case .deleteZone(let zoneId):
+            return try deleteZone(zoneId: zoneId, graph: graph)
         case .createScene(let homeId, let name, let actions):
             return try createScene(homeId: homeId, name: name, actions: actions, graph: graph)
         case .setSceneActions(let sceneId, let actions):
             return try setSceneActions(sceneId: sceneId, actions: actions, graph: graph)
+        case .renameScene(let sceneId, let name):
+            return try renameScene(sceneId: sceneId, name: name, graph: graph)
+        case .deleteScene(let sceneId, let deleteLinkedTriggers):
+            return try deleteScene(sceneId: sceneId, deleteLinkedTriggers: deleteLinkedTriggers, graph: graph)
+        case .executeScene(let sceneId):
+            return try executeScene(sceneId: sceneId, graph: graph)
         case .createServiceGroup(let homeId, let name):
             return try createServiceGroup(homeId: homeId, name: name, graph: graph)
+        case .renameServiceGroup(let groupId, let name):
+            return try renameServiceGroup(groupId: groupId, name: name, graph: graph)
         case .setServiceGroupMembers(let groupId, let serviceIds):
             return try setServiceGroupMembers(groupId: groupId, serviceIds: serviceIds, graph: graph)
         case .deleteServiceGroup(let groupId):
@@ -83,9 +97,17 @@ public enum ProposalPlanner {
                 homeId: homeId, name: name, fireDate: fireDate, recurrence: recurrence ?? [:],
                 sceneId: sceneId, graph: graph
             )
-        case .createEventTrigger(let homeId, let name, let events, let sceneId):
+        case .createEventTrigger(let homeId, let name, let events, let endEvents, let executeOnce, let sceneId):
             return try createEventTrigger(
-                homeId: homeId, name: name, events: events, sceneId: sceneId, graph: graph
+                homeId: homeId, name: name, events: events, endEvents: endEvents,
+                executeOnce: executeOnce, sceneId: sceneId, graph: graph
+            )
+        case .updateEventTrigger(
+            let triggerId, let events, let endEvents, let recurrences, let executeOnce, let sceneId
+        ):
+            return try updateEventTrigger(
+                triggerId: triggerId, events: events, endEvents: endEvents,
+                recurrences: recurrences, executeOnce: executeOnce, sceneId: sceneId, graph: graph
             )
         case .setTriggerState(let triggerId, let enabled, let fireDate, let recurrence):
             return try setTriggerState(
@@ -94,6 +116,21 @@ public enum ProposalPlanner {
             )
         case .deleteTrigger(let triggerId):
             return try deleteTrigger(triggerId: triggerId, graph: graph)
+        case .renameAccessory(let accessoryId, let name):
+            return try renameAccessory(accessoryId: accessoryId, name: name, graph: graph)
+        case .identifyAccessory(let accessoryId):
+            return try identifyAccessory(accessoryId: accessoryId, graph: graph)
+        case .assignAccessoryToRoom(let accessoryId, let roomId):
+            return try assignAccessoryToRoom(accessoryId: accessoryId, roomId: roomId, graph: graph)
+        case .unblockAccessory(let accessoryId):
+            return try unblockAccessory(accessoryId: accessoryId, graph: graph)
+        case .removeAccessory(let accessoryId):
+            return try removeAccessory(accessoryId: accessoryId, graph: graph)
+        case .writeCharacteristic(let accessoryId, let service, let characteristic, let value):
+            return try writeCharacteristic(
+                accessoryId: accessoryId, service: service, characteristic: characteristic,
+                value: value, graph: graph
+            )
         }
     }
 
@@ -266,6 +303,90 @@ public enum ProposalPlanner {
         return "Update zone “\(zoneName)” membership (\(additions.count) added, \(removals.count) removed)"
     }
 
+    private static func createZone(homeId: String, name: String, graph: HomeGraph) throws -> Plan {
+        let trimmed = try requiredName(name, kind: "zone")
+        let home = try self.home(id: homeId, in: graph)
+        try rejectDuplicate(kind: "zone", name: trimmed, in: home.zones.map(\.name), homeName: home.name)
+        return Plan(
+            tool: "create_zone",
+            title: "Create zone “\(trimmed)”",
+            summary: "Create zone “\(trimmed)” in “\(home.name)”",
+            isDestructive: false,
+            operations: [.createZone(homeId: home.id, name: trimmed)],
+            entries: [ProposalDiffEntry(
+                object: ProposalObjectRef(kind: .zone, id: "", name: trimmed),
+                op: .create,
+                before: nil,
+                after: trimmed
+            )],
+            card: [ProposalCardLine(.add, "Zone “\(trimmed)” · created (empty — add rooms with set_zone_rooms)")]
+        )
+    }
+
+    private static func renameZone(zoneId: String, name: String, graph: HomeGraph) throws -> Plan {
+        let trimmed = try requiredName(name, kind: "zone")
+        let (home, zone) = try self.zone(id: zoneId, in: graph)
+        if zone.name.caseInsensitiveCompare(trimmed) == .orderedSame {
+            throw PlannerError.noChange("zone “\(zone.name)” is already named “\(trimmed)”.")
+        }
+        // Zone names are unique within a home; the new name cannot collide
+        // with another zone — this one included.
+        let otherZones = home.zones.filter { $0.id != zone.id }
+        try rejectDuplicate(kind: "zone", name: trimmed, in: otherZones.map(\.name), homeName: home.name)
+        return Plan(
+            tool: "rename_zone",
+            title: "Rename zone “\(zone.name)”",
+            summary: "Rename zone “\(zone.name)” to “\(trimmed)”",
+            isDestructive: false,
+            operations: [.renameZone(homeId: home.id, zoneId: zone.id, to: trimmed)],
+            entries: [ProposalDiffEntry(
+                object: ProposalObjectRef(kind: .zone, id: zone.id, name: zone.name),
+                op: .rename,
+                before: zone.name,
+                after: trimmed
+            )],
+            card: [ProposalCardLine(.plain, "Zone “\(zone.name)” → “\(trimmed)”")]
+        )
+    }
+
+    /// Spec (destructive severity): the card shows how many rooms the zone
+    /// grouped, and states plainly that the rooms survive — removing a zone
+    /// dissolves only the grouping, never the rooms.
+    private static func deleteZone(zoneId: String, graph: HomeGraph) throws -> Plan {
+        let (home, zone) = try self.zone(id: zoneId, in: graph)
+        let memberNames = zone.roomIds.compactMap { room(id: $0, in: home)?.name }
+
+        var card: [ProposalCardLine] = [ProposalCardLine(.remove, "Zone “\(zone.name)” · deleted")]
+        if memberNames.isEmpty {
+            card.append(ProposalCardLine(.plain, "The zone has no rooms."))
+        } else {
+            let roomNoun = memberNames.count == 1 ? "room" : "rooms"
+            card.append(ProposalCardLine(
+                .plain,
+                "It grouped \(memberNames.count) \(roomNoun): \(memberNames.joined(separator: ", "))."
+            ))
+        }
+        card.append(ProposalCardLine(
+            .plain,
+            "The rooms survive untouched — deleting a zone removes only the grouping."
+        ))
+
+        return Plan(
+            tool: "delete_zone",
+            title: "Delete zone “\(zone.name)”",
+            summary: "Delete zone “\(zone.name)”",
+            isDestructive: true,
+            operations: [.removeZone(homeId: home.id, zoneId: zone.id)],
+            entries: [ProposalDiffEntry(
+                object: ProposalObjectRef(kind: .zone, id: zone.id, name: zone.name),
+                op: .delete,
+                before: zone.name,
+                after: nil
+            )],
+            card: card
+        )
+    }
+
     // MARK: - Scenes
 
     private static func createScene(homeId: String, name: String, actions: [SceneActionSpec], graph: HomeGraph) throws -> Plan {
@@ -280,9 +401,9 @@ public enum ProposalPlanner {
         ]
         card += actions.map { ProposalCardLine(.add, describe(spec: $0, home: home)) }
         card += capabilityNotes
-        // Scope note: execute is deliberately out of v1 (spec) — the card
-        // preempts the "did it run?" question.
-        card.append(ProposalCardLine(.note, "⚠ Niles stages scenes; it never runs one."))
+        // Scope note: the card preempts the "did it run?" question —
+        // running the scene is a separate approval (execute_scene).
+        card.append(ProposalCardLine(.note, "⚠ To run this scene later, use execute_scene after approval."))
 
         return Plan(
             tool: "create_scene",
@@ -355,6 +476,130 @@ public enum ProposalPlanner {
         )
     }
 
+    private static func renameScene(sceneId: String, name: String, graph: HomeGraph) throws -> Plan {
+        let trimmed = try requiredName(name, kind: "scene")
+        let (home, scene) = try self.scene(id: sceneId, in: graph)
+        if scene.name.caseInsensitiveCompare(trimmed) == .orderedSame {
+            throw PlannerError.noChange("scene “\(scene.name)” is already named “\(trimmed)”.")
+        }
+        // Scene names are unique across all homes (HomeKit's rule); the new
+        // name cannot collide with another scene — this one included.
+        let otherScenes = graph.homes.flatMap(\.scenes).filter { $0.id != scene.id }
+        try rejectDuplicate(kind: "scene", name: trimmed, in: otherScenes.map(\.name), homeName: home.name)
+        return Plan(
+            tool: "rename_scene",
+            title: "Rename scene “\(scene.name)”",
+            summary: "Rename scene “\(scene.name)” to “\(trimmed)”",
+            isDestructive: false,
+            operations: [.renameActionSet(homeId: home.id, sceneId: scene.id, to: trimmed)],
+            entries: [ProposalDiffEntry(
+                object: ProposalObjectRef(kind: .scene, id: scene.id, name: scene.name),
+                op: .rename,
+                before: scene.name,
+                after: trimmed
+            )],
+            card: [ProposalCardLine(.plain, "Scene “\(scene.name)” → “\(trimmed)”")]
+        )
+    }
+
+    /// Spec (destructive staging): the card lists the scene's current actions
+    /// and every trigger that links it — a dangling automation is the silent
+    /// blast radius of a scene delete. The `deleteLinkedTriggers` flag is the
+    /// spec's “delete trigger too / keep trigger” offer, and the card says
+    /// which way it goes.
+    private static func deleteScene(
+        sceneId: String, deleteLinkedTriggers: Bool, graph: HomeGraph
+    ) throws -> Plan {
+        let (home, scene) = try self.scene(id: sceneId, in: graph)
+        let linked = home.triggers.filter { $0.linkedSceneIds.contains(scene.id) }
+
+        var operations: [HomeKitOperation] = [.removeActionSet(homeId: home.id, sceneId: scene.id)]
+        if deleteLinkedTriggers {
+            operations += linked.map { .removeTrigger(homeId: home.id, triggerId: $0.id) }
+        }
+
+        var card: [ProposalCardLine] = [ProposalCardLine(.remove, "Scene “\(scene.name)” · deleted")]
+        if scene.actions.isEmpty {
+            card.append(ProposalCardLine(.plain, "The scene has no actions."))
+        } else {
+            card += scene.actions.map { ProposalCardLine(.remove, describe(action: $0, home: home)) }
+        }
+        for trigger in linked {
+            if deleteLinkedTriggers {
+                card.append(ProposalCardLine(.remove, "Trigger “\(trigger.name)” · deleted too — it runs this scene"))
+            } else {
+                card.append(ProposalCardLine(
+                    .note,
+                    "⚠ Trigger “\(trigger.name)” no longer runs anything — its scene is gone. Pass deleteLinkedTriggers to delete it too."
+                ))
+            }
+        }
+        card.append(ProposalCardLine(
+            .plain,
+            "The scene stops working immediately — visible to the Home app and Siri."
+        ))
+
+        let entries: [ProposalDiffEntry] = [ProposalDiffEntry(
+            object: ProposalObjectRef(kind: .scene, id: scene.id, name: scene.name),
+            op: .delete,
+            before: scene.name,
+            after: nil
+        )] + (deleteLinkedTriggers ? linked.map { trigger in
+            ProposalDiffEntry(
+                object: ProposalObjectRef(kind: .trigger, id: trigger.id, name: trigger.name),
+                op: .delete,
+                before: trigger.name,
+                after: nil
+            )
+        } : [])
+
+        let triggerNoun = linked.count == 1 ? "1 trigger" : "\(linked.count) triggers"
+        let title = deleteLinkedTriggers && !linked.isEmpty
+            ? "Delete scene “\(scene.name)” and \(triggerNoun)"
+            : "Delete scene “\(scene.name)”"
+        return Plan(
+            tool: "delete_scene",
+            title: title,
+            summary: "Delete scene “\(scene.name)”" + (deleteLinkedTriggers && !linked.isEmpty ? " with \(triggerNoun)" : ""),
+            isDestructive: true,
+            operations: operations,
+            entries: entries,
+            card: card
+        )
+    }
+
+    private static func executeScene(sceneId: String, graph: HomeGraph) throws -> Plan {
+        let (home, scene) = try self.scene(id: sceneId, in: graph)
+        if scene.actions.isEmpty {
+            throw PlannerError.invalidInput(
+                "Scene “\(scene.name)” has no actions — HomeKit refuses to execute an empty scene."
+            )
+        }
+        let actionNoun = scene.actions.count == 1 ? "action" : "actions"
+        var card: [ProposalCardLine] = [
+            ProposalCardLine(.add, "Scene “\(scene.name)” · runs on approval")
+        ]
+        card += scene.actions.map { ProposalCardLine(.plain, describe(action: $0, home: home)) }
+        card.append(ProposalCardLine(
+            .note,
+            "⚠ Device-immediate — every action above applies to the devices the moment this is approved."
+        ))
+        return Plan(
+            tool: "execute_scene",
+            title: "Run scene “\(scene.name)”",
+            summary: "Run scene “\(scene.name)” now (\(scene.actions.count) \(actionNoun))",
+            isDestructive: false,
+            operations: [.executeActionSet(homeId: home.id, sceneId: scene.id)],
+            entries: [ProposalDiffEntry(
+                object: ProposalObjectRef(kind: .scene, id: scene.id, name: scene.name),
+                op: .update,
+                before: "not running",
+                after: "runs on approval"
+            )],
+            card: card
+        )
+    }
+
     // MARK: - Service groups
 
     private static func createServiceGroup(homeId: String, name: String, graph: HomeGraph) throws -> Plan {
@@ -374,6 +619,32 @@ public enum ProposalPlanner {
                 after: trimmed
             )],
             card: [ProposalCardLine(.add, "Service group “\(trimmed)” · created")]
+        )
+    }
+
+    private static func renameServiceGroup(groupId: String, name: String, graph: HomeGraph) throws -> Plan {
+        let trimmed = try requiredName(name, kind: "service group")
+        let (home, group) = try self.serviceGroup(id: groupId, in: graph)
+        if group.name.caseInsensitiveCompare(trimmed) == .orderedSame {
+            throw PlannerError.noChange("service group “\(group.name)” is already named “\(trimmed)”.")
+        }
+        // Group names are unique within a home; the new name cannot collide
+        // with another group — this one included.
+        let otherGroups = home.serviceGroups.filter { $0.id != group.id }
+        try rejectDuplicate(kind: "service group", name: trimmed, in: otherGroups.map(\.name), homeName: home.name)
+        return Plan(
+            tool: "rename_service_group",
+            title: "Rename service group “\(group.name)”",
+            summary: "Rename service group “\(group.name)” to “\(trimmed)”",
+            isDestructive: false,
+            operations: [.renameServiceGroup(homeId: home.id, groupId: group.id, to: trimmed)],
+            entries: [ProposalDiffEntry(
+                object: ProposalObjectRef(kind: .serviceGroup, id: group.id, name: group.name),
+                op: .rename,
+                before: group.name,
+                after: trimmed
+            )],
+            card: [ProposalCardLine(.plain, "Service group “\(group.name)” → “\(trimmed)”")]
         )
     }
 
@@ -488,6 +759,11 @@ public enum ProposalPlanner {
             ProposalCardLine(.plain, timerLine(fireDate: fireDate, recurrence: recurrence)),
         ]
         if let scene { card.append(ProposalCardLine(.plain, "Runs scene “\(scene.name)” when it fires.")) }
+        if scene == nil {
+            card.append(ProposalCardLine(
+                .note, "⚠ Created without a scene — HomeKit cannot arm it; recreate with a scene to enable it later."
+            ))
+        }
         card.append(ProposalCardLine(
             .note, "⚠ Created disabled — arming it takes a separate set_trigger_state approval."
         ))
@@ -511,19 +787,32 @@ public enum ProposalPlanner {
     }
 
     private static func createEventTrigger(
-        homeId: String, name: String, events: [TriggerEventSpec], sceneId: String?, graph: HomeGraph
+        homeId: String, name: String, events: [TriggerEventSpec], endEvents: [TriggerEventSpec],
+        executeOnce: Bool, sceneId: String?, graph: HomeGraph
     ) throws -> Plan {
         let trimmed = try requiredName(name, kind: "trigger")
         let home = try self.home(id: homeId, in: graph)
         let scene = try sceneReference(sceneId, in: home)
         let capabilityNotes = try validate(events: events, home: home)
+            + validate(events: endEvents, home: home)
 
         var card: [ProposalCardLine] = [
             ProposalCardLine(.add, "Event trigger “\(trimmed)” · created DISABLED"),
         ]
         card += events.map { ProposalCardLine(.plain, "Fires \($0.description(in: home))") }
+        card += endEvents.map {
+            ProposalCardLine(.plain, "Ends with \($0.description(in: home)) — HomeKit restores the prior state")
+        }
         card += capabilityNotes
+        if executeOnce {
+            card.append(ProposalCardLine(.plain, "Runs once — HomeKit disables the trigger after it fires."))
+        }
         if let scene { card.append(ProposalCardLine(.plain, "Runs scene “\(scene.name)” when it fires.")) }
+        if scene == nil {
+            card.append(ProposalCardLine(
+                .note, "⚠ Created without a scene — HomeKit cannot arm it; recreate with a scene to enable it later."
+            ))
+        }
         card.append(ProposalCardLine(
             .note, "⚠ Created disabled — arming it takes a separate set_trigger_state approval."
         ))
@@ -534,7 +823,8 @@ public enum ProposalPlanner {
             summary: "Create event trigger “\(trimmed)” (disabled)",
             isDestructive: false,
             operations: [.addEventTrigger(
-                homeId: home.id, name: trimmed, events: events, sceneId: scene?.id
+                homeId: home.id, name: trimmed, events: events, endEvents: endEvents,
+                executeOnce: executeOnce, sceneId: scene?.id
             )],
             entries: [ProposalDiffEntry(
                 object: ProposalObjectRef(kind: .trigger, id: "", name: trimmed),
@@ -546,6 +836,115 @@ public enum ProposalPlanner {
         )
     }
 
+    /// Event-trigger editing (spec group 1): the event list is declarative —
+    /// a full replacement, like set_scene_actions — with optional end-event,
+    /// recurrence, execute-once, and scene changes. The create/arm firewall
+    /// holds: the plan never touches isEnabled, and the card says so.
+    private static func updateEventTrigger(
+        triggerId: String, events: [TriggerEventSpec], endEvents: [TriggerEventSpec]?,
+        recurrences: [[String: Int]]?, executeOnce: Bool?, sceneId: String?, graph: HomeGraph
+    ) throws -> Plan {
+        let (home, trigger) = try self.trigger(id: triggerId, in: graph)
+        guard case .event(let currentEvents, _) = trigger.detail else {
+            throw PlannerError.invalidInput(
+                "Trigger “\(trigger.name)” is a timer trigger — set_trigger_state moves its schedule; event triggers have no fire date."
+            )
+        }
+        let capabilityNotes = try validate(events: events, home: home)
+            + validate(events: endEvents ?? [], home: home)
+        try validateEventTriggerRecurrences(recurrences)
+        let newScene = try sceneReference(sceneId, in: home)
+
+        // Diff the declarative list against the current events, matched by
+        // canonical identity — the same name-or-UUID rule everywhere else, so
+        // the card's diff, the executor, and the read-back agree.
+        let currentKeys = currentEvents.map { $0.canonicalKey(in: home) }
+        let targetKeys = events.map { $0.canonicalKey(in: home) }
+        let removals = zip(currentEvents, currentKeys).filter { !targetKeys.contains($0.1) }
+        let additions = zip(events, targetKeys).filter { !currentKeys.contains($0.1) }
+        let eventsChanged = !additions.isEmpty || !removals.isEmpty
+        let sceneChanged = sceneId.map { id in !trigger.linkedSceneIds.contains(id) } ?? false
+        if !eventsChanged, !sceneChanged, endEvents == nil, recurrences == nil, executeOnce == nil {
+            throw PlannerError.noChange("event trigger “\(trigger.name)” already watches exactly these events.")
+        }
+
+        let accessoryName = { (ref: HomeGraph.EventRef) -> String in
+            ref.accessoryId.flatMap { accessory(id: $0, in: home)?.name } ?? ref.accessoryId ?? "an accessory"
+        }
+        var card: [ProposalCardLine] =
+            removals.map {
+                ProposalCardLine(.remove, "“\(trigger.name)” · remove event — \(describe(event: $0.0, accessoryName: accessoryName($0.0)))")
+            }
+            + additions.map {
+                ProposalCardLine(.add, "“\(trigger.name)” · add event — fires \($0.0.description(in: home))")
+            }
+        if let endEvents {
+            if endEvents.isEmpty {
+                card.append(ProposalCardLine(.remove, "“\(trigger.name)” · end events cleared"))
+            } else {
+                card += endEvents.map {
+                    ProposalCardLine(.plain, "“\(trigger.name)” · ends with \($0.description(in: home)) — HomeKit restores the prior state")
+                }
+            }
+        }
+        if let recurrences {
+            let days = recurrences.compactMap { $0["weekday"] }.map(weekdayName)
+            card.append(ProposalCardLine(
+                .plain,
+                days.isEmpty ? "Evaluated every day — recurrences cleared." : "Evaluated only on \(days.joined(separator: ", "))."
+            ))
+        }
+        if let executeOnce {
+            card.append(ProposalCardLine(
+                .plain,
+                executeOnce ? "Runs once — HomeKit disables the trigger after it fires." : "Repeats — the trigger keeps firing until deleted or disarmed."
+            ))
+        }
+        if let newScene {
+            card.append(ProposalCardLine(.plain, "Runs scene “\(newScene.name)” when it fires."))
+        }
+        if trigger.linkedSceneIds.isEmpty && sceneId == nil {
+            card.append(ProposalCardLine(
+                .note, "⚠ Runs no scene — HomeKit cannot arm it; pass sceneId to give it one."
+            ))
+        }
+        card.append(ProposalCardLine(
+            .note,
+            "⚠ Editing does not change the trigger's armed state — it stays \(trigger.isEnabled ? "enabled" : "disabled")."
+        ))
+
+        let triggerRef = ProposalObjectRef(kind: .trigger, id: trigger.id, name: trigger.name)
+        var entries: [ProposalDiffEntry] =
+            removals.map {
+                ProposalDiffEntry(
+                    object: triggerRef, op: .removeMembers,
+                    before: describe(event: $0.0, accessoryName: accessoryName($0.0)), after: nil
+                )
+            }
+            + additions.map {
+                ProposalDiffEntry(object: triggerRef, op: .addMembers, before: nil, after: $0.0.description(in: home))
+            }
+        if entries.isEmpty {
+            // Field-only edits (executeOnce, recurrences, scene) still record
+            // one entry so the diff is never empty.
+            entries = [ProposalDiffEntry(object: triggerRef, op: .update, before: nil, after: "contents updated")]
+        }
+
+        return Plan(
+            tool: "update_event_trigger",
+            title: "Update event trigger “\(trigger.name)”",
+            summary: "Update event trigger “\(trigger.name)” events (\(additions.count) added, \(removals.count) removed)",
+            isDestructive: false,
+            operations: [.updateEventTrigger(
+                homeId: home.id, triggerId: trigger.id, events: events,
+                endEvents: endEvents, recurrences: recurrences,
+                executeOnce: executeOnce, sceneId: sceneId
+            )],
+            entries: entries,
+            card: card
+        )
+    }
+
     private static func setTriggerState(
         triggerId: String, enabled: Bool, fireDate: Date?, recurrence: [String: Int]?,
         graph: HomeGraph
@@ -553,6 +952,15 @@ public enum ProposalPlanner {
         let (home, trigger) = try self.trigger(id: triggerId, in: graph)
         if trigger.isEnabled == enabled {
             throw PlannerError.noChange("trigger “\(trigger.name)” is already \(enabled ? "enabled" : "disabled").")
+        }
+        // HomeKit law: a trigger with no registered action sets has nothing
+        // to run and cannot be enabled — the approval would always fail with
+        // "No registered action sets for trigger". Say so at staging, where
+        // the agent can act on it, instead of after a doomed approval.
+        if enabled, trigger.linkedSceneIds.isEmpty {
+            throw PlannerError.invalidInput(
+                "Trigger “\(trigger.name)” runs no scene — HomeKit cannot enable an automation with no action sets. Delete it and recreate it with a scene (sceneId), then arm it."
+            )
         }
         // Schedule updates ride the timer trigger only; an event trigger has
         // no fire date to update.
@@ -631,6 +1039,259 @@ public enum ProposalPlanner {
         )
     }
 
+    // MARK: - Accessories
+
+    private static func renameAccessory(accessoryId: String, name: String, graph: HomeGraph) throws -> Plan {
+        let trimmed = try requiredName(name, kind: "accessory")
+        let (home, accessory) = try self.accessory(id: accessoryId, in: graph)
+        if accessory.name.caseInsensitiveCompare(trimmed) == .orderedSame {
+            throw PlannerError.noChange("accessory “\(accessory.name)” is already named “\(trimmed)”.")
+        }
+        return Plan(
+            tool: "rename_accessory",
+            title: "Rename accessory “\(accessory.name)”",
+            summary: "Rename accessory “\(accessory.name)” to “\(trimmed)”",
+            isDestructive: false,
+            operations: [.renameAccessory(homeId: home.id, accessoryId: accessory.id, to: trimmed)],
+            entries: [ProposalDiffEntry(
+                object: ProposalObjectRef(kind: .accessory, id: accessory.id, name: accessory.name),
+                op: .rename,
+                before: accessory.name,
+                after: trimmed
+            )],
+            card: [ProposalCardLine(.plain, "Accessory “\(accessory.name)” → “\(trimmed)”")]
+        )
+    }
+
+    /// Spec (accessory lifecycle): identify flashes or beeps the physical
+    /// device — harmless but physical, so the card says so. Accessories
+    /// without an Identify characteristic cannot be identified: when the
+    /// graph carries the capability data a `false` rejects staging with the
+    /// typed reason; missing data degrades to a permissive note, the same
+    /// shape the characteristic capability check uses.
+    private static func identifyAccessory(accessoryId: String, graph: HomeGraph) throws -> Plan {
+        let (home, accessory) = try self.accessory(id: accessoryId, in: graph)
+        var card: [ProposalCardLine] = [
+            ProposalCardLine(.add, "Accessory “\(accessory.name)” · identified (flash/beep)"),
+        ]
+        switch accessory.supportsIdentify {
+        case .some(false):
+            throw PlannerError.invalidInput(
+                "Accessory “\(accessory.name)” does not support identify — it has no Identify characteristic."
+            )
+        case .some(true):
+            break
+        case nil:
+            card.append(ProposalCardLine(
+                .note,
+                "⚠ Could not verify identify support — “\(accessory.name)”'s capability data is unavailable; approval may still fail at execution."
+            ))
+        }
+        return Plan(
+            tool: "identify_accessory",
+            title: "Identify accessory “\(accessory.name)”",
+            summary: "Identify accessory “\(accessory.name)” (flash/beep)",
+            isDestructive: false,
+            operations: [.identifyAccessory(homeId: home.id, accessoryId: accessory.id)],
+            entries: [ProposalDiffEntry(
+                object: ProposalObjectRef(kind: .accessory, id: accessory.id, name: accessory.name),
+                op: .update,
+                before: "idle",
+                after: "flash/beep on approval"
+            )],
+            card: card
+        )
+    }
+
+    private static func assignAccessoryToRoom(accessoryId: String, roomId: String, graph: HomeGraph) throws -> Plan {
+        let (home, accessory) = try self.accessory(id: accessoryId, in: graph)
+        guard let room = home.rooms.first(where: { $0.id == roomId }) else {
+            throw PlannerError.unknownRoom(roomId)
+        }
+        let currentRoom = home.rooms.first { $0.accessories.contains { $0.id == accessory.id } }
+        if currentRoom?.id == room.id {
+            throw PlannerError.noChange(
+                "accessory “\(accessory.name)” is already in “\(room.name)”."
+            )
+        }
+        let from = currentRoom.map { "“\($0.name)”" } ?? "no room"
+        return Plan(
+            tool: "assign_accessory_to_room",
+            title: "Move accessory “\(accessory.name)” to \(room.name)",
+            summary: "Move accessory “\(accessory.name)” from \(from) to “\(room.name)”",
+            isDestructive: false,
+            operations: [.assignAccessoryToRoom(homeId: home.id, accessoryId: accessory.id, roomId: room.id)],
+            entries: [ProposalDiffEntry(
+                object: ProposalObjectRef(kind: .accessory, id: accessory.id, name: accessory.name),
+                op: .move,
+                before: currentRoom?.name,
+                after: room.name
+            )],
+            card: [ProposalCardLine(
+                .plain,
+                "Accessory “\(accessory.name)” · \(from) → “\(room.name)”"
+            )]
+        )
+    }
+
+    /// A security block is HomeKit holding the accessory back (a paused or
+    /// misbehaving bridge device); unblocking lets it run again. Blocked
+    /// state is not in the graph (the read-depth flags are a separate
+    /// group), so staging checks existence only and the card says what
+    /// unblocking means.
+    private static func unblockAccessory(accessoryId: String, graph: HomeGraph) throws -> Plan {
+        let (home, accessory) = try self.accessory(id: accessoryId, in: graph)
+        return Plan(
+            tool: "unblock_accessory",
+            title: "Unblock accessory “\(accessory.name)”",
+            summary: "Unblock accessory “\(accessory.name)”",
+            isDestructive: false,
+            operations: [.unblockAccessory(homeId: home.id, accessoryId: accessory.id)],
+            entries: [ProposalDiffEntry(
+                object: ProposalObjectRef(kind: .accessory, id: accessory.id, name: accessory.name),
+                op: .update,
+                before: "blocked",
+                after: "unblocked"
+            )],
+            card: [ProposalCardLine(
+                .add,
+                "Accessory “\(accessory.name)” · unblocked — HomeKit resumes controlling it"
+            )]
+        )
+    }
+
+    /// Spec (destructive severity): the card lists every scene, service
+    /// group, and trigger that references the accessory — its actions die
+    /// with it, its services leave their groups, its characteristics stop
+    /// firing triggers — and where it lands: nowhere, the accessory leaves
+    /// the home entirely.
+    private static func removeAccessory(accessoryId: String, graph: HomeGraph) throws -> Plan {
+        let (home, accessory) = try self.accessory(id: accessoryId, in: graph)
+        let currentRoom = home.rooms.first { $0.accessories.contains { $0.id == accessory.id } }
+
+        let referencingScenes = home.scenes.filter { scene in
+            scene.actions.contains { $0.accessoryId == accessory.id }
+        }
+        let referencingGroups = home.serviceGroups.filter { group in
+            group.services.contains { $0.accessoryId == accessory.id }
+        }
+        let referencingTriggers = home.triggers.filter { trigger in
+            guard case .event(let events, _) = trigger.detail else { return false }
+            return events.contains { $0.accessoryId == accessory.id }
+        }
+
+        var card: [ProposalCardLine] = [
+            ProposalCardLine(.remove, "Accessory “\(accessory.name)” · deleted"),
+        ]
+        if let currentRoom {
+            card.append(ProposalCardLine(.plain, "It leaves room “\(currentRoom.name)” and the home entirely."))
+        }
+        for scene in referencingScenes {
+            card.append(ProposalCardLine(
+                .note,
+                "⚠ Scene “\(scene.name)” loses every action it performs on this accessory."
+            ))
+        }
+        for group in referencingGroups {
+            card.append(ProposalCardLine(
+                .note,
+                "⚠ Service group “\(group.name)” loses this accessory's services."
+            ))
+        }
+        for trigger in referencingTriggers {
+            card.append(ProposalCardLine(
+                .note,
+                "⚠ Trigger “\(trigger.name)” fires on this accessory's characteristics and will stop working."
+            ))
+        }
+        if referencingScenes.isEmpty && referencingGroups.isEmpty && referencingTriggers.isEmpty {
+            card.append(ProposalCardLine(.plain, "Nothing references this accessory."))
+        }
+
+        return Plan(
+            tool: "remove_accessory",
+            title: "Delete accessory “\(accessory.name)”",
+            summary: "Delete accessory “\(accessory.name)”",
+            isDestructive: true,
+            operations: [.removeAccessory(homeId: home.id, accessoryId: accessory.id)],
+            entries: [ProposalDiffEntry(
+                object: ProposalObjectRef(kind: .accessory, id: accessory.id, name: accessory.name),
+                op: .delete,
+                before: accessory.name,
+                after: nil
+            )],
+            card: card
+        )
+    }
+
+    // MARK: - Direct writes (device-immediate)
+
+    /// Spec (direct control, device-immediate): one characteristic write
+    /// that applies to the device the moment approval lands. Staging checks
+    /// the value against the characteristic's declared metadata with the
+    /// same shared check resolution runs — a rejection names the
+    /// characteristic, its current reading, and why the target can never
+    /// fit, and a proposal that stages always executes.
+    private static func writeCharacteristic(
+        accessoryId: String, service: String?, characteristic: String, value: HomeKitValue, graph: HomeGraph
+    ) throws -> Plan {
+        let (home, accessory) = try self.accessory(id: accessoryId, in: graph)
+        var card: [ProposalCardLine] = []
+        switch capability(characteristic: characteristic, service: service, in: accessory) {
+        case .supported:
+            break
+        case .unverifiable:
+            card.append(ProposalCardLine(
+                .note,
+                "⚠ Could not verify \(characteristic) support — “\(accessory.name)”'s "
+                    + "capability data is unavailable; approval may still fail at execution."
+            ))
+        case .unsupported(let error):
+            throw error
+        }
+        let ref = accessory.characteristic(characteristic, service: service)
+        let kind = DeviceHomeView.ValueKind(format: ref?.metadata?.format)
+        if let why = DeviceWriteResolver.valueViolation(value, kind: kind, metadata: ref?.metadata) {
+            let current = ref?.valueDescription.map { "currently reads \($0)" } ?? "has no current reading"
+            throw PlannerError.invalidInput(
+                "Characteristic \(characteristic) on “\(accessory.name)” \(current) — "
+                    + "target \(value.rendered) rejected: \(why)."
+            )
+        }
+        if ref?.valueDescription == value.rendered {
+            throw PlannerError.noChange(
+                "“\(accessory.name)” \(characteristic) already reads \(value.rendered)."
+            )
+        }
+        let label = ref?.name ?? characteristic
+        let current = ref?.valueDescription ?? "unknown"
+        card.insert(ProposalCardLine(
+            .plain,
+            "\(accessory.name): \(label) \(current) → \(value.rendered)"
+        ), at: 0)
+        card.append(ProposalCardLine(
+            .note,
+            "⚠ Device-immediate — the value applies to the device the moment this is approved."
+        ))
+        let spec = SceneActionSpec(
+            accessoryId: accessory.id, service: service, characteristic: characteristic, value: value
+        )
+        return Plan(
+            tool: "write_characteristic",
+            title: "Set “\(accessory.name)” \(label) to \(value.rendered)",
+            summary: "Set “\(accessory.name)” \(label) to \(value.rendered) now",
+            isDestructive: false,
+            operations: [.writeCharacteristic(homeId: home.id, action: spec)],
+            entries: [ProposalDiffEntry(
+                object: ProposalObjectRef(kind: .accessory, id: accessory.id, name: accessory.name),
+                op: .update,
+                before: ref?.valueDescription,
+                after: value.rendered
+            )],
+            card: card
+        )
+    }
+
     // MARK: - Shared helpers
 
     private static func home(id: String, in graph: HomeGraph) throws -> HomeGraph.Home {
@@ -679,6 +1340,17 @@ public enum ProposalPlanner {
         throw PlannerError.unknownTrigger(id)
     }
 
+    private static func accessory(id: String, in graph: HomeGraph) throws -> (HomeGraph.Home, HomeGraph.Accessory) {
+        for home in graph.homes {
+            for room in home.rooms {
+                if let accessory = room.accessories.first(where: { $0.id == id }) {
+                    return (home, accessory)
+                }
+            }
+        }
+        throw PlannerError.invalidInput("No accessory with id \(id). Accessory ids come from get_rooms.")
+    }
+
     /// A trigger runs an existing scene (HomeKit binds an action set to a
     /// trigger); referencing one that does not exist in the same home is an
     /// eager-validation failure, never a staged surprise.
@@ -705,6 +1377,43 @@ public enum ProposalPlanner {
     private static func rejectDuplicate(kind: String, name: String, in names: [String], homeName: String) throws {
         if names.contains(where: { $0.caseInsensitiveCompare(name) == .orderedSame }) {
             throw PlannerError.duplicateName(kind: kind, name: name, home: homeName)
+        }
+    }
+
+    /// A human description of an event as it currently exists in the graph —
+    /// the "before" side of an event-trigger edit's diff.
+    private static func describe(event ref: HomeGraph.EventRef, accessoryName: String) -> String {
+        if ref.type.lowercased().contains("presence") {
+            switch ref.valueDescription?.lowercased() {
+            case "athome": return "someone arrives home"
+            case "away": return "everyone is away"
+            default: return "a presence change"
+            }
+        }
+        let characteristicName = ref.characteristicType ?? "a characteristic"
+        if let value = ref.valueDescription {
+            return "\(accessoryName) \(characteristicName) reaches \(value)"
+        }
+        return "\(accessoryName) \(characteristicName) changes"
+    }
+
+    private static let weekdayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+
+    private static func weekdayName(_ weekday: Int) -> String {
+        (1...7).contains(weekday) ? Self.weekdayNames[weekday - 1] : "day \(weekday)"
+    }
+
+    /// Event-trigger recurrences are days of the week (HomeKit honors only
+    /// the `weekday` component on HMEventTrigger) — the same rule the resolver
+    /// enforces at execution, stated eagerly so the agent fixes the request
+    /// before staging.
+    private static func validateEventTriggerRecurrences(_ recurrences: [[String: Int]]?) throws {
+        for components in recurrences ?? [] {
+            guard components.count == 1, let weekday = components["weekday"], (1...7).contains(weekday) else {
+                throw PlannerError.invalidInput(
+                    "Event-trigger recurrences are days of the week — one “weekday” component (1…7, 1 = Sunday) per entry."
+                )
+            }
         }
     }
 

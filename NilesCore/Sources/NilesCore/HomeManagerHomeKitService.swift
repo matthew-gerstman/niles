@@ -11,6 +11,7 @@ private typealias Scene = HomeGraph.Scene
 private typealias SceneAction = HomeGraph.SceneAction
 private typealias AccessoryService = HomeGraph.AccessoryService
 private typealias CharacteristicRef = HomeGraph.CharacteristicRef
+private typealias CharacteristicMetadata = HomeGraph.CharacteristicMetadata
 private typealias ServiceGroup = HomeGraph.ServiceGroup
 private typealias ServiceRef = HomeGraph.ServiceRef
 private typealias Trigger = HomeGraph.Trigger
@@ -32,7 +33,18 @@ public actor HomeManagerHomeKitService: HomeKitService {
 
     public func snapshot() async throws -> HomeGraph {
         try await waitForInitialLoad()
-        return HomeGraph(homes: manager.homes.map(Self.home(from:)))
+        var graph = HomeGraph(
+            homes: manager.homes.map(Self.home(from:)),
+            authorizationStatus: Self.authorizationStatusDescription(manager.authorizationStatus)
+        )
+        // Read depth: every characteristic's current value, read on demand
+        // per snapshot (spec group 3 — an agent that cannot see state
+        // cannot write safely). A failed read renders as nil, never as an
+        // error: an unreachable accessory keeps its shape in the graph;
+        // only its value is unknown.
+        let rendered = await Self.readCharacteristicValues(in: manager.homes)
+        Self.applyingValues(rendered, to: &graph)
+        return graph
     }
 
     /// `HMHomeManager` loads its home database asynchronously with no
@@ -62,6 +74,7 @@ public actor HomeManagerHomeKitService: HomeKitService {
         return Home(
             id: home.uniqueIdentifier.uuidString,
             name: home.name,
+            homeHubState: Self.hubStateDescription(home.homeHubState),
             rooms: home.rooms.map { Self.room(from: $0, zoneByRoom: zoneByRoom) },
             zones: home.zones.map(Self.zone(from:)),
             scenes: home.actionSets.map(Self.scene(from:)),
@@ -90,6 +103,10 @@ public actor HomeManagerHomeKitService: HomeKitService {
         Accessory(
             id: accessory.uniqueIdentifier.uuidString,
             name: accessory.name,
+            reachable: accessory.isReachable,
+            bridged: accessory.isBridged,
+            category: accessory.category.categoryType,
+            firmwareVersion: accessory.firmwareVersion,
             services: accessory.services.map(Self.accessoryService(from:))
         )
     }
@@ -107,7 +124,8 @@ public actor HomeManagerHomeKitService: HomeKitService {
         CharacteristicRef(
             id: characteristic.uniqueIdentifier.uuidString,
             type: characteristic.characteristicType,
-            name: characteristic.localizedDescription
+            name: characteristic.localizedDescription,
+            metadata: Self.characteristicMetadata(from: characteristic.metadata)
         )
     }
 
@@ -116,6 +134,7 @@ public actor HomeManagerHomeKitService: HomeKitService {
             id: actionSet.uniqueIdentifier.uuidString,
             name: actionSet.name,
             type: actionSet.actionSetType.isEmpty ? nil : actionSet.actionSetType,
+            lastExecutionDate: actionSet.lastExecutionDate,
             actions: actionSet.actions.compactMap(Self.sceneAction(from:))
         )
     }
@@ -166,6 +185,8 @@ public actor HomeManagerHomeKitService: HomeKitService {
             id: trigger.uniqueIdentifier.uuidString,
             name: trigger.name,
             isEnabled: trigger.isEnabled,
+            linkedSceneIds: trigger.actionSets.map { $0.uniqueIdentifier.uuidString },
+            triggerActivationState: (trigger as? HMEventTrigger).map { Int($0.triggerActivationState.rawValue) },
             detail: Self.detail(from: trigger)
         )
     }
@@ -233,6 +254,159 @@ public actor HomeManagerHomeKitService: HomeKitService {
             valueDescription: value.map(String.init(describing:))
         )
     }
+
+    // MARK: - Read-depth rendering (pure, unit-tested)
+
+    /// `HMHomeHubState` rendered as its JSON-friendly name. Unknown future
+    /// cases render as their debug name rather than a lie.
+    static func hubStateDescription(_ state: HMHomeHubState) -> String {
+        switch state {
+        case .notAvailable: return "notAvailable"
+        case .connected: return "connected"
+        case .disconnected: return "disconnected"
+        @unknown default: return String(describing: state)
+        }
+    }
+
+    /// `HMHomeManager.authorizationStatus` is an options mask, not an enum —
+    /// render every set bit; none set means "notDetermined".
+    static func authorizationStatusDescription(_ status: HMHomeManagerAuthorizationStatus) -> String {
+        var parts: [String] = []
+        if status.contains(.determined) { parts.append("determined") }
+        if status.contains(.restricted) { parts.append("restricted") }
+        if status.contains(.authorized) { parts.append("authorized") }
+        return parts.isEmpty ? "notDetermined" : parts.joined(separator: ",")
+    }
+
+    /// `HMEventTriggerActivationState` rendered as its JSON-friendly name.
+    static func activationStateDescription(_ state: HMEventTriggerActivationState) -> String {
+        switch state {
+        case .disabled: return "disabled"
+        case .disabledNoHomeHub: return "disabledNoHomeHub"
+        case .disabledNoCompatibleHomeHub: return "disabledNoCompatibleHomeHub"
+        case .disabledNoLocationServicesAuthorization: return "disabledNoLocationServicesAuthorization"
+        case .enabled: return "enabled"
+        // The imported Obj-C enum's rawValue init is non-failable, so any
+        // integer lands here for values the compiler doesn't know — render
+        // the number itself, matching the rawValue-based overload.
+        @unknown default: return String(state.rawValue)
+        }
+    }
+
+    /// Activation-state name by raw value (the graph stores the raw Int —
+    /// it may gain cases). Unknown raw values render as the number itself.
+    static func activationStateDescription(rawValue: Int) -> String {
+        guard let state = HMEventTriggerActivationState(rawValue: UInt(rawValue)) else {
+            return String(rawValue)
+        }
+        return activationStateDescription(state)
+    }
+
+    /// Pure metadata-mapping core. `HMCharacteristicMetadata`'s properties
+    /// are readonly with no populated public initializer, so unit tests
+    /// exercise this core with fixture values and the adapter below stays a
+    /// one-liner. Returns nil when the metadata carries nothing.
+    static func characteristicMetadata(
+        format: String?, units: String?, minimum: NSNumber?, maximum: NSNumber?,
+        step: NSNumber?, validValues: [NSNumber]?
+    ) -> HomeGraph.CharacteristicMetadata? {
+        let mapped = HomeGraph.CharacteristicMetadata(
+            format: format,
+            units: units,
+            minValue: minimum?.doubleValue,
+            maxValue: maximum?.doubleValue,
+            step: step?.doubleValue,
+            validValues: validValues?.map { $0.intValue }
+        )
+        let isEmpty = mapped.format == nil && mapped.units == nil
+            && mapped.minValue == nil && mapped.maxValue == nil
+            && mapped.step == nil && mapped.validValues == nil
+        return isEmpty ? nil : mapped
+    }
+
+    private static func characteristicMetadata(from metadata: HMCharacteristicMetadata?) -> CharacteristicMetadata? {
+        guard let metadata else { return nil }
+        return characteristicMetadata(
+            format: metadata.format,
+            units: metadata.units,
+            minimum: metadata.minimumValue,
+            maximum: metadata.maximumValue,
+            step: metadata.stepValue,
+            validValues: metadata.validValues
+        )
+    }
+
+    /// The one value-rendering rule for reads, shared with scene actions:
+    /// `String(describing:)` — NSNumber(30) renders "30", NSNumber(true)
+    /// "1", NSString its text. Nil means unknown, never a literal "nil".
+    static func valueDescription(from value: Any?) -> String? {
+        value.map(String.init(describing:))
+    }
+
+    // MARK: - On-demand characteristic reads
+
+    /// `HMCharacteristic` is not `Sendable`; reads are independent of every
+    /// other and only their rendered value leaves the group, so the
+    /// reference crosses the task boundary inside this box and nowhere else.
+    private struct CharacteristicReadTarget: @unchecked Sendable {
+        let characteristic: HMCharacteristic
+    }
+
+    /// One on-demand characteristic read. Nil on failure (unreachable
+    /// accessory, read not permitted) — the value is unknown, not an error.
+    private static func readCharacteristicValue(of target: CharacteristicReadTarget) async -> Any? {
+        await withCheckedContinuation { continuation in
+            target.characteristic.readValue { error in
+                continuation.resume(returning: error == nil ? target.characteristic.value : nil)
+            }
+        }
+    }
+
+    /// Reads every characteristic in the live homes concurrently and returns
+    /// the successfully-read values, rendered, keyed by characteristic id.
+    static func readCharacteristicValues(in homes: [HMHome]) async -> [String: String] {
+        let targets = homes
+            .flatMap(\.accessories)
+            .flatMap(\.services)
+            .flatMap(\.characteristics)
+            .map(CharacteristicReadTarget.init)
+        let read = await withTaskGroup(of: (String, String?).self) { group in
+            for target in targets {
+                group.addTask {
+                    let value = await Self.readCharacteristicValue(of: target)
+                    return (
+                        target.characteristic.uniqueIdentifier.uuidString,
+                        Self.valueDescription(from: value)
+                    )
+                }
+            }
+            return await group.reduce(into: [:] as [String: String?]) { $0[$1.0] = $1.1 }
+        }
+        var rendered: [String: String] = [:]
+        for (id, description) in read {
+            if let description { rendered[id] = description }
+        }
+        return rendered
+    }
+
+    /// Fills `valueDescription` into every characteristic the read covered.
+    /// Pure over the graph — unit-testable without HomeKit.
+    static func applyingValues(_ rendered: [String: String], to graph: inout HomeGraph) {
+        for h in graph.homes.indices {
+            for r in graph.homes[h].rooms.indices {
+                for a in graph.homes[h].rooms[r].accessories.indices {
+                    for s in graph.homes[h].rooms[r].accessories[a].services.indices {
+                        for c in graph.homes[h].rooms[r].accessories[a].services[s].characteristics.indices {
+                            let id = graph.homes[h].rooms[r].accessories[a].services[s].characteristics[c].id
+                            if let value = rendered[id] {
+                                graph.homes[h].rooms[r].accessories[a].services[s].characteristics[c].valueDescription = value
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 // MARK: - HomeKitWriting (device executor)
@@ -298,6 +472,20 @@ extension HomeManagerHomeKitService: HomeKitWriting {
             }
             return nil
 
+        case .createZone(let homeId, let name):
+            let home = try Self.home(homeId, in: homes)
+            return try await home.addZone(named: name).uniqueIdentifier.uuidString
+
+        case .renameZone(let homeId, let zoneId, let to):
+            let home = try Self.home(homeId, in: homes)
+            try await Self.updateName(try Self.zone(zoneId, in: home), to: to)
+            return nil
+
+        case .removeZone(let homeId, let zoneId):
+            let home = try Self.home(homeId, in: homes)
+            try await home.removeZone(try Self.zone(zoneId, in: home))
+            return nil
+
         case .createActionSet(let homeId, let name, let actions):
             let home = try Self.home(homeId, in: homes)
             let scene = try await home.addActionSet(named: name)
@@ -323,6 +511,21 @@ extension HomeManagerHomeKitService: HomeKitWriting {
             }
             return nil
 
+        case .renameActionSet(let homeId, let sceneId, let to):
+            let home = try Self.home(homeId, in: homes)
+            try await Self.updateName(try Self.actionSet(sceneId, in: home), to: to)
+            return nil
+
+        case .removeActionSet(let homeId, let sceneId):
+            let home = try Self.home(homeId, in: homes)
+            try await home.removeActionSet(try Self.actionSet(sceneId, in: home))
+            return nil
+
+        case .executeActionSet(let homeId, let sceneId):
+            let home = try Self.home(homeId, in: homes)
+            try await Self.execute(try Self.actionSet(sceneId, in: home), in: home)
+            return nil
+
         case .addServiceGroup(let homeId, let name):
             let home = try Self.home(homeId, in: homes)
             return try await home.addServiceGroup(named: name).uniqueIdentifier.uuidString
@@ -340,6 +543,11 @@ extension HomeManagerHomeKitService: HomeKitWriting {
             }
             return nil
 
+        case .renameServiceGroup(let homeId, let groupId, let to):
+            let home = try Self.home(homeId, in: homes)
+            try await Self.updateName(try Self.serviceGroup(groupId, in: home), to: to)
+            return nil
+
         case .removeServiceGroup(let homeId, let groupId):
             let home = try Self.home(homeId, in: homes)
             try await home.removeServiceGroup(try Self.serviceGroup(groupId, in: home))
@@ -354,14 +562,63 @@ extension HomeManagerHomeKitService: HomeKitWriting {
             try await Self.enforceBornDisabled(trigger)
             return trigger.uniqueIdentifier.uuidString
 
-        case .createEventTrigger(let homeId, let name, let events, let sceneId):
+        case .createEventTrigger(let homeId, let name, let events, let endEvents, let executeOnce, let sceneId):
             let home = try Self.home(homeId, in: homes)
+            // The creation initializer takes end events and recurrences;
+            // executeOnce is a post-add update (HomeKit disables the trigger
+            // after its first fire when set).
             let (hmEvents, predicate) = try Self.events(events, in: home)
-            let trigger = HMEventTrigger(name: name, events: hmEvents, predicate: predicate)
+            let (hmEndEvents, _) = try Self.events(endEvents, in: home)
+            let trigger = HMEventTrigger(
+                name: name, events: hmEvents, end: hmEndEvents.isEmpty ? nil : hmEndEvents,
+                recurrences: nil, predicate: predicate
+            )
             try await Self.add(trigger, to: home)
+            if executeOnce {
+                try await Self.updateExecuteOnce(trigger, to: true)
+            }
             try await Self.linkScene(sceneId, to: trigger, in: home)
             try await Self.enforceBornDisabled(trigger)
             return trigger.uniqueIdentifier.uuidString
+        case .updateEventTrigger(
+            let homeId, let triggerId, let events, let endEvents, let recurrences, let executeOnce, let sceneId
+        ):
+            let home = try Self.home(homeId, in: homes)
+            let trigger = try Self.trigger(triggerId, in: home)
+            guard let eventTrigger = trigger as? HMEventTrigger else {
+                throw HomeKitWriteError.invalidOperation(
+                    "Trigger \(trigger.name) is not an event trigger; it has no events to edit."
+                )
+            }
+            // The event list is declarative: replace everything, and
+            // re-derive the predicate the same way creation does (presence
+            // events imply the presence predicate; characteristic events run
+            // unpredicated).
+            let (hmEvents, predicate) = try Self.events(events, in: home)
+            try await Self.updateEvents(eventTrigger, to: hmEvents)
+            try await Self.updatePredicate(eventTrigger, to: predicate)
+            if let endEvents {
+                let (hmEndEvents, _) = try Self.events(endEvents, in: home)
+                try await Self.updateEndEvents(eventTrigger, to: hmEndEvents)
+            }
+            if let recurrences {
+                try await Self.updateRecurrences(eventTrigger, to: recurrences)
+            }
+            if let executeOnce {
+                try await Self.updateExecuteOnce(eventTrigger, to: executeOnce)
+            }
+            if let sceneId {
+                // Relinking is explicit: replace the registered action sets
+                // with the named scene. An omitted sceneId leaves the links
+                // untouched.
+                for actionSet in eventTrigger.actionSets {
+                    try await Self.remove(actionSet, from: eventTrigger)
+                }
+                try await Self.linkScene(sceneId, to: eventTrigger, in: home)
+            }
+            // The create/arm firewall: nothing above touches isEnabled — an
+            // edited trigger keeps its current armed state.
+            return nil
 
         case .setTriggerEnabled(let homeId, let triggerId, let enabled):
             let home = try Self.home(homeId, in: homes)
@@ -398,6 +655,43 @@ extension HomeManagerHomeKitService: HomeKitWriting {
             let home = try Self.home(homeId, in: homes)
             try await home.removeTrigger(try Self.trigger(triggerId, in: home))
             return nil
+
+        case .renameAccessory(let homeId, let accessoryId, let to):
+            let home = try Self.home(homeId, in: homes)
+            try await Self.updateName(try Self.accessory(accessoryId, in: home), to: to)
+            return nil
+
+        case .identifyAccessory(let homeId, let accessoryId):
+            let home = try Self.home(homeId, in: homes)
+            try await Self.identify(try Self.accessory(accessoryId, in: home))
+            return nil
+
+        case .assignAccessoryToRoom(let homeId, let accessoryId, let roomId):
+            let home = try Self.home(homeId, in: homes)
+            try await Self.assign(
+                try Self.accessory(accessoryId, in: home),
+                to: try Self.room(roomId, in: home),
+                in: home
+            )
+            return nil
+
+        case .unblockAccessory(let homeId, let accessoryId):
+            let home = try Self.home(homeId, in: homes)
+            try await Self.unblock(try Self.accessory(accessoryId, in: home), in: home)
+            return nil
+
+        case .removeAccessory(let homeId, let accessoryId):
+            let home = try Self.home(homeId, in: homes)
+            try await Self.remove(try Self.accessory(accessoryId, in: home), from: home)
+            return nil
+
+        case .writeCharacteristic(let homeId, let resolved):
+            let home = try Self.home(homeId, in: homes)
+            let characteristic = try Self.characteristic(resolved.characteristicId, in: home)
+            try await Self.write(
+                resolved.value, kind: resolved.kind, to: characteristic, named: resolved.characteristicType
+            )
+            return nil
         }
     }
 
@@ -421,33 +715,39 @@ extension HomeManagerHomeKitService: HomeKitWriting {
     /// way the read side enumerates specializations back out.
     private static func writeAction(for resolved: ResolvedAction, in home: HMHome) throws -> HMAction {
         let characteristic = try Self.characteristic(resolved.characteristicId, in: home)
-        switch (resolved.kind, resolved.value) {
-        case (.string, .string(let string)):
-            return HMCharacteristicWriteAction<NSString>(
-                characteristic: characteristic, targetValue: string as NSString
-            )
-        case (.number, .bool(let value)):
-            return HMCharacteristicWriteAction<NSNumber>(characteristic: characteristic, targetValue: NSNumber(value: value))
-        case (.number, .int(let value)):
-            return HMCharacteristicWriteAction<NSNumber>(characteristic: characteristic, targetValue: NSNumber(value: value))
-        case (.number, .double(let value)):
-            return HMCharacteristicWriteAction<NSNumber>(characteristic: characteristic, targetValue: NSNumber(value: value))
-        case (.unknown, .string(let string)):
-            // No metadata to consult — render a string value as a string.
-            return HMCharacteristicWriteAction<NSString>(
-                characteristic: characteristic, targetValue: string as NSString
-            )
-        case (.unknown, .bool(let value)):
-            return HMCharacteristicWriteAction<NSNumber>(characteristic: characteristic, targetValue: NSNumber(value: value))
-        case (.unknown, .int(let value)):
-            return HMCharacteristicWriteAction<NSNumber>(characteristic: characteristic, targetValue: NSNumber(value: value))
-        case (.unknown, .double(let value)):
-            return HMCharacteristicWriteAction<NSNumber>(characteristic: characteristic, targetValue: NSNumber(value: value))
+        switch try Self.cocoaValue(resolved.value, kind: resolved.kind, characteristicType: resolved.characteristicType) {
+        case .number(let number):
+            return HMCharacteristicWriteAction<NSNumber>(characteristic: characteristic, targetValue: number)
+        case .string(let string):
+            return HMCharacteristicWriteAction<NSString>(characteristic: characteristic, targetValue: string)
+        }
+    }
+
+    /// The concrete Cocoa value a characteristic write hands HomeKit —
+    /// NSNumber for the number family, NSString for strings. One rendering
+    /// rule for scene-action targets and direct writes alike.
+    private enum CocoaWriteValue {
+        case number(NSNumber)
+        case string(NSString)
+    }
+
+    private static func cocoaValue(
+        _ value: HomeKitValue, kind: DeviceHomeView.ValueKind, characteristicType: String
+    ) throws -> CocoaWriteValue {
+        switch (kind, value) {
+        case (.string, .string(let string)): .string(string as NSString)
+        case (.number, .bool(let value)): .number(NSNumber(value: value))
+        case (.number, .int(let value)): .number(NSNumber(value: value))
+        case (.number, .double(let value)): .number(NSNumber(value: value))
+        case (.unknown, .string(let string)): .string(string as NSString)
+        case (.unknown, .bool(let value)): .number(NSNumber(value: value))
+        case (.unknown, .int(let value)): .number(NSNumber(value: value))
+        case (.unknown, .double(let value)): .number(NSNumber(value: value))
         case (_, let wrong):
             // The resolver pre-checks this; a drift between resolve and run
             // must not send a wrong-typed value into HomeKit.
             throw HomeKitWriteError.invalidOperation(
-                "Characteristic \(resolved.characteristicType) cannot take the value \(wrong.rendered)."
+                "Characteristic \(characteristicType) cannot take the value \(wrong.rendered)."
             )
         }
     }
@@ -557,6 +857,13 @@ extension HomeManagerHomeKitService: HomeKitWriting {
         return trigger
     }
 
+    private static func accessory(_ id: String, in home: HMHome) throws -> HMAccessory {
+        guard let accessory = home.accessories.first(where: { $0.uniqueIdentifier.uuidString == id }) else {
+            throw HomeKitWriteError.objectMissing("No accessory \(id).")
+        }
+        return accessory
+    }
+
     private static func service(_ id: String, in home: HMHome) throws -> HMService {
         for accessory in home.accessories {
             if let service = accessory.services.first(where: { $0.uniqueIdentifier.uuidString == id }) {
@@ -637,7 +944,8 @@ extension HomeManagerHomeKitService: HomeKitWriting {
                                         id: characteristic.uniqueIdentifier.uuidString,
                                         type: characteristic.characteristicType,
                                         name: characteristic.localizedDescription,
-                                        kind: Self.valueKind(from: characteristic.metadata?.format)
+                                        kind: DeviceHomeView.ValueKind(format: characteristic.metadata?.format),
+                                        metadata: Self.characteristicMetadata(from: characteristic.metadata)
                                     )
                                 }
                             )
@@ -648,27 +956,107 @@ extension HomeManagerHomeKitService: HomeKitWriting {
         })
     }
 
-    private static func valueKind(from format: String?) -> DeviceHomeView.ValueKind {
-        guard let format else { return .unknown }
-        if format == HMCharacteristicMetadataFormatString { return .string }
-        if format == HMCharacteristicMetadataFormatBool
-            || format == HMCharacteristicMetadataFormatInt
-            || format == HMCharacteristicMetadataFormatFloat
-            || format == HMCharacteristicMetadataFormatUInt8
-            || format == HMCharacteristicMetadataFormatUInt16
-            || format == HMCharacteristicMetadataFormatUInt32
-            || format == HMCharacteristicMetadataFormatUInt64 {
-            return .number
-        }
-        return .unknown
-    }
-
     // MARK: - Continuation shell (no logic)
 
     private static func updateName(_ room: HMRoom, to name: String) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             room.updateName(name) { error in
                 if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            }
+        }
+    }
+
+    private static func updateName(_ actionSet: HMActionSet, to name: String) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            actionSet.updateName(name) { error in
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            }
+        }
+    }
+
+    private static func updateName(_ zone: HMZone, to name: String) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            zone.updateName(name) { error in
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            }
+        }
+    }
+
+    private static func updateName(_ accessory: HMAccessory, to name: String) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            accessory.updateName(name) { error in
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            }
+        }
+    }
+
+    private static func updateName(_ group: HMServiceGroup, to name: String) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            group.updateName(name) { error in
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            }
+        }
+    }
+
+    private static func identify(_ accessory: HMAccessory) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            accessory.identify { error in
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            }
+        }
+    }
+
+    // Unblocking is a home-level operation — HMAccessory has no unblock API.
+    private static func unblock(_ accessory: HMAccessory, in home: HMHome) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            home.unblockAccessory(accessory) { error in
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            }
+        }
+    }
+
+    private static func assign(_ accessory: HMAccessory, to room: HMRoom, in home: HMHome) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            home.assignAccessory(accessory, to: room) { error in
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            }
+        }
+    }
+
+    private static func remove(_ accessory: HMAccessory, from home: HMHome) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            home.removeAccessory(accessory) { error in
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            }
+        }
+    }
+
+    private static func execute(_ actionSet: HMActionSet, in home: HMHome) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            home.executeActionSet(actionSet) { error in
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            }
+        }
+    }
+
+    /// A direct characteristic write — `HMCharacteristic.writeValue` with the
+    /// value rendered the way the metadata declares (the same rule
+    /// scene-action targets go through).
+    private static func write(
+        _ value: HomeKitValue, kind: DeviceHomeView.ValueKind, to characteristic: HMCharacteristic, named type: String
+    ) async throws {
+        switch try cocoaValue(value, kind: kind, characteristicType: type) {
+        case .number(let number):
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                characteristic.writeValue(number) { error in
+                    if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+                }
+            }
+        case .string(let string):
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                characteristic.writeValue(string) { error in
+                    if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+                }
             }
         }
     }
@@ -740,6 +1128,54 @@ extension HomeManagerHomeKitService: HomeKitWriting {
     private static func remove(_ trigger: HMTrigger, from home: HMHome) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             home.removeTrigger(trigger) { error in
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            }
+        }
+    }
+
+    private static func updateEvents(_ trigger: HMEventTrigger, to events: [HMEvent]) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            trigger.updateEvents(events) { error in
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            }
+        }
+    }
+
+    private static func updateEndEvents(_ trigger: HMEventTrigger, to endEvents: [HMEvent]) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            trigger.updateEndEvents(endEvents) { error in
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            }
+        }
+    }
+
+    private static func updatePredicate(_ trigger: HMEventTrigger, to predicate: NSPredicate?) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            trigger.updatePredicate(predicate) { error in
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            }
+        }
+    }
+
+    private static func updateRecurrences(_ trigger: HMEventTrigger, to recurrences: [DateComponents]) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            trigger.updateRecurrences(recurrences) { error in
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            }
+        }
+    }
+
+    private static func updateExecuteOnce(_ trigger: HMEventTrigger, to executeOnce: Bool) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            trigger.updateExecuteOnce(executeOnce) { error in
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            }
+        }
+    }
+
+    private static func remove(_ actionSet: HMActionSet, from trigger: HMTrigger) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            trigger.removeActionSet(actionSet) { error in
                 if let error { continuation.resume(throwing: error) } else { continuation.resume() }
             }
         }

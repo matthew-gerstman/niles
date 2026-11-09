@@ -11,17 +11,38 @@ public enum WriteRequest: Sendable, Equatable {
     case renameRoom(roomId: String, name: String)
     case deleteRoom(roomId: String)
     case setZoneRooms(zoneId: String, roomIds: [String])
+    case createZone(homeId: String, name: String)
+    case renameZone(zoneId: String, name: String)
+    case deleteZone(zoneId: String)
     case createScene(homeId: String, name: String, actions: [SceneActionSpec])
     case setSceneActions(sceneId: String, actions: [SceneActionSpec])
+    case renameScene(sceneId: String, name: String)
+    case deleteScene(sceneId: String, deleteLinkedTriggers: Bool)
+    case executeScene(sceneId: String)
     case createServiceGroup(homeId: String, name: String)
+    case renameServiceGroup(groupId: String, name: String)
     case setServiceGroupMembers(groupId: String, serviceIds: [String])
     case deleteServiceGroup(groupId: String)
     case createTimerTrigger(
         homeId: String, name: String, fireDate: Date, recurrence: [String: Int]?, sceneId: String?
     )
-    case createEventTrigger(homeId: String, name: String, events: [TriggerEventSpec], sceneId: String?)
+    case createEventTrigger(
+        homeId: String, name: String, events: [TriggerEventSpec], endEvents: [TriggerEventSpec],
+        executeOnce: Bool, sceneId: String?
+    )
+    case updateEventTrigger(
+        triggerId: String, events: [TriggerEventSpec], endEvents: [TriggerEventSpec]?,
+        recurrences: [[String: Int]]?, executeOnce: Bool?, sceneId: String?
+    )
     case setTriggerState(triggerId: String, enabled: Bool, fireDate: Date?, recurrence: [String: Int]?)
     case deleteTrigger(triggerId: String)
+    case renameAccessory(accessoryId: String, name: String)
+    case identifyAccessory(accessoryId: String)
+    case assignAccessoryToRoom(accessoryId: String, roomId: String)
+    case unblockAccessory(accessoryId: String)
+    case removeAccessory(accessoryId: String)
+    /// A direct characteristic write, staged as a device-immediate proposal.
+    case writeCharacteristic(accessoryId: String, service: String?, characteristic: String, value: HomeKitValue)
 
     public static func parse(tool: String, arguments: [String: MCP.Value]?) throws -> WriteRequest {
         let args = Args(arguments)
@@ -34,6 +55,12 @@ public enum WriteRequest: Sendable, Equatable {
             return .deleteRoom(roomId: try args.string("roomId"))
         case "set_zone_rooms":
             return .setZoneRooms(zoneId: try args.string("zoneId"), roomIds: try args.stringArray("roomIds"))
+        case "create_zone":
+            return .createZone(homeId: try args.string("homeId"), name: try args.string("name"))
+        case "rename_zone":
+            return .renameZone(zoneId: try args.string("zoneId"), name: try args.string("name"))
+        case "delete_zone":
+            return .deleteZone(zoneId: try args.string("zoneId"))
         case "create_scene":
             return .createScene(
                 homeId: try args.string("homeId"),
@@ -42,8 +69,19 @@ public enum WriteRequest: Sendable, Equatable {
             )
         case "set_scene_actions":
             return .setSceneActions(sceneId: try args.string("sceneId"), actions: try args.actionArray("actions"))
+        case "rename_scene":
+            return .renameScene(sceneId: try args.string("sceneId"), name: try args.string("name"))
+        case "delete_scene":
+            return .deleteScene(
+                sceneId: try args.string("sceneId"),
+                deleteLinkedTriggers: try args.optionalBool("deleteLinkedTriggers") ?? false
+            )
+        case "execute_scene":
+            return .executeScene(sceneId: try args.string("sceneId"))
         case "create_service_group":
             return .createServiceGroup(homeId: try args.string("homeId"), name: try args.string("name"))
+        case "rename_service_group":
+            return .renameServiceGroup(groupId: try args.string("groupId"), name: try args.string("name"))
         case "set_service_group_members":
             return .setServiceGroupMembers(
                 groupId: try args.string("groupId"),
@@ -64,6 +102,17 @@ public enum WriteRequest: Sendable, Equatable {
                 homeId: try args.string("homeId"),
                 name: try args.string("name"),
                 events: try args.eventArray("events"),
+                endEvents: try args.optionalEventArray("endEvents") ?? [],
+                executeOnce: try args.optionalBool("executeOnce") ?? false,
+                sceneId: try args.optionalString("sceneId")
+            )
+        case "update_event_trigger":
+            return .updateEventTrigger(
+                triggerId: try args.string("triggerId"),
+                events: try args.eventArray("events"),
+                endEvents: try args.optionalEventArray("endEvents"),
+                recurrences: try args.optionalRecurrenceArray("recurrences"),
+                executeOnce: try args.optionalBool("executeOnce"),
                 sceneId: try args.optionalString("sceneId")
             )
         case "set_trigger_state":
@@ -75,6 +124,26 @@ public enum WriteRequest: Sendable, Equatable {
             )
         case "delete_trigger":
             return .deleteTrigger(triggerId: try args.string("triggerId"))
+        case "rename_accessory":
+            return .renameAccessory(accessoryId: try args.string("accessoryId"), name: try args.string("name"))
+        case "identify_accessory":
+            return .identifyAccessory(accessoryId: try args.string("accessoryId"))
+        case "assign_accessory_to_room":
+            return .assignAccessoryToRoom(
+                accessoryId: try args.string("accessoryId"),
+                roomId: try args.string("roomId")
+            )
+        case "unblock_accessory":
+            return .unblockAccessory(accessoryId: try args.string("accessoryId"))
+        case "remove_accessory":
+            return .removeAccessory(accessoryId: try args.string("accessoryId"))
+        case "write_characteristic":
+            return .writeCharacteristic(
+                accessoryId: try args.string("accessoryId"),
+                service: try args.optionalString("service"),
+                characteristic: try args.string("characteristic"),
+                value: try args.value("value")
+            )
         default:
             throw ProposalStoreError.unknownTool(tool)
         }
@@ -124,6 +193,23 @@ private struct Args {
         return string.isEmpty ? nil : string
     }
 
+    /// A HomeKit value argument — a number, string, or boolean.
+    func value(_ name: String) throws -> HomeKitValue {
+        guard let parsed = Self.homeKitValue(raw?[name]) else {
+            throw ProposalStoreError.invalidArguments("Argument “\(name)” must be a number, string, or boolean.")
+        }
+        return parsed
+    }
+
+    /// An optional boolean flag; absent means false.
+    func optionalBool(_ name: String) throws -> Bool? {
+        guard let value = raw?[name] else { return nil }
+        guard case .bool(let bool) = value else {
+            throw ProposalStoreError.invalidArguments("Argument “\(name)” must be a boolean.")
+        }
+        return bool
+    }
+
     func bool(_ name: String) throws -> Bool {
         guard let value = raw?[name] else {
             throw ProposalStoreError.invalidArguments("Missing required argument “\(name)”.")
@@ -158,6 +244,14 @@ private struct Args {
     /// instead of staging a recurrence that silently never matches.
     func optionalRecurrence(_ name: String) throws -> [String: Int]? {
         guard let value = raw?[name] else { return nil }
+        return try recurrence(value, at: name)
+    }
+
+    /// One date-components object, e.g. `{"hour": 7, "minute": 30}` — the
+    /// same shape `get_triggers` renders. Component names are HomeKit's date
+    /// components; unknown names are rejected so agents fix the request
+    /// instead of staging a recurrence that silently never matches.
+    private func recurrence(_ value: MCP.Value, at name: String) throws -> [String: Int] {
         guard let object = value.objectValue else {
             throw ProposalStoreError.invalidArguments(
                 "Argument “\(name)” must be an object of date components, e.g. {\"hour\": 7, \"minute\": 30}."
@@ -178,6 +272,28 @@ private struct Args {
             components[key] = int
         }
         return components
+    }
+
+    /// An optional array of day-of-week recurrences for event triggers —
+    /// e.g. `[\{"weekday": 1\}]`. Shape validation happens here; the
+    /// weekday-only rule is enforced where the write is resolved (event
+    /// triggers recur weekly, not daily).
+    func optionalRecurrenceArray(_ name: String) throws -> [[String: Int]]? {
+        guard let value = raw?[name] else { return nil }
+        guard let array = value.arrayValue else {
+            throw ProposalStoreError.invalidArguments(
+                "Argument “\(name)” must be an array of date components, e.g. [{\"weekday\": 1}]."
+            )
+        }
+        return try array.enumerated().map { index, element in
+            try recurrence(element, at: "\(name)[\(index)]")
+        }
+    }
+
+    /// An optional array of trigger events; absent means "leave unchanged".
+    func optionalEventArray(_ name: String) throws -> [TriggerEventSpec]? {
+        guard raw?[name] != nil else { return nil }
+        return try eventArray(name)
     }
 
     func eventArray(_ name: String) throws -> [TriggerEventSpec] {
@@ -267,19 +383,8 @@ private struct Args {
             throw ProposalStoreError.invalidArguments(prefix + "characteristic is required (string).")
         }
         let service = object["service"]?.stringValue
-        guard let rawValue = object["value"] else {
-            throw ProposalStoreError.invalidArguments(prefix + "value is required.")
-        }
-        let value: HomeKitValue
-        switch rawValue {
-        case .bool(let bool): value = .bool(bool)
-        case .int(let int): value = .int(int)
-        case .double(let double): value = .double(double)
-        case .string(let string): value = .string(string)
-        case .null, .data, .array, .object:
-            throw ProposalStoreError.invalidArguments(
-                prefix + "value must be a number, string, or boolean."
-            )
+        guard let value = Self.homeKitValue(object["value"]) else {
+            throw ProposalStoreError.invalidArguments(prefix + "value must be a number, string, or boolean.")
         }
         return SceneActionSpec(
             accessoryId: accessoryId,
@@ -287,5 +392,17 @@ private struct Args {
             characteristic: characteristic,
             value: value
         )
+    }
+
+    /// The typed value behind an MCP scalar — nil for anything a
+    /// characteristic cannot take (null, data, array, object).
+    private static func homeKitValue(_ raw: MCP.Value?) -> HomeKitValue? {
+        switch raw {
+        case .bool(let bool): .bool(bool)
+        case .int(let int): .int(int)
+        case .double(let double): .double(double)
+        case .string(let string): .string(string)
+        case .none, .null, .data, .array, .object: nil
+        }
     }
 }

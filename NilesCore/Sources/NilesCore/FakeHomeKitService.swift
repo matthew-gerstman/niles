@@ -75,6 +75,32 @@ public actor FakeHomeKitService: HomeKitWriting {
             }
             return nil
 
+        case .createZone(let homeId, let name):
+            let h = try indexOfHome(id: homeId)
+            guard !graph.homes[h].zones.contains(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) else {
+                throw HomeKitWriteError.duplicateName("Home already has a zone named “\(name)”.")
+            }
+            let id = nextId(prefix: "zone", existing: graph.homes[h].zones.map(\.id))
+            graph.homes[h].zones.append(HomeGraph.Zone(id: id, name: name))
+            return id
+
+        case .renameZone(_, let zoneId, let to):
+            let (h, z) = try indexOfZone(id: zoneId)
+            // Zone names are unique within a home; the new name cannot
+            // collide with another zone — this one included.
+            if graph.homes[h].zones.contains(where: { $0.id != zoneId && $0.name.caseInsensitiveCompare(to) == .orderedSame }) {
+                throw HomeKitWriteError.duplicateName("Home already has a zone named “\(to)”.")
+            }
+            graph.homes[h].zones[z].name = to
+            return nil
+
+        case .removeZone(_, let zoneId):
+            let (h, z) = try indexOfZone(id: zoneId)
+            // HomeKit's observable behavior: rooms survive untouched — a
+            // zone is only a grouping over them.
+            graph.homes[h].zones.remove(at: z)
+            return nil
+
         case .addActionSet(_, let name, let actions):
             let h = try indexOfHome(havingSceneNamed: name)
             let id = nextId(prefix: "scene", existing: graph.homes[h].scenes.map(\.id))
@@ -89,6 +115,40 @@ public actor FakeHomeKitService: HomeKitWriting {
             for spec in add where !current.contains(SceneActionKey(spec: spec)) {
                 graph.homes[h].scenes[s].actions.append(action(from: spec))
             }
+            return nil
+
+        case .renameActionSet(_, let sceneId, let to):
+            let (h, s) = try indexOfScene(id: sceneId)
+            // Duplicate scene names are rejected the way HomeKit's are,
+            // across all homes — the renamed scene cannot collide with another.
+            if graph.homes.contains(where: {
+                $0.scenes.contains { $0.id != sceneId && $0.name.caseInsensitiveCompare(to) == .orderedSame }
+            }) {
+                throw HomeKitWriteError.duplicateName("Home already has a scene named “\(to)”.")
+            }
+            graph.homes[h].scenes[s].name = to
+            return nil
+
+        case .removeActionSet(_, let sceneId):
+            let (h, s) = try indexOfScene(id: sceneId)
+            graph.homes[h].scenes.remove(at: s)
+            // HomeKit detaches a removed action set from every trigger;
+            // the fake mirrors that observable behavior.
+            for t in graph.homes[h].triggers.indices {
+                graph.homes[h].triggers[t].linkedSceneIds.removeAll { $0 == sceneId }
+            }
+            return nil
+
+        case .executeActionSet(_, let sceneId):
+            let (h, s) = try indexOfScene(id: sceneId)
+            guard !graph.homes[h].scenes[s].actions.isEmpty else {
+                throw HomeKitWriteError.invalidOperation(
+                    "Scene “\(graph.homes[h].scenes[s].name)” has no actions — HomeKit refuses to execute an empty scene."
+                )
+            }
+            // HomeKit stamps lastExecutionDate when a scene runs; the fake
+            // mirrors that observable effect so read-back can see the run.
+            graph.homes[h].scenes[s].lastExecutionDate = Date()
             return nil
 
         case .addServiceGroup(_, let name):
@@ -116,33 +176,84 @@ public actor FakeHomeKitService: HomeKitWriting {
             }
             return nil
 
+        case .renameServiceGroup(_, let groupId, let to):
+            let (h, g) = try indexOfServiceGroup(id: groupId)
+            // Group names are unique within a home; the new name cannot
+            // collide with another group — this one included.
+            if graph.homes[h].serviceGroups.contains(where: { $0.id != groupId && $0.name.caseInsensitiveCompare(to) == .orderedSame }) {
+                throw HomeKitWriteError.duplicateName("Home already has a service group named “\(to)”.")
+            }
+            graph.homes[h].serviceGroups[g].name = to
+            return nil
+
         case .removeServiceGroup(_, let groupId):
             let (h, g) = try indexOfServiceGroup(id: groupId)
             graph.homes[h].serviceGroups.remove(at: g)
             return nil
 
-        case .addTimerTrigger(let homeId, let name, let fireDate, let recurrence, _):
+        case .addTimerTrigger(let homeId, let name, let fireDate, let recurrence, let sceneId):
             let h = try indexOfHome(id: homeId)
             let id = nextId(prefix: "trigger", existing: graph.homes[h].triggers.map(\.id))
             // Locked rule: triggers are born disabled, whatever the plan said.
             graph.homes[h].triggers.append(
-                HomeGraph.Trigger(id: id, name: name, isEnabled: false, detail: .timer(fireDate: fireDate, recurrence: recurrence))
+                HomeGraph.Trigger(
+                    id: id, name: name, isEnabled: false,
+                    linkedSceneIds: sceneId.map { [$0] } ?? [],
+                    detail: .timer(fireDate: fireDate, recurrence: recurrence)
+                )
             )
             return id
 
-        case .addEventTrigger(let homeId, let name, let events, _):
+        case .addEventTrigger(let homeId, let name, let events, _, _, let sceneId):
+            // endEvents and executeOnce are executed by the device but not
+            // yet graph-observable — the read side's trigger detail carries
+            // events and predicate only.
             let h = try indexOfHome(id: homeId)
             let id = nextId(prefix: "trigger", existing: graph.homes[h].triggers.map(\.id))
             graph.homes[h].triggers.append(
                 HomeGraph.Trigger(
                     id: id, name: name, isEnabled: false,
+                    linkedSceneIds: sceneId.map { [$0] } ?? [],
                     detail: .event(events: events.map(Self.eventRef(from:)), predicate: Self.predicateDescription(events))
                 )
             )
             return id
 
+        case .updateEventTrigger(_, let triggerId, let events, _, _, _, let sceneId):
+            let (h, t) = try indexOfTrigger(id: triggerId)
+            guard case .event = graph.homes[h].triggers[t].detail else {
+                throw HomeKitWriteError.invalidOperation(
+                    "Trigger \(graph.homes[h].triggers[t].name) is not an event trigger; it has no events to edit."
+                )
+            }
+            if let sceneId {
+                _ = try indexOfScene(id: sceneId)
+            }
+            // Declarative replacement, mirroring the device executor: events
+            // swap wholesale and the predicate follows them. endEvents,
+            // recurrences, and executeOnce are not yet graph-observable (the
+            // read side doesn't surface them); the fake records what reads
+            // show. The create/arm firewall: isEnabled is never touched here.
+            graph.homes[h].triggers[t].detail = .event(
+                events: events.map(Self.eventRef(from:)),
+                predicate: Self.predicateDescription(events)
+            )
+            if let sceneId {
+                graph.homes[h].triggers[t].linkedSceneIds = [sceneId]
+            }
+            return nil
+
         case .setTriggerEnabled(_, let triggerId, let enabled):
             let (h, t) = try indexOfTrigger(id: triggerId)
+            // Device law mirrored: HomeKit refuses to enable a trigger with
+            // no registered action sets (HMError "No registered action sets
+            // for trigger") — an automation that runs nothing cannot arm.
+            // Disabling is always allowed.
+            if enabled, graph.homes[h].triggers[t].linkedSceneIds.isEmpty {
+                throw HomeKitWriteError.invalidOperation(
+                    "Trigger “\(graph.homes[h].triggers[t].name)” has no action sets — HomeKit cannot enable an automation that runs nothing."
+                )
+            }
             graph.homes[h].triggers[t].isEnabled = enabled
             return nil
 
@@ -160,7 +271,106 @@ public actor FakeHomeKitService: HomeKitWriting {
             let (h, t) = try indexOfTrigger(id: triggerId)
             graph.homes[h].triggers.remove(at: t)
             return nil
+
+        case .renameAccessory(_, let accessoryId, let to):
+            let (h, r, a) = try indexOfAccessory(id: accessoryId)
+            graph.homes[h].rooms[r].accessories[a].name = to
+            return nil
+
+        case .identifyAccessory(_, let accessoryId):
+            let (h, r, a) = try indexOfAccessory(id: accessoryId)
+            // Mirror the live adapter: an accessory without an Identify
+            // characteristic cannot be identified (HMError).
+            if graph.homes[h].rooms[r].accessories[a].supportsIdentify == false {
+                throw HomeKitWriteError.invalidOperation(
+                    "Accessory “\(graph.homes[h].rooms[r].accessories[a].name)” does not support identify."
+                )
+            }
+            // Identify flashes or beeps the physical device — nothing in the
+            // graph changes; the evidence read-back confirms presence.
+            return nil
+
+        case .assignAccessoryToRoom(_, let accessoryId, let roomId):
+            let (h, r, a) = try indexOfAccessory(id: accessoryId)
+            guard graph.homes[h].rooms.contains(where: { $0.id == roomId }), roomId != graph.homes[h].rooms[r].id else {
+                throw HomeKitWriteError.objectMissing("No room \(roomId).")
+            }
+            let accessory = graph.homes[h].rooms[r].accessories.remove(at: a)
+            let target = graph.homes[h].rooms.firstIndex(where: { $0.id == roomId })!
+            graph.homes[h].rooms[target].accessories.append(accessory)
+            return nil
+
+        case .unblockAccessory(_, let accessoryId):
+            // Blocked state is not modeled in the graph; existence is the
+            // only observable check, matching the resolver.
+            _ = try indexOfAccessory(id: accessoryId)
+            return nil
+
+        case .removeAccessory(_, let accessoryId):
+            let (h, r, a) = try indexOfAccessory(id: accessoryId)
+            _ = graph.homes[h].rooms[r].accessories.remove(at: a)
+            // HomeKit detaches everything the accessory participated in;
+            // the fake mirrors that observable behavior. ServiceRefs carry
+            // the accessory id, so detach by attribution like scenes/events.
+            for g in graph.homes[h].serviceGroups.indices {
+                graph.homes[h].serviceGroups[g].services.removeAll { $0.accessoryId == accessoryId }
+            }
+            for s in graph.homes[h].scenes.indices {
+                graph.homes[h].scenes[s].actions.removeAll { $0.accessoryId == accessoryId }
+            }
+            for t in graph.homes[h].triggers.indices {
+                if case .event(let events, let predicate) = graph.homes[h].triggers[t].detail {
+                    let remaining = events.filter { $0.accessoryId != accessoryId }
+                    graph.homes[h].triggers[t].detail = .event(events: remaining, predicate: predicate)
+                }
+            }
+            return nil
+
+        case .writeCharacteristic(_, let spec):
+            let (h, r, a, s, c) = try indexOfCharacteristic(
+                accessoryId: spec.accessoryId, service: spec.service, characteristic: spec.characteristic
+            )
+            let ref = graph.homes[h].rooms[r].accessories[a].services[s].characteristics[c]
+            // The same value check the device executor runs at resolution —
+            // the fake mirrors HomeKit's rejection of values that do not
+            // fit the declared metadata.
+            let kind = DeviceHomeView.ValueKind(format: ref.metadata?.format)
+            if let why = DeviceWriteResolver.valueViolation(spec.value, kind: kind, metadata: ref.metadata) {
+                throw HomeKitWriteError.invalidOperation(
+                    "Characteristic \(spec.characteristic) rejects \(spec.value.rendered): \(why)."
+                )
+            }
+            // HomeKit updates the characteristic's stored value on write —
+            // the fake mirrors that observable: the next read sees the
+            // written value, which the evidence read-back confirms.
+            graph.homes[h].rooms[r].accessories[a].services[s].characteristics[c].valueDescription = spec.value.rendered
+            return nil
         }
+    }
+
+    /// The characteristic a direct write targets, resolved with the shared
+    /// name-or-UUID rule (accessory -> service -> characteristic); the
+    /// indexes route the graph mutation.
+    private func indexOfCharacteristic(
+        accessoryId: String, service wanted: String?, characteristic name: String
+    ) throws -> (home: Int, room: Int, accessory: Int, service: Int, characteristic: Int) {
+        let (h, r, a) = try indexOfAccessory(id: accessoryId)
+        let accessory = graph.homes[h].rooms[r].accessories[a]
+        let services = accessory.services.enumerated().filter { _, service in
+            guard let wanted else { return true }
+            return service.name.caseInsensitiveCompare(wanted) == .orderedSame
+                || service.serviceType.map { $0.caseInsensitiveCompare(wanted) == .orderedSame } == true
+        }
+        for (s, service) in services {
+            for (c, ref) in service.characteristics.enumerated()
+            where ref.type.caseInsensitiveCompare(name) == .orderedSame
+                || ref.name.map { $0.caseInsensitiveCompare(name) == .orderedSame } == true {
+                return (h, r, a, s, c)
+            }
+        }
+        throw HomeKitWriteError.objectMissing(
+            "Accessory “\(accessory.name)” has no characteristic \(name)."
+        )
     }
 
     // MARK: - Graph mutation internals
@@ -178,11 +388,12 @@ public actor FakeHomeKitService: HomeKitWriting {
     /// read shape (HMCharacteristicEvent / HMPresenceEvent).
     private static func eventRef(from spec: TriggerEventSpec) -> HomeGraph.EventRef {
         switch spec {
-        case .characteristic(_, let characteristic, let value):
+        case .characteristic(let accessoryId, let characteristic, let value):
             return HomeGraph.EventRef(
                 type: "characteristic",
                 characteristicType: characteristic,
-                valueDescription: value?.rendered
+                valueDescription: value?.rendered,
+                accessoryId: accessoryId
             )
         case .presence(let atHome):
             return HomeGraph.EventRef(
@@ -307,6 +518,17 @@ public actor FakeHomeKitService: HomeKitWriting {
             }
         }
         throw HomeKitWriteError.objectMissing("No trigger \(id).")
+    }
+
+    private func indexOfAccessory(id: String) throws -> (home: Int, room: Int, accessory: Int) {
+        for h in graph.homes.indices {
+            for r in graph.homes[h].rooms.indices {
+                if let a = graph.homes[h].rooms[r].accessories.firstIndex(where: { $0.id == id }) {
+                    return (h, r, a)
+                }
+            }
+        }
+        throw HomeKitWriteError.objectMissing("No accessory \(id).")
     }
 
     private func room(id: String, inGraph graph: HomeGraph) -> HomeGraph.Room? {

@@ -143,7 +143,7 @@ import Testing
             return
         }
         #expect(events == [
-            HomeGraph.EventRef(type: "characteristic", characteristicType: "MotionDetected", valueDescription: "1"),
+            HomeGraph.EventRef(type: "characteristic", characteristicType: "MotionDetected", valueDescription: "1", accessoryId: "acc-light-a"),
             HomeGraph.EventRef(type: "presence", characteristicType: nil, valueDescription: "atHome"),
         ])
         #expect(predicate?.contains("MotionDetected") == true)
@@ -196,6 +196,7 @@ import Testing
                 "homeId": .string("home-1"),
                 "name": .string("Wake Up"),
                 "fireDate": .string("2026-11-09T07:30:00Z"),
+                "sceneId": .string("scene-morning"),
             ]
         ))
         #expect(created.tool == "create_timer_trigger")
@@ -236,6 +237,7 @@ import Testing
                 "homeId": .string("home-1"),
                 "name": .string("Wake Up"),
                 "fireDate": .string("2026-11-09T07:30:00Z"),
+                "sceneId": .string("scene-morning"),
             ]
         ))
         _ = try await store.approve(id: created.id)
@@ -264,6 +266,7 @@ import Testing
                 "homeId": .string("home-1"),
                 "name": .string("Wake Up"),
                 "fireDate": .string("2026-11-09T07:30:00Z"),
+                "sceneId": .string("scene-morning"),
             ]
         ))
         _ = try await store.approve(id: created.id)
@@ -296,6 +299,7 @@ import Testing
                 "homeId": .string("home-1"),
                 "name": .string("Wake Up"),
                 "fireDate": .string("2026-11-09T07:30:00Z"),
+                "sceneId": .string("scene-morning"),
             ]
         ))
         let created = await store.allProposals().first!
@@ -373,6 +377,189 @@ import Testing
         let graph = await fake.graph
         #expect(findTrigger(graph)?.name == "Wake Up")
         #expect(findTrigger(graph)?.isEnabled == false)
+    }
+
+    // MARK: - Event trigger editing
+
+    /// The edit path end to end over the fake: a declarative event swap
+    /// stages a diff card, executes, and read-back confirms — while the
+    /// trigger's armed state is untouched (the create/arm firewall).
+    @Test func editingAnEventTriggerStagesADiffAndPreservesItsArmedState() async throws {
+        let (fake, store, registry) = makeContext()
+
+        let created = try proposal(from: await registry.call(
+            name: "create_event_trigger",
+            arguments: [
+                "homeId": .string("home-1"),
+                "name": .string("Lights On"),
+                "events": .array([
+                    .object([
+                        "accessoryId": .string("acc-light-a"),
+                        "characteristic": .string("On"),
+                        "value": .bool(true),
+                    ]),
+                ]),
+                "sceneId": .string("scene-morning"),
+            ]
+        ))
+        _ = try await store.approve(id: created.id)
+
+        // The edit: swap the characteristic event for a presence event.
+        let edit = try proposal(from: await registry.call(
+            name: "update_event_trigger",
+            arguments: [
+                "triggerId": .string("trigger-1"),
+                "events": .array([.object(["presence": .string("atHome")])]),
+            ]
+        ))
+        #expect(edit.tool == "update_event_trigger")
+        // The card diffs the declarative list and states the firewall.
+        #expect(edit.card.contains { $0.kind == .remove && $0.text.contains("remove event") })
+        #expect(edit.card.contains { $0.kind == .add && $0.text.contains("someone arrives home") })
+        #expect(edit.card.contains { $0.kind == .note && $0.text.contains("stays disabled") })
+
+        let approved = try await store.approve(id: edit.id)
+        #expect(approved.state == .executed)
+        #expect(approved.evidence.first?.confirmed == true)
+
+        let graph = await fake.graph
+        let edited = try #require(findTrigger(graph))
+        // The create/arm firewall: editing never silently enables.
+        #expect(edited.isEnabled == false)
+        guard case .event(let events, let predicate) = edited.detail else {
+            Issue.record("Expected an event detail, got \(edited.detail)")
+            return
+        }
+        #expect(events == [HomeGraph.EventRef(type: "presence", characteristicType: nil, valueDescription: "atHome")])
+        #expect(predicate?.contains("presence") == true)
+    }
+
+    @Test func deniedEventTriggerUpdateLeavesTriggerUntouched() async throws {
+        let (fake, store, registry) = makeContext()
+
+        let created = try proposal(from: await registry.call(
+            name: "create_event_trigger",
+            arguments: [
+                "homeId": .string("home-1"),
+                "name": .string("Lights On"),
+                "events": .array([
+                    .object([
+                        "accessoryId": .string("acc-light-a"),
+                        "characteristic": .string("On"),
+                        "value": .bool(true),
+                    ]),
+                ]),
+                "sceneId": .string("scene-morning"),
+            ]
+        ))
+        _ = try await store.approve(id: created.id)
+
+        let edit = try proposal(from: await registry.call(
+            name: "update_event_trigger",
+            arguments: [
+                "triggerId": .string("trigger-1"),
+                "events": .array([.object(["presence": .string("away")])]),
+            ]
+        ))
+        let denied = try await store.deny(id: edit.id)
+
+        // Denial is terminal, applies nothing, and the trigger keeps its
+        // original events and disabled state.
+        #expect(denied.state == .denied)
+        #expect(denied.state.leftHomeUntouched)
+        #expect(denied.evidence.isEmpty)
+        let graph = await fake.graph
+        let untouched = try #require(findTrigger(graph))
+        #expect(untouched.isEnabled == false)
+        guard case .event(let events, _) = untouched.detail else {
+            Issue.record("Expected an event detail, got \(untouched.detail)")
+            return
+        }
+        #expect(events.first?.characteristicType == "On")
+    }
+
+    @Test func editingAnEventTriggerWithTheSameEventsIsNoChange() async throws {
+        let (_, store, registry) = makeContext()
+
+        let created = try proposal(from: await registry.call(
+            name: "create_event_trigger",
+            arguments: [
+                "homeId": .string("home-1"),
+                "name": .string("Lights On"),
+                "events": .array([
+                    .object([
+                        "accessoryId": .string("acc-light-a"),
+                        "characteristic": .string("On"),
+                        "value": .bool(true),
+                    ]),
+                ]),
+            ]
+        ))
+        _ = try await store.approve(id: created.id)
+
+        // An identical event list is a no-op: the planner rejects it in-band
+        // rather than staging a redundant edit (canonical matching — the
+        // same event however the value is rendered).
+        let again = await registry.call(
+            name: "update_event_trigger",
+            arguments: [
+                "triggerId": .string("trigger-1"),
+                "events": .array([
+                    .object([
+                        "accessoryId": .string("acc-light-a"),
+                        "characteristic": .string("On"),
+                        "value": .bool(true),
+                    ]),
+                ]),
+            ]
+        )
+        #expect(again.isError == true)
+        #expect(errorText(of: again)?.contains("already watches exactly these events") == true)
+        #expect(await store.allProposals().count == 1)
+    }
+
+    @Test func createEventTriggerWithEndEventsAndExecuteOnceStagesAndExecutes() async throws {
+        let (fake, store, registry) = makeContext()
+
+        let created = try proposal(from: await registry.call(
+            name: "create_event_trigger",
+            arguments: [
+                "homeId": .string("home-1"),
+                "name": .string("Pulse"),
+                "events": .array([
+                    .object([
+                        "accessoryId": .string("acc-light-a"),
+                        "characteristic": .string("On"),
+                        "value": .bool(true),
+                    ]),
+                ]),
+                "endEvents": .array([
+                    .object([
+                        "accessoryId": .string("acc-light-a"),
+                        "characteristic": .string("On"),
+                        "value": .bool(false),
+                    ]),
+                ]),
+                "executeOnce": .bool(true),
+            ]
+        ))
+        // The card renders both the end events and the run-once behavior.
+        #expect(created.card.contains { $0.text.contains("Ends with") })
+        #expect(created.card.contains { $0.text.contains("Runs once") })
+
+        let approved = try await store.approve(id: created.id)
+        #expect(approved.state == .executed)
+        #expect(approved.evidence.first?.confirmed == true)
+        // Born disabled, with its events; end events and executeOnce are
+        // device-side (not yet graph-observable).
+        let graph = await fake.graph
+        let trigger = try #require(findTrigger(graph))
+        #expect(trigger.isEnabled == false)
+        guard case .event(let events, _) = trigger.detail else {
+            Issue.record("Expected an event detail, got \(trigger.detail)")
+            return
+        }
+        #expect(events.count == 1 && events.first?.characteristicType == "On")
     }
 
     // MARK: - Argument errors, reported in-band
