@@ -1,17 +1,23 @@
 import SwiftUI
+import NilesCore
 
 /// Root tab view: Dashboard, Approvals, Home graph, Pairing — one tab per
-/// mockup screen, with a pending-count badge on Approvals.
+/// mockup screen, with a pending-count badge on Approvals. Holds the live
+/// store; previews substitute it for the in-memory one behind the same
+/// view-model protocols.
 struct ContentView: View {
+    @State private var store: LiveNilesStore
+
     enum NilesTab: String, CaseIterable, Identifiable {
         case dashboard, approvals, home, pairing
         var id: String { rawValue }
     }
 
-    /// Presentational store for now; the live-wiring task swaps in a real one
-    /// behind the same view-model protocols.
-    @State private var store = InMemoryNilesStore()
     @State private var selectedTab: NilesTab = .dashboard
+
+    init(store: LiveNilesStore) {
+        _store = State(initialValue: store)
+    }
 
     private var pendingCount: Int { store.pendingProposals.count }
 
@@ -31,9 +37,15 @@ struct ContentView: View {
                 .tabItem { Label("Pairing", systemImage: "qrcode") }
                 .tag(NilesTab.pairing)
         }
+        .task { store.start() }
     }
 }
 
 #Preview {
-    ContentView()
+    ContentView(
+        store: LiveNilesStore(
+            coordinator: ServerCoordinator(homeKitService: FakeHomeKitService(graph: .demoFixture)),
+            notifier: .disabled
+        )
+    )
 }
