@@ -79,12 +79,16 @@ public actor ActivityLog {
     /// - Parameter directory: where the log lives. The app passes nil and
     ///   gets Application Support/Niles; tests pass a temp directory.
     public init(directory: URL? = nil) {
-        self.directory = directory ?? Self.defaultDirectory()
+        let resolved = directory ?? Self.defaultDirectory()
+        self.directory = resolved
         encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         decoder = JSONDecoder()
         // Reload on init: the timeline picks up where the last run left off.
-        events = Self.read(from: fileURL, decoder: decoder)
+        // The path is built from the local — self is off-limits until every
+        // stored property is assigned, so fileURL cannot be used here.
+        let url = resolved.appendingPathComponent(Self.fileName)
+        events = Self.read(from: url, decoder: decoder)
     }
 
     /// Pure over immutable state (`directory` is a let), so callable from
