@@ -125,8 +125,8 @@ enum ActivityTimeline {
         guard let proposal = proposals.first(where: { $0.id == event.proposalId }),
               proposal.state == .executed,
               proposal.revertsProposalId == nil else { return false }
-        guard !proposals.contains { $0.revertsProposalId == event.proposalId } else { return false }
-        guard !events.contains { $0.kind == .undone && $0.proposalId == event.proposalId } else { return false }
+        guard !proposals.contains(where: { $0.revertsProposalId == event.proposalId }) else { return false }
+        guard !events.contains(where: { $0.kind == .undone && $0.proposalId == event.proposalId }) else { return false }
         guard proposal.tool != "execute_scene" else { return false }
         return true
     }

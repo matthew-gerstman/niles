@@ -210,7 +210,7 @@ struct ActivityDetailCard: View {
                 Spacer()
                 VerdictChip(verdict: row.verdict)
             }
-            ToolChip(text: "\(row.toolLine) · \(row.event.agentName ?? \"unknown agent\")")
+            ToolChip(text: "\(row.toolLine) · \(row.event.agentName ?? "unknown agent")")
             Text(row.event.at.formatted(date: .abbreviated, time: .standard))
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
