@@ -247,10 +247,10 @@ struct PairingCodeManagerTests {
 
         #expect(await manager.verify(String(code.dropLast())) == .invalidCode)
         #expect(await manager.verify(code + "9") == .invalidCode)
-        for _ in 0..<3 {
+        for _ in 0..<2 {
             #expect(await manager.verify(wrongGuess(for: code)) == .invalidCode)
         }
-        // Five attempts counted in total: this fifth burns the code.
+        // Attempts 1–2 are the wrong-length candidates above; this fifth burns the code.
         #expect(await manager.verify(wrongGuess(for: code)) == .tooManyAttempts)
     }
 
@@ -510,7 +510,7 @@ struct PairingSerializationTests {
         #expect(text.hasPrefix("HTTP/1.1 401 "))
         #expect(text.lowercased().contains("content-type: application/json"))
         #expect(text.lowercased().contains("connection: keep-alive"))
-        #expect(text.contains("content-length: \(body.count)"))
+        #expect(text.lowercased().contains("content-length: \(body.count)"))
         #expect(wire.suffix(body.count) == body)
     }
 
