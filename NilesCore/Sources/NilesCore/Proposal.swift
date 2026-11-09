@@ -3,7 +3,7 @@ import Foundation
 /// Which configuration object a diff entry touches (the spec's object ref).
 public struct ProposalObjectRef: Codable, Sendable, Equatable, Hashable {
     public enum Kind: String, Codable, Sendable {
-        case room, zone, scene, serviceGroup, accessory
+        case room, zone, scene, serviceGroup, accessory, trigger
     }
 
     public let kind: Kind
@@ -22,7 +22,7 @@ public struct ProposalObjectRef: Codable, Sendable, Equatable, Hashable {
 /// object, what operation, and the human-readable before/after values.
 public struct ProposalDiffEntry: Codable, Sendable, Equatable, Hashable {
     public enum Op: String, Codable, Sendable {
-        case create, rename, delete, move, addMembers, removeMembers
+        case create, rename, delete, move, addMembers, removeMembers, update
     }
 
     public let object: ProposalObjectRef

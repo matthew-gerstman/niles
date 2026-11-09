@@ -128,7 +128,44 @@ public enum ProposalEvidenceCollector {
                 observed: stillPresent ? "Group still present — delete did not take effect" : "No service group with id \(groupId) remains",
                 confirmed: !stillPresent
             )
+
+        case .addTimerTrigger(_, let name, let fireDate, let recurrence, let sceneId):
+            return triggerCreatedEvidence(
+                claim: "Timer trigger “\(name)” exists (disabled)",
+                name: name, sceneId: sceneId, graph: graph
+            )
+
+        case .addEventTrigger(_, let name, _, let sceneId):
+            return triggerCreatedEvidence(
+                claim: "Event trigger “\(name)” exists (disabled)",
+                name: name, sceneId: sceneId, graph: graph
+            )
         }
+    }
+
+    /// Read-back for a created trigger: it must exist, still be disabled
+    /// (the locked rule — creation never arms), and any referenced scene
+    /// must exist in the same graph.
+    private static func triggerCreatedEvidence(
+        claim: String, name: String, sceneId: String?, graph: HomeGraph
+    ) -> ProposalEvidence {
+        let trigger = graph.homes.flatMap(\.triggers).first { $0.name == name }
+        let scenePresent = sceneId.map { id in
+            graph.homes.flatMap(\.scenes).contains { $0.id == id }
+        } ?? true
+        let confirmed = trigger != nil && trigger?.isEnabled == false && scenePresent
+        var observed: String
+        if let trigger {
+            observed = trigger.isEnabled
+                ? "Trigger “\(trigger.name)” exists but is ENABLED — creation must never arm"
+                : "Trigger “\(trigger.name)” exists and is disabled"
+        } else {
+            observed = "Trigger “\(name)” not found after execution"
+        }
+        if trigger != nil, let sceneId, !scenePresent {
+            observed += "; scene \(sceneId) not found"
+        }
+        return ProposalEvidence(claim: claim, observed: observed, confirmed: confirmed)
     }
 
     /// Ids are globally unique across homes, so a flat membership check is exact.

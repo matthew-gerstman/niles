@@ -16,6 +16,10 @@ public enum WriteRequest: Sendable, Equatable {
     case createServiceGroup(homeId: String, name: String)
     case setServiceGroupMembers(groupId: String, serviceIds: [String])
     case deleteServiceGroup(groupId: String)
+    case createTimerTrigger(
+        homeId: String, name: String, fireDate: Date, recurrence: [String: Int]?, sceneId: String?
+    )
+    case createEventTrigger(homeId: String, name: String, events: [TriggerEventSpec], sceneId: String?)
 
     public static func parse(tool: String, arguments: [String: MCP.Value]?) throws -> WriteRequest {
         let args = Args(arguments)
@@ -45,6 +49,21 @@ public enum WriteRequest: Sendable, Equatable {
             )
         case "delete_service_group":
             return .deleteServiceGroup(groupId: try args.string("groupId"))
+        case "create_timer_trigger":
+            return .createTimerTrigger(
+                homeId: try args.string("homeId"),
+                name: try args.string("name"),
+                fireDate: try args.isoDate("fireDate"),
+                recurrence: try args.optionalRecurrence("recurrence"),
+                sceneId: try args.optionalString("sceneId")
+            )
+        case "create_event_trigger":
+            return .createEventTrigger(
+                homeId: try args.string("homeId"),
+                name: try args.string("name"),
+                events: try args.eventArray("events"),
+                sceneId: try args.optionalString("sceneId")
+            )
         default:
             throw ProposalStoreError.unknownTool(tool)
         }
@@ -85,6 +104,131 @@ private struct Args {
             return string
         }
     }
+
+    func optionalString(_ name: String) throws -> String? {
+        guard let rawValue = raw?[name] else { return nil }
+        guard let string = rawValue.stringValue else {
+            throw ProposalStoreError.invalidArguments("Argument “\(name)” must be a string.")
+        }
+        return string.isEmpty ? nil : string
+    }
+
+    func bool(_ name: String) throws -> Bool {
+        guard let value = raw?[name] else {
+            throw ProposalStoreError.invalidArguments("Missing required argument “\(name)”.")
+        }
+        guard case .bool(let bool) = value else {
+            throw ProposalStoreError.invalidArguments("Argument “\(name)” must be a boolean.")
+        }
+        return bool
+    }
+
+    /// An ISO-8601 timestamp, e.g. `2026-11-09T07:30:00Z`.
+    func isoDate(_ name: String) throws -> Date {
+        guard let date = try optionalIsoDate(name) else {
+            throw ProposalStoreError.invalidArguments("Missing required argument “\(name)”.")
+        }
+        return date
+    }
+
+    func optionalIsoDate(_ name: String) throws -> Date? {
+        guard let string = try optionalString(name) else { return nil }
+        guard let date = ISOTimestamps.parse(string) else {
+            throw ProposalStoreError.invalidArguments(
+                "Argument “\(name)” must be ISO-8601, e.g. \(Self.isoExample)."
+            )
+        }
+        return date
+    }
+
+    /// An optional DateComponents dictionary, e.g. `{"hour": 7, "minute": 30}` —
+    /// the same shape `get_triggers` renders. Component names are HomeKit's
+    /// date components; unknown names are rejected so agents fix the request
+    /// instead of staging a recurrence that silently never matches.
+    func optionalRecurrence(_ name: String) throws -> [String: Int]? {
+        guard let value = raw?[name] else { return nil }
+        guard let object = value.objectValue else {
+            throw ProposalStoreError.invalidArguments(
+                "Argument “\(name)” must be an object of date components, e.g. {\"hour\": 7, \"minute\": 30}."
+            )
+        }
+        var components: [String: Int] = [:]
+        for (key, rawValue) in object {
+            guard Self.recurrenceKeys.contains(key) else {
+                throw ProposalStoreError.invalidArguments(
+                    "Argument “\(name)”: unknown component “\(key)”. Valid components: \(Self.recurrenceKeys.sorted().joined(separator: ", "))."
+                )
+            }
+            guard case .int(let int) = rawValue else {
+                throw ProposalStoreError.invalidArguments(
+                    "Argument “\(name)”: component “\(key)” must be a number."
+                )
+            }
+            components[key] = int
+        }
+        return components
+    }
+
+    func eventArray(_ name: String) throws -> [TriggerEventSpec] {
+        guard let value = raw?[name] else {
+            throw ProposalStoreError.invalidArguments("Missing required argument “\(name)”.")
+        }
+        guard let array = value.arrayValue else {
+            throw ProposalStoreError.invalidArguments(
+                "Argument “\(name)” must be an array of {accessoryId, characteristic, value?} or {presence} objects."
+            )
+        }
+        return try array.enumerated().map { index, element in try event(element, at: index, in: name) }
+    }
+
+    private func event(_ element: MCP.Value, at index: Int, in name: String) throws -> TriggerEventSpec {
+        let prefix = "Event \(index + 1): "
+        guard let object = element.objectValue else {
+            throw ProposalStoreError.invalidArguments(
+                prefix + "must be an object with accessoryId and characteristic, or with presence."
+            )
+        }
+        if let presence = object["presence"]?.stringValue {
+            switch presence {
+            case "atHome": return .presence(atHome: true)
+            case "away": return .presence(atHome: false)
+            default:
+                throw ProposalStoreError.invalidArguments(
+                    prefix + "presence must be “atHome” or “away”."
+                )
+            }
+        }
+        guard let accessoryId = object["accessoryId"]?.stringValue else {
+            throw ProposalStoreError.invalidArguments(
+                prefix + "accessoryId is required (string), or pass presence instead."
+            )
+        }
+        guard let characteristic = object["characteristic"]?.stringValue else {
+            throw ProposalStoreError.invalidArguments(prefix + "characteristic is required (string).")
+        }
+        let value: HomeKitValue?
+        if let rawValue = object["value"] {
+            switch rawValue {
+            case .bool(let bool): value = .bool(bool)
+            case .int(let int): value = .int(int)
+            case .double(let double): value = .double(double)
+            case .string(let string): value = .string(string)
+            case .null, .data, .array, .object:
+                throw ProposalStoreError.invalidArguments(
+                    prefix + "value must be a number, string, or boolean."
+                )
+            }
+        } else {
+            value = nil
+        }
+        return .characteristic(accessoryId: accessoryId, characteristic: characteristic, value: value)
+    }
+
+    private static let recurrenceKeys: Set<String> = [
+        "year", "month", "weekday", "day", "hour", "minute", "second",
+    ]
+
+    private static let isoExample = "2026-11-09T07:30:00Z"
 
     func actionArray(_ name: String) throws -> [SceneActionSpec] {
         guard let value = raw?[name] else {

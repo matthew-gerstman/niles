@@ -120,6 +120,26 @@ public actor FakeHomeKitService: HomeKitWriting {
             let (h, g) = try indexOfServiceGroup(id: groupId)
             graph.homes[h].serviceGroups.remove(at: g)
             return nil
+
+        case .addTimerTrigger(let homeId, let name, let fireDate, let recurrence, _):
+            let h = try indexOfHome(id: homeId)
+            let id = nextId(prefix: "trigger", existing: graph.homes[h].triggers.map(\.id))
+            // Locked rule: triggers are born disabled, whatever the plan said.
+            graph.homes[h].triggers.append(
+                HomeGraph.Trigger(id: id, name: name, isEnabled: false, detail: .timer(fireDate: fireDate, recurrence: recurrence))
+            )
+            return id
+
+        case .addEventTrigger(let homeId, let name, let events, _):
+            let h = try indexOfHome(id: homeId)
+            let id = nextId(prefix: "trigger", existing: graph.homes[h].triggers.map(\.id))
+            graph.homes[h].triggers.append(
+                HomeGraph.Trigger(
+                    id: id, name: name, isEnabled: false,
+                    detail: .event(events: events.map(Self.eventRef(from:)), predicate: Self.predicateDescription(events))
+                )
+            )
+            return id
         }
     }
 
@@ -132,6 +152,41 @@ public actor FakeHomeKitService: HomeKitWriting {
     /// vocabulary); membership changes look refs up across all of them.
     private func knownService(id: String) -> HomeGraph.ServiceRef? {
         graph.homes.flatMap(\.serviceGroups).flatMap(\.services).first { $0.id == id }
+    }
+
+    /// Graph projection of a proposed event, mirroring the real adapter's
+    /// read shape (HMCharacteristicEvent / HMPresenceEvent).
+    private static func eventRef(from spec: TriggerEventSpec) -> HomeGraph.EventRef {
+        switch spec {
+        case .characteristic(_, let characteristic, let value):
+            return HomeGraph.EventRef(
+                type: "characteristic",
+                characteristicType: characteristic,
+                valueDescription: value?.rendered
+            )
+        case .presence(let atHome):
+            return HomeGraph.EventRef(
+                type: "presence",
+                characteristicType: nil,
+                valueDescription: atHome ? "atHome" : "away"
+            )
+        }
+    }
+
+    /// The predicate the real adapter derives from the events (presence
+    /// events imply `predicateForEvaluatingTrigger(withPresence:)`). The fake
+    /// records a human-readable equivalent.
+    private static func predicateDescription(_ events: [TriggerEventSpec]) -> String? {
+        let descriptions = events.map { (event: TriggerEventSpec) -> String in
+            switch event {
+            case .characteristic(_, let characteristic, let value):
+                value.map { "\(characteristic) == \($0.rendered)" } ?? "\(characteristic) changes"
+            case .presence(let atHome):
+                "presence == \(atHome ? "atHome" : "away")"
+            }
+        }
+        guard !descriptions.isEmpty else { return nil }
+        return descriptions.joined(separator: " AND ")
     }
 
     private func action(from spec: SceneActionSpec) -> HomeGraph.SceneAction {
