@@ -84,6 +84,11 @@ public actor LANServer {
         state = .running(port: port)
     }
 
+    /// The sessions currently connected through the gateway, for the app UI.
+    public func sessionInfos() async -> [MCPGateway.SessionInfo] {
+        await gateway.sessionInfos()
+    }
+
     /// Stops accepting connections, closes every client connection, and tears down
     /// gateway sessions. Idempotent.
     public func stop() async {

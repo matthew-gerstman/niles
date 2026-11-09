@@ -19,6 +19,23 @@ public protocol AuthChecking: Sendable {
 /// only exists while the app is foregrounded, and stop tears every session down.
 public actor MCPGateway {
 
+    /// A connected MCP session, as the dashboard and pairing screens render it.
+    /// Identity is the agent's own `clientInfo.name` from `initialize` when it
+    /// supplied one.
+    public struct SessionInfo: Sendable, Equatable {
+        public let id: String
+        public let clientName: String?
+        public let startedAt: Date
+        public let lastAccessedAt: Date
+
+        public init(id: String, clientName: String?, startedAt: Date, lastAccessedAt: Date) {
+            self.id = id
+            self.clientName = clientName
+            self.startedAt = startedAt
+            self.lastAccessedAt = lastAccessedAt
+        }
+    }
+
     /// Builds the MCP `Server` behind a session. Tool registration lands with the
     /// read-tools task; the transport stack is complete without it.
     public typealias ServerFactory = @Sendable (MCP.StatefulHTTPServerTransport) async throws -> MCP.Server
@@ -44,6 +61,8 @@ public actor MCPGateway {
     struct Session {
         let transport: MCP.StatefulHTTPServerTransport
         let server: MCP.Server
+        let clientName: String?
+        let startedAt: Date
         var lastAccessedAt: Date
     }
 
@@ -104,6 +123,21 @@ public actor MCPGateway {
         )
     }
 
+    /// The sessions connected right now, oldest first — the live source for
+    /// the dashboard's session count and the connected-agent lists.
+    public func sessionInfos() -> [SessionInfo] {
+        sessions
+            .map { id, session in
+                SessionInfo(
+                    id: id,
+                    clientName: session.clientName,
+                    startedAt: session.startedAt,
+                    lastAccessedAt: session.lastAccessedAt
+                )
+            }
+            .sorted { $0.startedAt < $1.startedAt }
+    }
+
     /// Disconnects every session's transport. The LAN server calls this when serving stops.
     public func stop() async {
         for sessionID in sessions.keys {
@@ -132,7 +166,13 @@ public actor MCPGateway {
                     .internalError("Internal error: Transport did not assign a session id")
                 )
             }
-            sessions[sessionID] = Session(transport: transport, server: server, lastAccessedAt: Date())
+            sessions[sessionID] = Session(
+                transport: transport,
+                server: server,
+                clientName: Self.clientName(in: request.body),
+                startedAt: Date(),
+                lastAccessedAt: Date()
+            )
             return response
         } catch {
             await transport.disconnect()
@@ -146,6 +186,17 @@ public actor MCPGateway {
     private func closeSession(_ sessionID: String) async {
         guard let session = sessions.removeValue(forKey: sessionID) else { return }
         await session.transport.disconnect()
+    }
+
+    /// The agent's name, from the `initialize` body's `clientInfo.name` —
+    /// display only (review cards and the connected-agents list); unknown
+    /// when the client omits it.
+    static func clientName(in body: Data?) -> String? {
+        guard let json = try? JSONSerialization.jsonObject(with: body ?? Data()) as? [String: Any],
+            let params = json["params"] as? [String: Any],
+            let clientInfo = params["clientInfo"] as? [String: Any]
+        else { return nil }
+        return clientInfo["name"] as? String
     }
 
     /// True when the POST body is an `initialize` request — the session-creation trigger.
