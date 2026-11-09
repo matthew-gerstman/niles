@@ -31,13 +31,21 @@ public final class ServerCoordinator {
     /// stages into.
     public let proposalStore: ProposalStore?
 
+    /// The live pairing-code lifecycle, shared by the `/pairing` exchange and
+    /// the Settings pairing card. Created once at init so the code the user
+    /// reads survives foreground cycles, and so minting from Settings and
+    /// verifying on the wire hit the same code.
+    public let pairingCodes: PairingCodeManager
+
     nonisolated public init(
         port: UInt16 = LANServer.defaultPort,
         tokenStore: any TokenStoring = KeychainTokenStore(),
-        homeKitService: (any HomeKitWriting)? = nil
+        homeKitService: (any HomeKitWriting)? = nil,
+        pairingCodes: PairingCodeManager = PairingCodeManager()
     ) {
         self.port = port
         self.tokenStore = tokenStore
+        self.pairingCodes = pairingCodes
         self.proposalStore = homeKitService.map { ProposalStore(homeKit: $0) }
     }
 
@@ -56,23 +64,31 @@ public final class ServerCoordinator {
                 try store.listAgents().map(\.token)
             }
             let gateway: MCPGateway
+            // Sessions record which paired agent created them, so revocation
+            // can close the agent's live session along with its token.
+            let tokenIdentity: MCPGateway.TokenIdentity = { token in
+                try? store.listAgents().first(where: { $0.token == token })?.id
+            }
             if let proposalStore {
                 gateway = MCPGateway(
                     serverFactory: NilesServerFactory.makeFactory(store: proposalStore),
                     validationPipeline: NilesValidationPipeline(tokenProvider: tokenProvider),
-                    auth: BearerTokenAuthMiddleware(tokenProvider: tokenProvider)
+                    auth: BearerTokenAuthMiddleware(tokenProvider: tokenProvider),
+                    tokenIdentity: tokenIdentity
                 )
             } else {
                 // No service injected yet — serving with the empty default
                 // tool surface (the pre-tools behavior) rather than crashing.
                 gateway = MCPGateway(
                     validationPipeline: NilesValidationPipeline(tokenProvider: tokenProvider),
-                    auth: BearerTokenAuthMiddleware(tokenProvider: tokenProvider)
+                    auth: BearerTokenAuthMiddleware(tokenProvider: tokenProvider),
+                    tokenIdentity: tokenIdentity
                 )
             }
             // The pairing exchange answers on the same listener, routed ahead
-            // of the gateway's auth gate by the connection runner.
-            let pairing = PairingService(codes: PairingCodeManager(), tokens: tokenStore)
+            // of the gateway's auth gate by the connection runner. The shared
+            // code manager means a Settings-minted code is exchangeable live.
+            let pairing = PairingService(codes: pairingCodes, tokens: tokenStore)
             let server = LANServer(gateway: gateway, pairingService: pairing, port: port)
             try await server.start()
             self.server = server
@@ -95,5 +111,13 @@ public final class ServerCoordinator {
     /// The sessions currently connected to the running server, if any.
     public func sessionInfos() async -> [MCPGateway.SessionInfo] {
         await gateway?.sessionInfos() ?? []
+    }
+
+    /// Disconnects every live session bound to one paired agent's token —
+    /// the transport half of revocation. No server running means nothing to
+    /// close; a no-op, not an error.
+    @discardableResult
+    public func closeSessions(tokenId: UUID) async -> Int {
+        await gateway?.closeSessions(tokenId: tokenId) ?? 0
     }
 }

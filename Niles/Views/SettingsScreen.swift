@@ -1,33 +1,47 @@
-import CoreImage
-import CoreImage.CIFilterBuiltins
 import SwiftUI
 
-/// Settings: the server control card (kill switch, endpoint, sessions,
-/// agents) and pairing (QR, token reveal, trusted agents) absorbed from the
-/// former Dashboard and Pairing screens, which are removed.
+/// Settings: the server control card (kill switch, endpoint, sessions), the
+/// pairing card (six-digit code, countdown, paired agents with revoke), and
+/// connection info. The former QR code and token reveal are gone — the bearer
+/// token never renders in UI; agents pair with the code instead.
 struct SettingsScreen: View {
     var model: any DashboardViewModel & PairingViewModel
+
+    /// The paired agent whose revoke confirmation is showing, if any.
+    @State private var pendingRevoke: PairedAgentRow?
 
     var body: some View {
         ScreenScaffold(title: "Settings", subtitle: "Niles · HomeKit MCP proxy · \(model.homeName)") {
             serverCard
-            SectionHeader(title: "Connected agents")
-            if model.connectedAgents.isEmpty {
-                EmptyStateCard(text: "No MCP agents are connected right now. Pair one below with the QR code.")
+            SectionHeader(title: "Pairing")
+            pairingCard
+            SectionHeader(title: "Paired agents")
+            if model.pairedAgents.isEmpty {
+                EmptyStateCard(text: "No MCP agents are connected right now. Pair one with the code above.")
             } else {
                 agentsCard
             }
-            SectionHeader(title: "Pairing")
-            pairingCard
             SectionHeader(title: "Connection")
             connectionCard
-            SectionHeader(title: "Trusted agents")
-            trustedCard
+        }
+        .confirmationDialog(
+            revokeTitle,
+            isPresented: Binding(get: { pendingRevoke != nil }, set: { if !$0 { pendingRevoke = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Revoke", role: .destructive) {
+                if let agent = pendingRevoke {
+                    Task { await model.revokeAgent(agent.id) }
+                }
+                pendingRevoke = nil
+            }
+            Button("Cancel", role: .cancel) { pendingRevoke = nil }
+        } message: {
+            Text("The agent will immediately lose access to this home. Its live session closes and it cannot reconnect without pairing again.")
         }
     }
 
-    /// The former Dashboard server card: serving state, the kill switch,
-    /// and the endpoint/sessions key-value rows.
+    /// Serving state, the kill switch, and the endpoint/sessions key-value rows.
     private var serverCard: some View {
         VStack(spacing: 0) {
             HStack {
@@ -57,106 +71,96 @@ struct SettingsScreen: View {
         .card()
     }
 
-    private var agentsCard: some View {
-        VStack(spacing: 0) {
-            ForEach(Array(model.connectedAgents.enumerated()), id: \.element.id) { index, agent in
-                AgentRow(agent: agent)
-                if index < model.connectedAgents.count - 1 {
-                    Divider()
-                }
-            }
-        }
-        .card()
-    }
-
+    /// The pairing card: the six-digit challenge in large type with a live
+    /// countdown, and an on-demand mint. A code is a challenge, not a secret —
+    /// it expires in five minutes, works once, and dies after five wrong guesses.
+    @ViewBuilder
     private var pairingCard: some View {
-        VStack(spacing: 6) {
-            QRCodeView(string: model.token)
-                .frame(width: 160, height: 160)
-                .padding(10)
-                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.primary.opacity(0.1)))
-            Text(caption)
-                .font(.system(size: 11))
-                .foregroundStyle(.tertiary)
-                .multilineTextAlignment(.center)
+        VStack(spacing: 10) {
+            if let code = model.pairingCode, let expiresAt = model.codeExpiresAt {
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    VStack(spacing: 6) {
+                        Text(code)
+                            .font(.system(size: 44, weight: .bold, design: .monospaced))
+                            .monospacedDigit()
+                        Text(Self.countdownText(expiresAt: expiresAt, now: context.date))
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } else {
+                Text("Code unavailable")
+                    .font(.system(size: 15))
+                    .foregroundStyle(.tertiary)
+                    .padding(.vertical, 18)
+            }
+            ActionButton(title: "New code", style: .ghost) {
+                model.mintNewCode()
+            }
         }
         .frame(maxWidth: .infinity)
         .card()
     }
 
-    private var caption: String {
-        if let error = (model as? LiveNilesStore)?.tokenError {
-            return error
-        }
-        return "Scan to share the bearer token out-of-band. It lives in the Keychain and is never sent over the wire."
+    /// The countdown line under the code: time remaining while live, a plain
+    /// "Expired" once past (a fresh code mints at the next refresh). Pure, so
+    /// the wording is directly testable.
+    static func countdownText(expiresAt: Date, now: Date) -> String {
+        let remaining = Int(expiresAt.timeIntervalSince(now))
+        guard remaining > 0 else { return "Expired" }
+        return String(format: "Expires in %d:%02d", remaining / 60, remaining % 60)
     }
 
-    private var connectionCard: some View {
-        VStack(spacing: 0) {
-            KeyValueList(rows: [
-                KeyValueRow(key: "URL", value: model.endpoint),
-                KeyValueRow(key: "Transport", value: model.transportName),
-                KeyValueRow(key: "Bearer token", value: model.isTokenRevealed ? model.token : "•••• •••• ••••"),
-            ])
-            ActionButton(
-                title: model.isTokenRevealed ? "Hide token" : "Reveal token",
-                style: .ghost
-            ) {
-                model.toggleTokenRevealed()
-            }
-            .padding(.top, 10)
-        }
-        .card()
+    private var revokeTitle: String {
+        guard let name = pendingRevoke?.name else { return "" }
+        return "Revoke \(name)?"
     }
 
-    private var trustedCard: some View {
+    private var agentsCard: some View {
         VStack(spacing: 0) {
-            ForEach(Array(model.trustedAgents.enumerated()), id: \.element.id) { index, agent in
-                AgentRow(agent: agent)
-                if index < model.trustedAgents.count - 1 {
+            ForEach(Array(model.pairedAgents.enumerated()), id: \.element.id) { index, agent in
+                PairedAgentRowView(agent: agent) {
+                    pendingRevoke = agent
+                }
+                if index < model.pairedAgents.count - 1 {
                     Divider()
                 }
             }
         }
         .card()
     }
+
+    private var connectionCard: some View {
+        KeyValueList(rows: [
+            KeyValueRow(key: "URL", value: model.endpoint),
+            KeyValueRow(key: "Transport", value: model.transportName),
+        ])
+        .card()
+    }
 }
 
-/// Renders a string as a real, scannable QR code (CoreImage), scaled without
-/// interpolation so the modules stay crisp.
-struct QRCodeView: View {
-    let string: String
+/// One paired credential: name, paired date, last-seen session, and the
+/// destructive Revoke action.
+private struct PairedAgentRowView: View {
+    let agent: PairedAgentRow
+    let onRevoke: () -> Void
 
     var body: some View {
-        if let image = Self.image(from: string) {
-            Image(uiImage: image)
-                .interpolation(.none)
-                .resizable()
-                .scaledToFit()
-        } else {
-            ZStack {
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(Color.primary.opacity(0.04))
-                Text("Token unavailable")
-                    .font(.system(size: 12))
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(agent.name)
+                    .font(.system(size: 15, weight: .semibold))
+                Text(agent.detail)
+                    .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
             }
+            Spacer()
+            Button("Revoke", action: onRevoke)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(NilesTheme.destructive)
+                .buttonStyle(.plain)
         }
-    }
-
-    /// nil for an empty string (no token yet) or a CoreImage failure.
-    static func image(from string: String) -> UIImage? {
-        guard !string.isEmpty else { return nil }
-        let filter = CIFilter.qrCodeGenerator()
-        filter.message = Data(string.utf8)
-        filter.correctionLevel = "M"
-        guard let output = filter.outputImage else { return nil }
-        // The generator emits a 1x module chain; scale up before rendering so
-        // the CG image has real pixels to show.
-        let scaled = output.transformed(by: CGAffineTransform(scaleX: 10, y: 10))
-        let context = CIContext()
-        guard let cgImage = context.createCGImage(scaled, from: scaled.extent) else { return nil }
-        return UIImage(cgImage: cgImage)
+        .padding(.vertical, 10)
     }
 }
 
