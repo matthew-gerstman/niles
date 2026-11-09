@@ -34,6 +34,9 @@ targets:
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UILaunchScreen: {}
+        NSHomeKitUsageDescription: >-
+          Niles reads your home layout so agents can propose configuration
+          changes for your review, and applies changes you approve.
         NSLocalNetworkUsageDescription: >-
           Niles advertises an MCP server on your local network so agents on the
           same network can discover and connect to it.

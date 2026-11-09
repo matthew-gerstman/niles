@@ -24,6 +24,8 @@
 	<array>
 		<string>_niles-mcp._tcp</string>
 	</array>
+	<key>NSHomeKitUsageDescription</key>
+	<string>Niles reads your home layout so agents can propose configuration changes for your review, and applies changes you approve.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Niles advertises an MCP server on your local network so agents on the same network can discover and connect to it.</string>
 	<key>UILaunchScreen</key>
