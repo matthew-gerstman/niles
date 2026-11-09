@@ -146,9 +146,9 @@ public actor FakeHomeKitService: HomeKitWriting {
                     "Scene “\(graph.homes[h].scenes[s].name)” has no actions — HomeKit refuses to execute an empty scene."
                 )
             }
-            // Execution has no graph-observable effect yet (no
-            // lastExecutionDate in the model); the evidence read-back
-            // confirms the scene is present and accepted the run.
+            // HomeKit stamps lastExecutionDate when a scene runs; the fake
+            // mirrors that observable effect so read-back can see the run.
+            graph.homes[h].scenes[s].lastExecutionDate = Date()
             return nil
 
         case .addServiceGroup(_, let name):
