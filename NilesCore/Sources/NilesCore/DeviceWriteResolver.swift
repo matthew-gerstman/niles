@@ -77,8 +77,12 @@ struct DeviceHomeView: Equatable, Sendable {
 
     struct Characteristic: Equatable, Sendable {
         var id: String
-        /// The HomeKit characteristic type string, e.g. `On` or `Brightness`.
+        /// The HomeKit characteristic type string — the type UUID in live
+        /// data, e.g. `00000008-0000-1000-8000-0026BB765291`.
         var type: String
+        /// The characteristic's friendly name, e.g. `Brightness` — nil when
+        /// HomeKit exposes none.
+        var name: String?
         /// The value family the characteristic's metadata declares.
         var kind: ValueKind = .unknown
     }
@@ -307,8 +311,8 @@ enum DeviceWriteResolver {
     // MARK: Shared resolution helpers
 
     /// The heavy lookup: accessory -> service (by name or type, else the one
-    /// carrying the characteristic) -> characteristic (by type), with the
-    /// value rendering kind picked from metadata.
+    /// carrying the characteristic) -> characteristic (by type or name), with
+    /// the value rendering kind picked from metadata.
     private static func resolveAction(_ spec: SceneActionSpec, in home: DeviceHomeView.Home) throws -> ResolvedAction {
         guard let accessory = accessory(id: spec.accessoryId, in: home) else {
             throw HomeKitWriteError.objectMissing("No accessory \(spec.accessoryId) in home “\(home.name)”.")
@@ -320,21 +324,24 @@ enum DeviceWriteResolver {
                 $0.name.map { $0.caseInsensitiveCompare(wanted) == .orderedSame } == true
                     || $0.serviceType.caseInsensitiveCompare(wanted) == .orderedSame
             }
-            guard let matched = matching.first(where: { $0.characteristics.contains { $0.type == spec.characteristic } })
-                ?? matching.first else {
+            guard let matched = matching.first(
+                where: { $0.characteristics.contains { characteristicMatches($0, spec.characteristic) } }
+            ) ?? matching.first else {
                 throw HomeKitWriteError.objectMissing(
                     "Accessory “\(accessory.name)” has no service “\(wanted)” with characteristic \(spec.characteristic)."
                 )
             }
             service = matched
-        } else if let matched = accessory.services.first(where: { $0.characteristics.contains { $0.type == spec.characteristic } }) {
+        } else if let matched = accessory.services.first(
+            where: { $0.characteristics.contains { characteristicMatches($0, spec.characteristic) } }
+        ) {
             service = matched
         } else {
             throw HomeKitWriteError.objectMissing(
                 "Accessory “\(accessory.name)” has no service with characteristic \(spec.characteristic)."
             )
         }
-        guard let matched = service.characteristics.first(where: { $0.type == spec.characteristic }) else {
+        guard let matched = service.characteristics.first(where: { characteristicMatches($0, spec.characteristic) }) else {
             throw HomeKitWriteError.objectMissing(
                 "Service “\(service.name ?? service.serviceType)” has no characteristic \(spec.characteristic)."
             )
@@ -364,7 +371,7 @@ enum DeviceWriteResolver {
                     throw HomeKitWriteError.objectMissing("No accessory \(accessoryId) in home “\(home.name)”.")
                 }
                 guard let characteristic = accessory.services.flatMap(\.characteristics)
-                    .first(where: { $0.type == characteristicType }) else {
+                    .first(where: { characteristicMatches($0, characteristicType) }) else {
                     throw HomeKitWriteError.objectMissing(
                         "Accessory “\(accessory.name)” has no characteristic \(characteristicType)."
                     )
@@ -391,6 +398,15 @@ enum DeviceWriteResolver {
                 return .presence(atHome: atHome)
             }
         }
+    }
+
+    /// Agents spell the target either way the read side exposes it: the
+    /// HomeKit type string (a UUID in live data) or the friendly name.
+    private static func characteristicMatches(
+        _ characteristic: DeviceHomeView.Characteristic, _ wanted: String
+    ) -> Bool {
+        characteristic.type.caseInsensitiveCompare(wanted) == .orderedSame
+            || characteristic.name?.caseInsensitiveCompare(wanted) == .orderedSame
     }
 
     /// Characteristic metadata decides the rendering; a mismatch between the
