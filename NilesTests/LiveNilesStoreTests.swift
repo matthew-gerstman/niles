@@ -33,11 +33,19 @@ private func waitUntil(
 @MainActor
 struct LiveNilesStoreTests {
 
+    /// A per-test temp log: the default `ActivityLog()` binds to the app's
+    /// real Application Support, whose persisted file would otherwise share
+    /// history across concurrent tests and simulator relaunches.
+    private func isolatedActivityLog() -> ActivityLog {
+        ActivityLog(directory: FileManager.default.temporaryDirectory
+            .appendingPathComponent("niles-activity-\(UUID().uuidString)", isDirectory: true))
+    }
+
     @Test
     func stagedProposalAppearsAndApprovalAppliesToFakeHome() async throws {
         let fake = FakeHomeKitService(graph: .demoFixture)
         let coordinator = ServerCoordinator(tokenStore: StaticTokenStore(token: "test-token"), homeKitService: fake)
-        let store = LiveNilesStore(coordinator: coordinator, notifier: .disabled)
+        let store = LiveNilesStore(coordinator: coordinator, notifier: .disabled, activityLog: isolatedActivityLog())
         await store.refresh()
         #expect(store.pendingProposals.isEmpty)
 
@@ -130,7 +138,7 @@ struct LiveNilesStoreTests {
     func undoRecordsRevertLinkedToTheOriginal() async throws {
         let fake = FakeHomeKitService(graph: .demoFixture)
         let coordinator = ServerCoordinator(tokenStore: StaticTokenStore(token: "test-token"), homeKitService: fake)
-        let store = LiveNilesStore(coordinator: coordinator, notifier: .disabled)
+        let store = LiveNilesStore(coordinator: coordinator, notifier: .disabled, activityLog: isolatedActivityLog())
         await store.refresh()
         let registry = WriteToolRegistry(store: try #require(coordinator.proposalStore))
         _ = await registry.call(
@@ -172,7 +180,7 @@ struct LiveNilesStoreTests {
     func approveAllExecutesAllStagedImmediately() async throws {
         let fake = FakeHomeKitService(graph: .demoFixture)
         let coordinator = ServerCoordinator(tokenStore: StaticTokenStore(token: "test-token"), homeKitService: fake)
-        let store = LiveNilesStore(coordinator: coordinator, notifier: .disabled)
+        let store = LiveNilesStore(coordinator: coordinator, notifier: .disabled, activityLog: isolatedActivityLog())
         await store.refresh()
         let registry = WriteToolRegistry(store: try #require(coordinator.proposalStore))
         _ = await registry.call(
@@ -204,7 +212,7 @@ struct LiveNilesStoreTests {
     func approveTapShowsOptimisticFeedbackBeforePipelineSettles() async throws {
         let fake = FakeHomeKitService(graph: .demoFixture)
         let coordinator = ServerCoordinator(tokenStore: StaticTokenStore(token: "test-token"), homeKitService: fake)
-        let store = LiveNilesStore(coordinator: coordinator, notifier: .disabled)
+        let store = LiveNilesStore(coordinator: coordinator, notifier: .disabled, activityLog: isolatedActivityLog())
         await store.refresh()
         let registry = WriteToolRegistry(store: try #require(coordinator.proposalStore))
         _ = await registry.call(
@@ -233,7 +241,7 @@ struct LiveNilesStoreTests {
     func doubleTapApproveExecutesOperationsOnce() async throws {
         let fake = FakeHomeKitService(graph: .demoFixture)
         let coordinator = ServerCoordinator(tokenStore: StaticTokenStore(token: "test-token"), homeKitService: fake)
-        let store = LiveNilesStore(coordinator: coordinator, notifier: .disabled)
+        let store = LiveNilesStore(coordinator: coordinator, notifier: .disabled, activityLog: isolatedActivityLog())
         await store.refresh()
         let registry = WriteToolRegistry(store: try #require(coordinator.proposalStore))
         _ = await registry.call(
@@ -259,7 +267,7 @@ struct LiveNilesStoreTests {
     func denialLeavesFakeHomeUntouched() async throws {
         let fake = FakeHomeKitService(graph: .demoFixture)
         let coordinator = ServerCoordinator(tokenStore: StaticTokenStore(token: "test-token"), homeKitService: fake)
-        let store = LiveNilesStore(coordinator: coordinator, notifier: .disabled)
+        let store = LiveNilesStore(coordinator: coordinator, notifier: .disabled, activityLog: isolatedActivityLog())
         await store.refresh()
 
         let registry = WriteToolRegistry(store: try #require(coordinator.proposalStore))
@@ -294,7 +302,7 @@ struct LiveNilesStoreTests {
     @Test
     func servingKeepsScreenAwakeAndStoppingRestoresAutoLock() async throws {
         let coordinator = ServerCoordinator(tokenStore: StaticTokenStore(token: "test-token"), homeKitService: FakeHomeKitService())
-        let store = LiveNilesStore(coordinator: coordinator, notifier: .disabled)
+        let store = LiveNilesStore(coordinator: coordinator, notifier: .disabled, activityLog: isolatedActivityLog())
         defer { UIApplication.shared.isIdleTimerDisabled = false }
 
         await store.handleScene(isActive: true)

@@ -162,7 +162,7 @@ import Testing
         let reverted = try await store.undo(proposalId: staged.id)
         #expect(reverted.state == .executed)
         #expect(reverted.evidence.allSatisfy { $0.confirmed })
-        #expect(!await fake.graph.homes.first!.rooms.contains { $0.name == "Movie Room" })
+        #expect(!(await fake.graph.homes.first!.rooms.contains { $0.name == "Movie Room" }))
     }
 
     @Test func undoOfARenameRestoresThePriorName() async throws {
@@ -270,7 +270,15 @@ import Testing
 
     @Test func sceneExecutionHasNoRevertAndUndoThrowsNotRevertable() async throws {
         let scene = HomeGraph.Scene(
-            id: "scene-morning", name: "Morning", type: "Scene", lastExecutionDate: nil, actions: []
+            id: "scene-morning", name: "Morning", type: "Scene", lastExecutionDate: nil,
+            actions: [
+                // The planner refuses to stage an empty scene, so it gets one real action.
+                HomeGraph.SceneAction(
+                    accessoryId: "acc-light-a", accessoryName: "Light A",
+                    service: nil, characteristic: "On", characteristicName: nil,
+                    valueDescription: "1"
+                ),
+            ]
         )
         let (fake, store, registry) = makeContext(graph: fixtureGraph(withScene: scene))
         let staged = try proposal(from: await registry.call(
