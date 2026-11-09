@@ -40,6 +40,10 @@ enum ProposalDecision: Hashable {
 @MainActor
 protocol HomeGraphViewModel: Observable {
     var sections: [HomeSection] { get }
+    /// Stages a row's swipe action through the same proposal pipeline agents
+    /// use — the proposal lands in the queue and nothing applies until the
+    /// human approves it. Failures are logged, never applied.
+    func stage(row: HomeRow, action: HomeRowAction, newName: String?) async
 }
 
 @MainActor
@@ -136,25 +140,25 @@ final class InMemoryNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGrap
 
         sections = [
             HomeSection(title: "Rooms", rows: [
-                HomeRow(name: "Living Room", subtitle: "Upstairs · Default Room", systemImage: "sofa", trailingCount: 9),
-                HomeRow(name: "Kitchen", subtitle: "Downstairs", systemImage: "cooktop", trailingCount: 6),
-                HomeRow(name: "Office", subtitle: "No zone", systemImage: "laptopcomputer", trailingCount: 4),
-                HomeRow(name: "Master Bedroom", subtitle: "Upstairs", systemImage: "bed.double", trailingCount: 5),
-                HomeRow(name: "Storage", subtitle: "Delete pending", systemImage: "shippingbox", trailingCount: 2),
+                HomeRow(name: "Living Room", subtitle: "Upstairs · Default Room", systemImage: "sofa", trailingCount: 9, kind: .room, entityId: "room-1"),
+                HomeRow(name: "Kitchen", subtitle: "Downstairs", systemImage: "cooktop", trailingCount: 6, kind: .room, entityId: "room-2"),
+                HomeRow(name: "Office", subtitle: "No zone", systemImage: "laptopcomputer", trailingCount: 4, kind: .room, entityId: "room-3"),
+                HomeRow(name: "Master Bedroom", subtitle: "Upstairs", systemImage: "bed.double", trailingCount: 5, kind: .room, entityId: "room-4"),
+                HomeRow(name: "Storage", subtitle: "Delete pending", systemImage: "shippingbox", trailingCount: 2, kind: .room, entityId: "room-5"),
             ]),
             HomeSection(title: "Zones", rows: [
-                HomeRow(name: "Upstairs", subtitle: "Living Room, Master Bedroom", systemImage: "house", trailingCount: 2),
-                HomeRow(name: "Downstairs", subtitle: "Kitchen, Entry", systemImage: "house", trailingCount: 2),
+                HomeRow(name: "Upstairs", subtitle: "Living Room, Master Bedroom", systemImage: "house", trailingCount: 2, kind: .zone, entityId: "zone-1"),
+                HomeRow(name: "Downstairs", subtitle: "Kitchen, Entry", systemImage: "house", trailingCount: 2, kind: .zone, entityId: "zone-2"),
             ]),
             HomeSection(title: "Scenes", rows: [
-                HomeRow(name: "Good Morning", subtitle: "8 actions · 4 accessories", systemImage: "sunrise"),
-                HomeRow(name: "Goodnight", subtitle: "12 actions · 7 accessories", systemImage: "moon.stars"),
-                HomeRow(name: "Movie Time", subtitle: "5 actions · 3 accessories", systemImage: "film"),
+                HomeRow(name: "Good Morning", subtitle: "8 actions · 4 accessories", systemImage: "sunrise", kind: .scene, entityId: "scene-1"),
+                HomeRow(name: "Goodnight", subtitle: "12 actions · 7 accessories", systemImage: "moon.stars", kind: .scene, entityId: "scene-2"),
+                HomeRow(name: "Movie Time", subtitle: "5 actions · 3 accessories", systemImage: "film", kind: .scene, entityId: "scene-3"),
             ]),
             HomeSection(title: "Triggers", rows: [
-                HomeRow(name: "Weekday evening", subtitle: "Timer · 17:30 Mon–Fri", systemImage: "clock"),
-                HomeRow(name: "Away lights", subtitle: "Event · presence predicate", systemImage: "location"),
-                HomeRow(name: "Old porch light", subtitle: "Timer · disabled", systemImage: "lightbulb", isEnabled: false),
+                HomeRow(name: "Weekday evening", subtitle: "Timer · 17:30 Mon–Fri", systemImage: "clock", kind: .trigger, entityId: "trigger-1"),
+                HomeRow(name: "Away lights", subtitle: "Event · presence predicate", systemImage: "location", kind: .trigger, entityId: "trigger-2"),
+                HomeRow(name: "Old porch light", subtitle: "Timer · disabled", systemImage: "lightbulb", isEnabled: false, kind: .trigger, entityId: "trigger-3"),
             ]),
         ]
 
@@ -184,5 +188,21 @@ final class InMemoryNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGrap
 
     func toggleTokenRevealed() {
         isTokenRevealed.toggle()
+    }
+
+    func stage(row: HomeRow, action: HomeRowAction, newName: String?) async {
+        // Presentational only: append the proposal the swipe would stage so
+        // previews can show the queue badge reacting to a Home swipe.
+        guard let request = row.stageRequest(for: action, newName: newName) else { return }
+        proposals.append(
+            NilesProposal(
+                id: "prop_swipe_\(proposals.count + 1)",
+                tool: request.tool,
+                title: "\(action.title) “\(row.name)”",
+                agentName: "You",
+                createdAt: Date(),
+                isDestructive: action == .delete
+            )
+        )
     }
 }
