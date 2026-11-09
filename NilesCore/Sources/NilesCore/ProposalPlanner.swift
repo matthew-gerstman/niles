@@ -15,6 +15,8 @@ public enum ProposalPlanner {
         case unknownTrigger(String)
         case unknownAccessory(id: String, home: String)
         case unknownService(String)
+        case unknownServiceOnAccessory(accessory: String, service: String)
+        case unsupportedCharacteristic(accessory: String, characteristic: String)
         case duplicateName(kind: String, name: String, home: String)
         case invalidInput(String)
         case noChange(String)
@@ -39,6 +41,11 @@ public enum ProposalPlanner {
                 "No accessory with id \(id) in home “\(home)”."
             case .unknownService(let id):
                 "No service with id \(id) visible in the home graph; service ids come from get_service_groups."
+            case .unknownServiceOnAccessory(let accessory, let service):
+                "Accessory “\(accessory)” has no service “\(service)”. Check the accessory's services with get_rooms."
+            case .unsupportedCharacteristic(let accessory, let characteristic):
+                "Accessory “\(accessory)” has no service with characteristic \(characteristic). "
+                    + "Check the accessory's supported characteristics with get_rooms."
             case .duplicateName(let kind, let name, let home):
                 "A \(kind) named “\(name)” already exists in “\(home)”."
             case .invalidInput(let detail):
@@ -265,13 +272,14 @@ public enum ProposalPlanner {
         let trimmed = try requiredName(name, kind: "scene")
         let home = try self.home(id: homeId, in: graph)
         try rejectDuplicate(kind: "scene", name: trimmed, in: home.scenes.map(\.name), homeName: home.name)
-        try validate(accessories: actions, home: home)
+        let capabilityNotes = try validate(accessories: actions, home: home)
 
         let actionNoun = actions.count == 1 ? "action" : "actions"
         var card: [ProposalCardLine] = [
             ProposalCardLine(.add, "Scene “\(trimmed)” · created with \(actions.count) \(actionNoun)")
         ]
         card += actions.map { ProposalCardLine(.add, describe(spec: $0, home: home)) }
+        card += capabilityNotes
         // Scope note: execute is deliberately out of v1 (spec) — the card
         // preempts the "did it run?" question.
         card.append(ProposalCardLine(.note, "⚠ Niles stages scenes; it never runs one."))
@@ -294,7 +302,7 @@ public enum ProposalPlanner {
 
     private static func setSceneActions(sceneId: String, actions: [SceneActionSpec], graph: HomeGraph) throws -> Plan {
         let (home, scene) = try self.scene(id: sceneId, in: graph)
-        try validate(accessories: actions, home: home)
+        let capabilityNotes = try validate(accessories: actions, home: home)
 
         let currentKeys = scene.actions.map(SceneActionKey.init(action:))
         let targetKeys = actions.map(SceneActionKey.init(spec:))
@@ -331,6 +339,7 @@ public enum ProposalPlanner {
             let noun = unchanged == 1 ? "action" : "actions"
             card.append(ProposalCardLine(.plain, "\(unchanged) existing \(noun) unchanged."))
         }
+        card += capabilityNotes
 
         return Plan(
             tool: "set_scene_actions",
@@ -507,12 +516,13 @@ public enum ProposalPlanner {
         let trimmed = try requiredName(name, kind: "trigger")
         let home = try self.home(id: homeId, in: graph)
         let scene = try sceneReference(sceneId, in: home)
-        try validate(events: events, home: home)
+        let capabilityNotes = try validate(events: events, home: home)
 
         var card: [ProposalCardLine] = [
             ProposalCardLine(.add, "Event trigger “\(trimmed)” · created DISABLED"),
         ]
         card += events.map { ProposalCardLine(.plain, "Fires \($0.description(in: home))") }
+        card += capabilityNotes
         if let scene { card.append(ProposalCardLine(.plain, "Runs scene “\(scene.name)” when it fires.")) }
         card.append(ProposalCardLine(
             .note, "⚠ Created disabled — arming it takes a separate set_trigger_state approval."
@@ -699,21 +709,85 @@ public enum ProposalPlanner {
     }
 
     /// Eager per-event validation (spec): every proposed characteristic event
-    /// must reference an accessory that exists in the home today. All
-    /// failures are collected, so the agent fixes everything in one retry.
-    private static func validate(events: [TriggerEventSpec], home: HomeGraph.Home) throws {
-        let known = Set(home.rooms.flatMap { $0.accessories.map(\.id) })
+    /// must reference an accessory that exists in the home today and — when
+    /// capability data is available — a characteristic it actually supports.
+    /// All failures are collected, so the agent fixes everything in one
+    /// retry; missing capability data degrades to a permissive card note.
+    private static func validate(events: [TriggerEventSpec], home: HomeGraph.Home) throws -> [ProposalCardLine] {
         var failures: [String] = []
+        var notes: [ProposalCardLine] = []
         for (index, event) in events.enumerated() {
-            guard case .characteristic(let accessoryId, _, _) = event else { continue }
-            if !known.contains(accessoryId) {
+            guard case .characteristic(let accessoryId, let characteristic, _) = event else { continue }
+            guard let accessory = accessory(id: accessoryId, in: home) else {
                 let error = PlannerError.unknownAccessory(id: accessoryId, home: home.name)
+                failures.append("Event \(index + 1): \(error.message)")
+                continue
+            }
+            switch capability(characteristic: characteristic, service: nil, in: accessory) {
+            case .supported:
+                break
+            case .unverifiable:
+                notes.append(ProposalCardLine(
+                    .note,
+                    "⚠ Could not verify \(characteristic) support — “\(accessory.name)”'s "
+                        + "capability data is unavailable; approval may still fail at execution."
+                ))
+            case .unsupported(let error):
                 failures.append("Event \(index + 1): \(error.message)")
             }
         }
         if !failures.isEmpty {
             throw PlannerError.validationFailed(failures)
         }
+        return notes
+    }
+
+    // MARK: - Capability checks
+
+    /// The outcome of a staging-time capability check against the graph's
+    /// accessory services.
+    private enum Capability {
+        case supported
+        /// No characteristic data to judge against — staging stays permissive.
+        case unverifiable
+        case unsupported(PlannerError)
+    }
+
+    /// Whether an accessory supports a characteristic, mirroring the
+    /// executor's resolution (`DeviceWriteResolver.resolveAction`): the
+    /// characteristic is identified by type UUID or its metadata name (the
+    /// shared rule settled with the write-resolver fix so staging and
+    /// execution read the same DeviceHomeView shape), and the service
+    /// name-or-type filter matches when the spec names a service — so
+    /// staging never passes anything execution would reject. Accessories
+    /// whose services list no characteristics (a graph without capability
+    /// reads) are unverifiable.
+    private static func capability(
+        characteristic: String, service: String?, in accessory: HomeGraph.Accessory
+    ) -> Capability {
+        guard accessory.services.contains(where: { !$0.characteristics.isEmpty }) else {
+            return .unverifiable
+        }
+        let services: [HomeGraph.AccessoryService]
+        if let wanted = service {
+            services = accessory.services.filter {
+                $0.name.caseInsensitiveCompare(wanted) == .orderedSame
+                    || $0.serviceType.map { $0.caseInsensitiveCompare(wanted) == .orderedSame } == true
+            }
+            if services.isEmpty {
+                return .unsupported(.unknownServiceOnAccessory(accessory: accessory.name, service: wanted))
+            }
+        } else {
+            services = accessory.services
+        }
+        let matches: (HomeGraph.CharacteristicRef) -> Bool = { ref in
+            ref.type == characteristic
+                || ref.name.map { $0.caseInsensitiveCompare(characteristic) == .orderedSame } == true
+        }
+        guard services.contains(where: { $0.characteristics.contains(where: matches) }) else {
+            return .unsupported(.unsupportedCharacteristic(accessory: accessory.name, characteristic: characteristic))
+        }
+        return .supported
     }
 
     /// "fires 2026-11-09T07:30:00Z, repeating {hour: 7, minute: 30}".
@@ -744,18 +818,41 @@ public enum ProposalPlanner {
     }
 
     /// Eager per-action validation (spec): every proposed scene action must
-    /// reference an accessory that exists in the home today. All failures are
-    /// collected, so the agent fixes everything in one retry.
-    private static func validate(accessories actions: [SceneActionSpec], home: HomeGraph.Home) throws {
-        let known = Set(home.rooms.flatMap { $0.accessories.map(\.id) })
+    /// reference an accessory that exists in the home today and — when the
+    /// graph carries capability data (the read side's accessory services
+    /// with their characteristics) — a characteristic the accessory actually
+    /// supports. All failures are collected, so the agent fixes everything in
+    /// one retry. When an accessory exposes no characteristic data the
+    /// support check degrades to permissive and the returned card note says
+    /// so; a rejection here always precedes a human seeing a card.
+    private static func validate(
+        accessories actions: [SceneActionSpec], home: HomeGraph.Home
+    ) throws -> [ProposalCardLine] {
         var failures: [String] = []
-        for (index, action) in actions.enumerated() where !known.contains(action.accessoryId) {
-            let error = PlannerError.unknownAccessory(id: action.accessoryId, home: home.name)
-            failures.append("Action \(index + 1): \(error.message)")
+        var notes: [ProposalCardLine] = []
+        for (index, action) in actions.enumerated() {
+            guard let accessory = accessory(id: action.accessoryId, in: home) else {
+                let error = PlannerError.unknownAccessory(id: action.accessoryId, home: home.name)
+                failures.append("Action \(index + 1): \(error.message)")
+                continue
+            }
+            switch capability(characteristic: action.characteristic, service: action.service, in: accessory) {
+            case .supported:
+                break
+            case .unverifiable:
+                notes.append(ProposalCardLine(
+                    .note,
+                    "⚠ Could not verify \(action.characteristic) support — “\(accessory.name)”'s "
+                        + "capability data is unavailable; approval may still fail at execution."
+                ))
+            case .unsupported(let error):
+                failures.append("Action \(index + 1): \(error.message)")
+            }
         }
         if !failures.isEmpty {
             throw PlannerError.validationFailed(failures)
         }
+        return notes
     }
 
     /// Display line for a proposed action: "Desk Lamp: Brightness → 30".
@@ -772,8 +869,12 @@ public enum ProposalPlanner {
         return "\(accessory): \(label) → \(action.valueDescription)"
     }
 
+    private static func accessory(id: String, in home: HomeGraph.Home) -> HomeGraph.Accessory? {
+        home.rooms.flatMap { $0.accessories }.first { $0.id == id }
+    }
+
     private static func accessoryName(of id: String, in home: HomeGraph.Home) -> String? {
-        home.rooms.flatMap { $0.accessories }.first { $0.id == id }?.name
+        accessory(id: id, in: home)?.name
     }
 
     /// Borrow a human label for a characteristic type from any scene action in
