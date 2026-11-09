@@ -149,7 +149,8 @@ struct QueueViewModelTests {
         #expect(try await fake.snapshot().homes[0].rooms.contains { $0.name == "Studio" } == false)
         #expect(store.undoStates[id] == nil)
         let revert = try #require(store.proposals.first { $0.revertsProposalId == id })
-        #expect(revert.evidence.allSatisfy(\.confirmed))
+        let allConfirmed = revert.evidence.allSatisfy(\.confirmed)
+        #expect(allConfirmed)
     }
 
     @Test
