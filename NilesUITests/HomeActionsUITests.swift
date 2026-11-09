@@ -30,10 +30,12 @@ final class HomeActionsUITests: XCTestCase {
         // Full-swipe right: stages the primary action (Run scene). Nothing
         // applies — the proposal lands in the queue. Capture before asserting
         // so a failure still leaves visual evidence of the post-swipe state.
-        NSLog("SWIPE-DEBUG scene.frame=\(scene.frame) window.frame=\(app.frame)")
+        // The end point is an in-window offset from the start (XCUITest's slow
+        // synthesized drags get their touch cancelled mid-path, so use a plain
+        // drag with ample travel past the staging threshold).
         let start = scene.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5))
-        let end = scene.coordinate(withNormalizedOffset: CGVector(dx: 1.6, dy: 0.5))
-        start.press(forDuration: 0.1, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.3)
+        let end = start.withOffset(CGVector(dx: 240, dy: 0))
+        start.press(forDuration: 0.1, thenDragTo: end)
         sleep(2)
         capture("home-after-full-swipe", in: app)
 
@@ -54,8 +56,8 @@ final class HomeActionsUITests: XCTestCase {
         let row = app.staticTexts["Good Morning"].firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 10))
         let revealStart = row.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5))
-        let revealEnd = row.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.5))
-        revealStart.press(forDuration: 0.1, thenDragTo: revealEnd, withVelocity: .slow, thenHoldForDuration: 0.3)
+        let revealEnd = revealStart.withOffset(CGVector(dx: -120, dy: 0))
+        revealStart.press(forDuration: 0.1, thenDragTo: revealEnd)
         sleep(1)
         capture("home-quick-actions", in: app)
     }

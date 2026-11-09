@@ -1,5 +1,4 @@
 import SwiftUI
-import os
 
 /// Home graph: Rooms, Zones, Scenes and Triggers — exactly what agents see
 /// through the read tools. Rows are actionable: swipe right full-swipes the
@@ -77,10 +76,12 @@ private struct SwipeableHomeRow: View {
     let row: HomeRow
     let onStage: (HomeRowAction, String?) -> Void
 
-    @State private var dragX: CGFloat = 0
-    /// True while a rightward drag is in flight, so the primary reveal draws
-    /// behind the content instead of the quick actions.
-    @State private var isDraggingRight = false
+    /// Live drag offset — resets automatically when the touch ends OR is
+    /// cancelled (e.g. an incoming banner steals the touch), so a cancelled
+    /// swipe can never leave the row stuck mid-reveal.
+    @GestureState private var swipeTranslation: CGFloat = 0
+    /// Where the row rests: -openWidth while quick actions are open, else 0.
+    @State private var openX: CGFloat = 0
 
     private let stageThreshold: CGFloat = 90
     private let openThreshold: CGFloat = 48
@@ -89,35 +90,38 @@ private struct SwipeableHomeRow: View {
     private var quickActions: [HomeRowAction] { row.quickActions }
     private var openWidth: CGFloat { CGFloat(quickActions.count) * quickActionWidth }
 
+    /// Total visual offset: resting position plus any in-flight drag.
+    private var contentOffset: CGFloat { swipeTranslation + openX }
+
     var body: some View {
         ZStack {
             revealedActions
             HomeRowView(row: row)
                 .background(Color(.systemBackground))
-                .padding(.leading, max(0, dragX))
-                .padding(.trailing, max(0, -dragX))
+                .padding(.leading, max(0, contentOffset))
+                .padding(.trailing, max(0, -contentOffset))
         }
         .clipped()
         .gesture(drag)
     }
 
     /// What shows behind the row while swiping or open. The two reveals are
-    /// mutually exclusive: a right drag shows the primary, anything else
-    /// shows the quick actions sized by the remaining reveal width.
+    /// mutually exclusive: a rightward offset shows the primary, a leftward
+    /// one shows the quick actions sized by the remaining reveal width.
     @ViewBuilder
     private var revealedActions: some View {
-        if isDraggingRight || dragX > 0 {
+        if contentOffset > 0 {
             HStack(spacing: 0) {
                 if let action = row.primaryAction {
                     SwipeActionButton(action: action, fillsHeight: true) {
                         stage(action)
                     }
-                    .frame(width: max(0, max(0, dragX) - 8))
+                    .frame(width: max(0, contentOffset - 8))
                 }
                 Spacer(minLength: 0)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if -dragX > 0 {
+        } else if contentOffset < 0 {
             HStack(spacing: 0) {
                 Spacer(minLength: 0)
                 HStack(spacing: 6) {
@@ -129,43 +133,33 @@ private struct SwipeableHomeRow: View {
                         .frame(width: quickActionWidth - 6)
                     }
                 }
-                .frame(width: min(max(0, -dragX), openWidth), alignment: .trailing)
+                .frame(width: min(max(0, -contentOffset), openWidth), alignment: .trailing)
                 .clipped()
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
-    private static let gestureLog = Logger(subsystem: "com.gerstman.niles", category: "swipe")
-
     private var drag: some Gesture {
         DragGesture(minimumDistance: 20)
-            .onChanged { value in
-                Self.gestureLog.notice("swipe onChanged w=\(value.translation.width, format: .fixed(precision: 1), privacy: .public) h=\(value.translation.height, format: .fixed(precision: 1), privacy: .public) at=\(value.location.x, format: .fixed(precision: 1), privacy: .public),\(value.location.y, format: .fixed(precision: 1), privacy: .public) start=\(value.startLocation.x, format: .fixed(precision: 1), privacy: .public)")
+            .updating($swipeTranslation) { value, state, _ in
                 guard abs(value.translation.width) > abs(value.translation.height) else { return }
-                isDraggingRight = value.translation.width > 0
                 let clamped = min(abs(value.translation.width), 180)
-                dragX = value.translation.width > 0 ? clamped : -clamped
+                state = value.translation.width > 0 ? clamped : -clamped
             }
             .onEnded { value in
-                defer { isDraggingRight = false }
-                Self.gestureLog.notice("swipe onEnded w=\(value.translation.width, format: .fixed(precision: 1), privacy: .public) h=\(value.translation.height, format: .fixed(precision: 1), privacy: .public) predicted=\(value.predictedEndTranslation.width, format: .fixed(precision: 1), privacy: .public)")
-                guard abs(value.translation.width) > abs(value.translation.height) else {
-                    Self.gestureLog.error("swipe onEnded rejected: vertical drift")
-                    return
-                }
+                guard abs(value.translation.width) > abs(value.translation.height) else { return }
                 // A quick flick ends with a small final translation; judge it
                 // by where the gesture was heading, not where it stopped.
                 let travel = max(value.translation.width, value.predictedEndTranslation.width)
                 if travel > 0 {
                     // Full swipe right: stage the primary action immediately.
                     if travel > stageThreshold, let action = row.primaryAction {
-                        Self.gestureLog.notice("swipe staging primary \(action.title, privacy: .public)")
                         stage(action)
                     }
                     close()
                 } else if -travel > openThreshold {
-                    withAnimation(.spring(duration: 0.25)) { dragX = -openWidth }
+                    withAnimation(.spring(duration: 0.25)) { openX = -openWidth }
                 } else {
                     close()
                 }
@@ -177,7 +171,7 @@ private struct SwipeableHomeRow: View {
     }
 
     private func close() {
-        withAnimation(.spring(duration: 0.25)) { dragX = 0 }
+        withAnimation(.spring(duration: 0.25)) { openX = 0 }
     }
 }
 
