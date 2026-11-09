@@ -160,7 +160,7 @@ struct ActivityTimelineTests {
     /// read-back evidence, found through the live revert's link to the
     /// original proposal.
     @Test
-    func undoneRowsStayMarkedAndCarryRevertEvidence() {
+    func undoneRowsStayMarkedAndCarryRevertEvidence() throws {
         let events = [
             event(.staged, minutesAgo: 60, proposalId: "prop_orig"),
             event(.decided, minutesAgo: 55, proposalId: "prop_orig", decision: "approved"),
@@ -188,7 +188,7 @@ struct ActivityTimelineTests {
     /// After a relaunch the revert link is gone (proposals are in-memory);
     /// the UNDONE marker survives with an empty evidence payload.
     @Test
-    func undoneRowsRenderWithoutALiveRevertLink() {
+    func undoneRowsRenderWithoutALiveRevertLink() throws {
         let events = [
             event(.executed, minutesAgo: 50, proposalId: "prop_orig"),
             event(.undone, minutesAgo: 21, proposalId: "prop_orig"),
