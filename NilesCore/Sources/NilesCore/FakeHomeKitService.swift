@@ -298,7 +298,52 @@ public actor FakeHomeKitService: HomeKitWriting {
                 }
             }
             return nil
+
+        case .writeCharacteristic(_, let spec):
+            let (h, r, a, s, c) = try indexOfCharacteristic(
+                accessoryId: spec.accessoryId, service: spec.service, characteristic: spec.characteristic
+            )
+            let ref = graph.homes[h].rooms[r].accessories[a].services[s].characteristics[c]
+            // The same value check the device executor runs at resolution —
+            // the fake mirrors HomeKit's rejection of values that do not
+            // fit the declared metadata.
+            let kind = DeviceHomeView.ValueKind(format: ref.metadata?.format)
+            if let why = DeviceWriteResolver.valueViolation(spec.value, kind: kind, metadata: ref.metadata) {
+                throw HomeKitWriteError.invalidOperation(
+                    "Characteristic \(spec.characteristic) rejects \(spec.value.rendered): \(why)."
+                )
+            }
+            // HomeKit updates the characteristic's stored value on write —
+            // the fake mirrors that observable: the next read sees the
+            // written value, which the evidence read-back confirms.
+            graph.homes[h].rooms[r].accessories[a].services[s].characteristics[c].valueDescription = spec.value.rendered
+            return nil
         }
+    }
+
+    /// The characteristic a direct write targets, resolved with the shared
+    /// name-or-UUID rule (accessory -> service -> characteristic); the
+    /// indexes route the graph mutation.
+    private func indexOfCharacteristic(
+        accessoryId: String, service wanted: String?, characteristic name: String
+    ) throws -> (home: Int, room: Int, accessory: Int, service: Int, characteristic: Int) {
+        let (h, r, a) = try indexOfAccessory(id: accessoryId)
+        let accessory = graph.homes[h].rooms[r].accessories[a]
+        let services = accessory.services.enumerated().filter { _, service in
+            guard let wanted else { return true }
+            return service.name.caseInsensitiveCompare(wanted) == .orderedSame
+                || service.serviceType.map { $0.caseInsensitiveCompare(wanted) == .orderedSame } == true
+        }
+        for (s, service) in services {
+            for (c, ref) in service.characteristics.enumerated()
+            where ref.type.caseInsensitiveCompare(name) == .orderedSame
+                || ref.name.map { $0.caseInsensitiveCompare(name) == .orderedSame } == true {
+                return (h, r, a, s, c)
+            }
+        }
+        throw HomeKitWriteError.objectMissing(
+            "Accessory “\(accessory.name)” has no characteristic \(name)."
+        )
     }
 
     // MARK: - Graph mutation internals

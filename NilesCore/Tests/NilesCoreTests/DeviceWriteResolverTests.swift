@@ -340,6 +340,162 @@ import Testing
         )])
     }
 
+    // MARK: Direct characteristic writes
+
+    /// The live-shaped view with declared metadata on Brightness — the
+    /// device view now carries the graph's read-depth metadata, so the
+    /// resolver can range-check direct writes.
+    private func rangedLiveView() -> DeviceHomeView {
+        var view = liveShapedView()
+        view.homes[0].accessories[0].services[0].characteristics[1].metadata =
+            HomeGraph.CharacteristicMetadata(format: "int", units: "percentage", minValue: 0, maxValue: 100, step: 1)
+        return view
+    }
+
+    @Test func writeCharacteristicResolvesFriendlyNameAndUUIDSpellingsOnALiveShapedView() throws {
+        for spelling in ["Brightness", "brightness", "00000008-0000-1000-8000-0026BB765291"] {
+            let steps = try resolve(
+                .writeCharacteristic(
+                    homeId: "home-live",
+                    action: SceneActionSpec(accessoryId: "acc-light-live", service: nil, characteristic: spelling, value: .int(30))
+                ),
+                view: liveShapedView()
+            )
+            #expect(steps == [.writeCharacteristic(
+                homeId: "home-live",
+                action: ResolvedAction(
+                    accessoryId: "acc-light-live",
+                    serviceId: "svc-light-live",
+                    characteristicId: "char-brightness-live",
+                    characteristicType: "00000008-0000-1000-8000-0026BB765291",
+                    kind: .number,
+                    value: .int(30)
+                )
+            )])
+        }
+    }
+
+    @Test func writeCharacteristicResolvesEveryValueKind() throws {
+        // A bool onto a number-kind characteristic (the light switch shape).
+        let on = try resolve(
+            .writeCharacteristic(
+                homeId: "home-1",
+                action: SceneActionSpec(accessoryId: "acc-light-a", service: nil, characteristic: "On", value: .bool(true))
+            )
+        )
+        #expect(on == [.writeCharacteristic(
+            homeId: "home-1",
+            action: ResolvedAction(
+                accessoryId: "acc-light-a",
+                serviceId: "svc-light-a",
+                characteristicId: "char-on-a",
+                characteristicType: "On",
+                kind: .number,
+                value: .bool(true)
+            )
+        )])
+        // A string onto a string-kind characteristic.
+        let track = try resolve(
+            .writeCharacteristic(
+                homeId: "home-1",
+                action: SceneActionSpec(accessoryId: "acc-lamp-b", service: nil, characteristic: "TrackName", value: .string("Radiohead"))
+            )
+        )
+        #expect(track == [.writeCharacteristic(
+            homeId: "home-1",
+            action: ResolvedAction(
+                accessoryId: "acc-lamp-b",
+                serviceId: "svc-speaker-b",
+                characteristicId: "char-track-b",
+                characteristicType: "TrackName",
+                kind: .string,
+                value: .string("Radiohead")
+            )
+        )])
+    }
+
+    @Test func writeCharacteristicRejectsAStringOnANumberCharacteristic() {
+        let thrown = error {
+            _ = try self.resolve(
+                .writeCharacteristic(
+                    homeId: "home-1",
+                    action: SceneActionSpec(accessoryId: "acc-lamp-b", service: nil, characteristic: "Volume", value: .string("loud"))
+                )
+            )
+        }
+        guard case .invalidOperation(let message)? = thrown else {
+            Issue.record("Expected invalidOperation, got \(String(describing: thrown))")
+            return
+        }
+        #expect(message.contains("Volume"))
+        #expect(message.contains("holds numbers"))
+    }
+
+    @Test func writeCharacteristicRejectsValuesOutsideTheDeclaredRange() {
+        let thrown = error {
+            _ = try self.resolve(
+                .writeCharacteristic(
+                    homeId: "home-live",
+                    action: SceneActionSpec(accessoryId: "acc-light-live", service: nil, characteristic: "Brightness", value: .int(150))
+                ),
+                view: rangedLiveView()
+            )
+        }
+        guard case .invalidOperation(let message)? = thrown else {
+            Issue.record("Expected invalidOperation, got \(String(describing: thrown))")
+            return
+        }
+        #expect(message.contains("150"))
+        #expect(message.contains("0…100"))
+    }
+
+    @Test func writeCharacteristicRejectsValuesOutsideTheDeclaredValidValues() {
+        var view = rangedLiveView()
+        view.homes[0].accessories[0].services[0].characteristics[1].metadata?.validValues = [0, 50, 100]
+        let thrown = error {
+            _ = try self.resolve(
+                .writeCharacteristic(
+                    homeId: "home-live",
+                    action: SceneActionSpec(accessoryId: "acc-light-live", service: nil, characteristic: "Brightness", value: .int(51))
+                ),
+                view: view
+            )
+        }
+        guard case .invalidOperation(let message)? = thrown else {
+            Issue.record("Expected invalidOperation, got \(String(describing: thrown))")
+            return
+        }
+        #expect(message.contains("0, 50, 100"))
+        #expect(message.contains("51"))
+    }
+
+    @Test func writeCharacteristicRejectsAnUnknownCharacteristic() {
+        #expect(error {
+            _ = try self.resolve(
+                .writeCharacteristic(
+                    homeId: "home-live",
+                    action: SceneActionSpec(accessoryId: "acc-light-live", service: nil, characteristic: "Hue", value: .int(30))
+                ),
+                view: liveShapedView()
+            )
+        } == .objectMissing("Accessory “Light A” has no service with characteristic Hue."))
+    }
+
+    @Test func valueViolationChecksKindRangeAndValidValuesTogether() {
+        var metadata = HomeGraph.CharacteristicMetadata(format: "int", units: nil, minValue: 0, maxValue: 100, step: 1)
+        // Kind mismatch outranges metadata checks.
+        #expect(DeviceWriteResolver.valueViolation(.string("loud"), kind: .number, metadata: metadata) != nil)
+        // With no metadata, a kind-compatible value is fine.
+        #expect(DeviceWriteResolver.valueViolation(.int(42), kind: .number, metadata: nil) == nil)
+        // Out of the declared range.
+        #expect(DeviceWriteResolver.valueViolation(.int(150), kind: .number, metadata: metadata)?.contains("out of range") == true)
+        // Inside the range passes.
+        #expect(DeviceWriteResolver.valueViolation(.int(50), kind: .number, metadata: metadata) == nil)
+        // Declared valid values constrain further than the range.
+        metadata.validValues = [0, 100]
+        #expect(DeviceWriteResolver.valueViolation(.int(50), kind: .number, metadata: metadata)?.contains("0, 100") == true)
+    }
+
     // MARK: Scene rename, delete, execute
 
     @Test func renameActionSetResolvesTheScene() throws {

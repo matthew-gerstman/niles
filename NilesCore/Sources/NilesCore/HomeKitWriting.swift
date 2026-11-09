@@ -26,7 +26,8 @@ public enum HomeKitValue: Codable, Sendable, Equatable, Hashable {
     }
 }
 
-/// One characteristic-write action an agent proposes for a scene.
+/// One characteristic-write action an agent proposes — for a scene action or
+/// a direct write.
 ///
 /// `service` matches the read side's `HomeGraph.SceneAction.service`: a
 /// service name or service type, whichever the agent saw in `get_scenes` or
@@ -139,6 +140,11 @@ public enum HomeKitOperation: Sendable, Equatable, Hashable {
     case assignAccessoryToRoom(homeId: String, accessoryId: String, roomId: String)
     case unblockAccessory(homeId: String, accessoryId: String)
     case removeAccessory(homeId: String, accessoryId: String)
+    /// A direct characteristic write — the value applies to the device the
+    /// moment the proposal executes. The spec travels in the scene-action
+    /// shape (accessory, optional service, characteristic, value) because it
+    /// is the same object; resolution re-derives the live characteristic.
+    case writeCharacteristic(homeId: String, action: SceneActionSpec)
 }
 
 /// Read access plus the mutation vocabulary proposals execute.
@@ -173,5 +179,29 @@ public enum HomeKitWriteError: Error, Equatable, Sendable {
         case .duplicateName(let detail): detail
         case .invalidOperation(let detail): detail
         }
+    }
+}
+
+extension HomeGraph.Accessory {
+    /// The write side's shared graph lookup: one characteristic of this
+    /// accessory, optionally within a named service, matched by type UUID or
+    /// friendly name — the same rule the device-side resolver runs, so
+    /// staging, evidence, and execution agree on the target.
+    public func characteristic(_ name: String, service: String?) -> HomeGraph.CharacteristicRef? {
+        let services = service.map { wanted in
+            self.services.filter {
+                $0.name.caseInsensitiveCompare(wanted) == .orderedSame
+                    || $0.serviceType.map { $0.caseInsensitiveCompare(wanted) == .orderedSame } == true
+            }
+        } ?? self.services
+        for candidate in services {
+            if let ref = candidate.characteristics.first(where: {
+                $0.type.caseInsensitiveCompare(name) == .orderedSame
+                    || $0.name.map { $0.caseInsensitiveCompare(name) == .orderedSame } == true
+            }) {
+                return ref
+            }
+        }
+        return nil
     }
 }

@@ -330,6 +330,20 @@ public enum ProposalEvidenceCollector {
                 observed: stillPresent ? "Accessory still present — delete did not take effect" : "No accessory with id \(accessoryId) remains",
                 confirmed: !stillPresent
             )
+
+        case .writeCharacteristic(_, let action):
+            let accessory = graph.homes.flatMap(\.rooms).flatMap(\.accessories).first { $0.id == action.accessoryId }
+            let ref = accessory?.characteristic(action.characteristic, service: action.service)
+            let label = ref?.name ?? action.characteristic
+            let name = accessory?.name ?? action.accessoryId
+            let confirmed = ref?.valueDescription == action.value.rendered
+            return ProposalEvidence(
+                claim: "\(name) \(label) is \(action.value.rendered)",
+                observed: ref.map {
+                    "\(name) \(label) now reads \($0.valueDescription ?? "no value")"
+                } ?? "Accessory \(action.accessoryId) not found after execution",
+                confirmed: confirmed
+            )
         }
     }
 

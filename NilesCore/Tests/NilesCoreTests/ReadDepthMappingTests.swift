@@ -50,6 +50,24 @@ import Testing
         #expect(metadata.validValues == [0, 1])
     }
 
+    /// The write path derives `ValueKind` from the declared format string;
+    /// the derivation is pinned against the framework constants themselves
+    /// (which live in the framework binary, not the headers), so a direct
+    /// write's NSNumber/NSString rendering can never drift from what the
+    /// read side maps.
+    @Test func valueKindDerivationMatchesTheHomeKitFormatConstants() {
+        #expect(DeviceHomeView.ValueKind(format: HMCharacteristicMetadataFormatString) == .string)
+        #expect(DeviceHomeView.ValueKind(format: HMCharacteristicMetadataFormatBool) == .number)
+        #expect(DeviceHomeView.ValueKind(format: HMCharacteristicMetadataFormatInt) == .number)
+        #expect(DeviceHomeView.ValueKind(format: HMCharacteristicMetadataFormatFloat) == .number)
+        #expect(DeviceHomeView.ValueKind(format: HMCharacteristicMetadataFormatUInt8) == .number)
+        #expect(DeviceHomeView.ValueKind(format: HMCharacteristicMetadataFormatUInt16) == .number)
+        #expect(DeviceHomeView.ValueKind(format: HMCharacteristicMetadataFormatUInt32) == .number)
+        #expect(DeviceHomeView.ValueKind(format: HMCharacteristicMetadataFormatUInt64) == .number)
+        #expect(DeviceHomeView.ValueKind(format: nil) == .unknown)
+        #expect(DeviceHomeView.ValueKind(format: "something-else") == .unknown)
+    }
+
     @Test func metadataWithoutAnythingMapsToNil() {
         #expect(
             HomeManagerHomeKitService.characteristicMetadata(
