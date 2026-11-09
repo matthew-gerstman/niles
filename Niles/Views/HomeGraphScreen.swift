@@ -151,7 +151,7 @@ private struct SwipeableHomeRow: View {
                 defer { isDraggingRight = false }
                 Self.gestureLog.notice("swipe onEnded w=\(value.translation.width, format: .fixed(precision: 1), privacy: .public) h=\(value.translation.height, format: .fixed(precision: 1), privacy: .public) predicted=\(value.predictedEndTranslation.width, format: .fixed(precision: 1), privacy: .public)")
                 guard abs(value.translation.width) > abs(value.translation.height) else {
-                    Self.gestureLog.error("swipe onEnded rejected: vertical drift", privacy: .public)
+                    Self.gestureLog.error("swipe onEnded rejected: vertical drift")
                     return
                 }
                 // A quick flick ends with a small final translation; judge it
