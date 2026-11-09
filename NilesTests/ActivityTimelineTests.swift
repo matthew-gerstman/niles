@@ -57,12 +57,13 @@ struct ActivityTimelineTests {
         tool: String = "create_room",
         state: ProposalState = .executed,
         reverts: String? = nil,
+        title: String = "A proposal",
         minutesAgo: TimeInterval = 30
     ) -> NilesProposal {
         NilesProposal(
             id: id,
             tool: tool,
-            title: "A proposal",
+            title: title,
             agentName: "Claude Code",
             createdAt: Date().addingTimeInterval(-minutesAgo * 60),
             isDestructive: false,
@@ -174,7 +175,7 @@ struct ActivityTimelineTests {
         ]
         let proposals = [
             proposal(id: "prop_orig", state: .executed),
-            proposal(id: "prop_revert", reverts: "prop_orig", minutesAgo: 20),
+            proposal(id: "prop_revert", reverts: "prop_orig", title: "Undo — A proposal", minutesAgo: 20),
         ]
         let rows = ActivityTimeline.rows(events: events, proposals: proposals)
 
