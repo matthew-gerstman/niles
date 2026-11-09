@@ -2,6 +2,7 @@ import Foundation
 import MCP
 import NilesCore
 import Testing
+import UIKit
 @testable import Niles
 
 /// Convenience token source for tests — the real app uses the Keychain.
@@ -105,5 +106,30 @@ struct LiveNilesStoreTests {
         await store.loadTokenAndWait()
         #expect(store.token == "pairing-token")
         #expect(store.tokenError == nil)
+    }
+
+    /// The screen keep-awake binding, driven through the same scene-phase
+    /// handoff and kill switch the app uses: serving foregrounded disables
+    /// the idle timer; the kill switch or backgrounding re-enables it.
+    @Test
+    func servingKeepsScreenAwakeAndStoppingRestoresAutoLock() async throws {
+        let coordinator = ServerCoordinator(tokenStore: StaticTokenStore(token: "test-token"), homeKitService: FakeHomeKitService())
+        let store = LiveNilesStore(coordinator: coordinator, notifier: .disabled)
+        defer { UIApplication.shared.isIdleTimerDisabled = false }
+
+        await store.handleScene(isActive: true)
+        try await waitUntil { UIApplication.shared.isIdleTimerDisabled }
+
+        // Kill switch off: the server stops and auto-lock returns.
+        store.setServerRunning(false)
+        try await waitUntil { !UIApplication.shared.isIdleTimerDisabled }
+
+        // Kill switch back on: serving again, screen stays awake.
+        store.setServerRunning(true)
+        try await waitUntil { UIApplication.shared.isIdleTimerDisabled }
+
+        // Backgrounding: the server stops and auto-lock returns.
+        await store.handleScene(isActive: false)
+        try await waitUntil { !UIApplication.shared.isIdleTimerDisabled && !store.serverIsRunning }
     }
 }

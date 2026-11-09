@@ -2,6 +2,7 @@ import Foundation
 import NilesCore
 import Observation
 import OSLog
+import UIKit
 
 /// A `HomeKitWriting` backed by the real home database.
 ///
@@ -83,6 +84,9 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
     /// The user's kill switch (spec: the server toggle doubles as one). While
     /// set, foregrounding the app does not restart serving.
     private var userStoppedServer = false
+    /// Set from the scene phase handoff in `handleScene(isActive:)`; the keep-
+    /// awake policy only holds the screen up while the app is frontmost.
+    private var isAppActive = false
 
     init(
         coordinator: ServerCoordinator,
@@ -120,6 +124,7 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
     /// Scene-phase handoff from the app entry: active means serving unless
     /// the user's kill switch is on; anything else stops the server.
     func handleScene(isActive: Bool) async {
+        isAppActive = isActive
         if isActive {
             start()
             if !userStoppedServer {
@@ -211,6 +216,7 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
     func refresh() async {
         endpoint = "http://\(LANAddress.primaryIPv4 ?? "127.0.0.1"):\(LANServer.defaultPort)/mcp"
         serverIsRunning = coordinator.status.isRunning
+        applyIdleTimerPolicy()
 
         let sessions = await coordinator.sessionInfos()
         sessionsSummary = "\(sessions.count) active"
@@ -261,6 +267,15 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
 
     private func newestClientName(from sessions: [MCPGateway.SessionInfo]) -> String? {
         sessions.max { $0.startedAt < $1.startedAt }?.clientName
+    }
+
+    /// Serving keeps the screen awake (a locked phone suspends the LAN
+    /// server); stopping the server or backgrounding restores normal auto-lock.
+    private func applyIdleTimerPolicy() {
+        UIApplication.shared.isIdleTimerDisabled = IdleTimerPolicy.shouldKeepScreenAwake(
+            isServing: serverIsRunning,
+            isAppActive: isAppActive
+        )
     }
 
     private func loadToken() async {
