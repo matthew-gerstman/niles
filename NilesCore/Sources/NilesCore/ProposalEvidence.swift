@@ -19,9 +19,9 @@ public enum ProposalEvidenceCollector {
         let ids = createdIds.count == operations.count
             ? createdIds
             : Array(repeating: nil as String?, count: operations.count)
-        return zip(operations, ids).enumerated().map { batchIndex, pair in
+        return operations.enumerated().map { batchIndex, operation in
             collect(
-                operation: pair.offset, createdId: pair.element,
+                operation: operation, createdId: ids[batchIndex],
                 batch: operations, batchIndex: batchIndex, graph: graph
             )
         }
