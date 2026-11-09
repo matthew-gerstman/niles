@@ -47,6 +47,8 @@ struct NilesProposal: Identifiable, Hashable {
     var isPending: Bool { state == .staged }
     /// Defaults to staged — every proposal enters the pipeline staged.
     var state: ProposalState = .staged
+    /// Set on a revert proposal: the id of the executed proposal it reverts.
+    var revertsProposalId: String?
 }
 
 /// An agent seen on the LAN, for the dashboard and pairing lists.

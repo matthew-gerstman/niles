@@ -500,7 +500,8 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
                 .filter { $0.kind == .add || $0.kind == .remove }
                 .map { ProposalDiffLine(ProposalDiffLine.Kind($0.kind), $0.text) },
             context: context,
-            state: proposal.state
+            state: proposal.state,
+            revertsProposalId: proposal.revertsProposalId
         )
     }
 
