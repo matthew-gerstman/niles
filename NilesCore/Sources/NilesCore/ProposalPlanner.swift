@@ -97,9 +97,17 @@ public enum ProposalPlanner {
                 homeId: homeId, name: name, fireDate: fireDate, recurrence: recurrence ?? [:],
                 sceneId: sceneId, graph: graph
             )
-        case .createEventTrigger(let homeId, let name, let events, let sceneId):
+        case .createEventTrigger(let homeId, let name, let events, let endEvents, let executeOnce, let sceneId):
             return try createEventTrigger(
-                homeId: homeId, name: name, events: events, sceneId: sceneId, graph: graph
+                homeId: homeId, name: name, events: events, endEvents: endEvents,
+                executeOnce: executeOnce, sceneId: sceneId, graph: graph
+            )
+        case .updateEventTrigger(
+            let triggerId, let events, let endEvents, let recurrences, let executeOnce, let sceneId
+        ):
+            return try updateEventTrigger(
+                triggerId: triggerId, events: events, endEvents: endEvents,
+                recurrences: recurrences, executeOnce: executeOnce, sceneId: sceneId, graph: graph
             )
         case .setTriggerState(let triggerId, let enabled, let fireDate, let recurrence):
             return try setTriggerState(
@@ -779,18 +787,26 @@ public enum ProposalPlanner {
     }
 
     private static func createEventTrigger(
-        homeId: String, name: String, events: [TriggerEventSpec], sceneId: String?, graph: HomeGraph
+        homeId: String, name: String, events: [TriggerEventSpec], endEvents: [TriggerEventSpec],
+        executeOnce: Bool, sceneId: String?, graph: HomeGraph
     ) throws -> Plan {
         let trimmed = try requiredName(name, kind: "trigger")
         let home = try self.home(id: homeId, in: graph)
         let scene = try sceneReference(sceneId, in: home)
         let capabilityNotes = try validate(events: events, home: home)
+            + validate(events: endEvents, home: home)
 
         var card: [ProposalCardLine] = [
             ProposalCardLine(.add, "Event trigger “\(trimmed)” · created DISABLED"),
         ]
         card += events.map { ProposalCardLine(.plain, "Fires \($0.description(in: home))") }
+        card += endEvents.map {
+            ProposalCardLine(.plain, "Ends with \($0.description(in: home)) — HomeKit restores the prior state")
+        }
         card += capabilityNotes
+        if executeOnce {
+            card.append(ProposalCardLine(.plain, "Runs once — HomeKit disables the trigger after it fires."))
+        }
         if let scene { card.append(ProposalCardLine(.plain, "Runs scene “\(scene.name)” when it fires.")) }
         if scene == nil {
             card.append(ProposalCardLine(
@@ -807,7 +823,8 @@ public enum ProposalPlanner {
             summary: "Create event trigger “\(trimmed)” (disabled)",
             isDestructive: false,
             operations: [.addEventTrigger(
-                homeId: home.id, name: trimmed, events: events, sceneId: scene?.id
+                homeId: home.id, name: trimmed, events: events, endEvents: endEvents,
+                executeOnce: executeOnce, sceneId: scene?.id
             )],
             entries: [ProposalDiffEntry(
                 object: ProposalObjectRef(kind: .trigger, id: "", name: trimmed),
@@ -815,6 +832,115 @@ public enum ProposalPlanner {
                 before: nil,
                 after: "disabled"
             )],
+            card: card
+        )
+    }
+
+    /// Event-trigger editing (spec group 1): the event list is declarative —
+    /// a full replacement, like set_scene_actions — with optional end-event,
+    /// recurrence, execute-once, and scene changes. The create/arm firewall
+    /// holds: the plan never touches isEnabled, and the card says so.
+    private static func updateEventTrigger(
+        triggerId: String, events: [TriggerEventSpec], endEvents: [TriggerEventSpec]?,
+        recurrences: [[String: Int]]?, executeOnce: Bool?, sceneId: String?, graph: HomeGraph
+    ) throws -> Plan {
+        let (home, trigger) = try self.trigger(id: triggerId, in: graph)
+        guard case .event(let currentEvents, _) = trigger.detail else {
+            throw PlannerError.invalidInput(
+                "Trigger “\(trigger.name)” is a timer trigger — set_trigger_state moves its schedule; event triggers have no fire date."
+            )
+        }
+        let capabilityNotes = try validate(events: events, home: home)
+            + validate(events: endEvents ?? [], home: home)
+        try validateEventTriggerRecurrences(recurrences)
+        let newScene = try sceneReference(sceneId, in: home)
+
+        // Diff the declarative list against the current events, matched by
+        // canonical identity — the same name-or-UUID rule everywhere else, so
+        // the card's diff, the executor, and the read-back agree.
+        let currentKeys = currentEvents.map { $0.canonicalKey(in: home) }
+        let targetKeys = events.map { $0.canonicalKey(in: home) }
+        let removals = zip(currentEvents, currentKeys).filter { !targetKeys.contains($0.1) }
+        let additions = zip(events, targetKeys).filter { !currentKeys.contains($0.1) }
+        let eventsChanged = !additions.isEmpty || !removals.isEmpty
+        let sceneChanged = sceneId.map { id in !trigger.linkedSceneIds.contains(id) } ?? false
+        if !eventsChanged, !sceneChanged, endEvents == nil, recurrences == nil, executeOnce == nil {
+            throw PlannerError.noChange("event trigger “\(trigger.name)” already watches exactly these events.")
+        }
+
+        let accessoryName = { (ref: HomeGraph.EventRef) -> String in
+            ref.accessoryId.flatMap { accessory(id: $0, in: home)?.name } ?? ref.accessoryId ?? "an accessory"
+        }
+        var card: [ProposalCardLine] =
+            removals.map {
+                ProposalCardLine(.remove, "“\(trigger.name)” · remove event — \(describe(event: $0.0, accessoryName: accessoryName($0.0)))")
+            }
+            + additions.map {
+                ProposalCardLine(.add, "“\(trigger.name)” · add event — fires \($0.0.description(in: home))")
+            }
+        if let endEvents {
+            if endEvents.isEmpty {
+                card.append(ProposalCardLine(.remove, "“\(trigger.name)” · end events cleared"))
+            } else {
+                card += endEvents.map {
+                    ProposalCardLine(.plain, "“\(trigger.name)” · ends with \($0.description(in: home)) — HomeKit restores the prior state")
+                }
+            }
+        }
+        if let recurrences {
+            let days = recurrences.compactMap { $0["weekday"] }.map(weekdayName)
+            card.append(ProposalCardLine(
+                .plain,
+                days.isEmpty ? "Evaluated every day — recurrences cleared." : "Evaluated only on \(days.joined(separator: ", "))."
+            ))
+        }
+        if let executeOnce {
+            card.append(ProposalCardLine(
+                .plain,
+                executeOnce ? "Runs once — HomeKit disables the trigger after it fires." : "Repeats — the trigger keeps firing until deleted or disarmed."
+            ))
+        }
+        if let newScene {
+            card.append(ProposalCardLine(.plain, "Runs scene “\(newScene.name)” when it fires."))
+        }
+        if trigger.linkedSceneIds.isEmpty && sceneId == nil {
+            card.append(ProposalCardLine(
+                .note, "⚠ Runs no scene — HomeKit cannot arm it; pass sceneId to give it one."
+            ))
+        }
+        card.append(ProposalCardLine(
+            .note,
+            "⚠ Editing does not change the trigger's armed state — it stays \(trigger.isEnabled ? "enabled" : "disabled")."
+        ))
+
+        let triggerRef = ProposalObjectRef(kind: .trigger, id: trigger.id, name: trigger.name)
+        var entries: [ProposalDiffEntry] =
+            removals.map {
+                ProposalDiffEntry(
+                    object: triggerRef, op: .removeMembers,
+                    before: describe(event: $0.0, accessoryName: accessoryName($0.0)), after: nil
+                )
+            }
+            + additions.map {
+                ProposalDiffEntry(object: triggerRef, op: .addMembers, before: nil, after: $0.0.description(in: home))
+            }
+        if entries.isEmpty {
+            // Field-only edits (executeOnce, recurrences, scene) still record
+            // one entry so the diff is never empty.
+            entries = [ProposalDiffEntry(object: triggerRef, op: .update, before: nil, after: "contents updated")]
+        }
+
+        return Plan(
+            tool: "update_event_trigger",
+            title: "Update event trigger “\(trigger.name)”",
+            summary: "Update event trigger “\(trigger.name)” events (\(additions.count) added, \(removals.count) removed)",
+            isDestructive: false,
+            operations: [.updateEventTrigger(
+                homeId: home.id, triggerId: trigger.id, events: events,
+                endEvents: endEvents, recurrences: recurrences,
+                executeOnce: executeOnce, sceneId: sceneId
+            )],
+            entries: entries,
             card: card
         )
     }
@@ -1251,6 +1377,43 @@ public enum ProposalPlanner {
     private static func rejectDuplicate(kind: String, name: String, in names: [String], homeName: String) throws {
         if names.contains(where: { $0.caseInsensitiveCompare(name) == .orderedSame }) {
             throw PlannerError.duplicateName(kind: kind, name: name, home: homeName)
+        }
+    }
+
+    /// A human description of an event as it currently exists in the graph —
+    /// the "before" side of an event-trigger edit's diff.
+    private static func describe(event ref: HomeGraph.EventRef, accessoryName: String) -> String {
+        if ref.type.lowercased().contains("presence") {
+            switch ref.valueDescription?.lowercased() {
+            case "athome": return "someone arrives home"
+            case "away": return "everyone is away"
+            default: return "a presence change"
+            }
+        }
+        let characteristicName = ref.characteristicType ?? "a characteristic"
+        if let value = ref.valueDescription {
+            return "\(accessoryName) \(characteristicName) reaches \(value)"
+        }
+        return "\(accessoryName) \(characteristicName) changes"
+    }
+
+    private static let weekdayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+
+    private static func weekdayName(_ weekday: Int) -> String {
+        (1...7).contains(weekday) ? Self.weekdayNames[weekday - 1] : "day \(weekday)"
+    }
+
+    /// Event-trigger recurrences are days of the week (HomeKit honors only
+    /// the `weekday` component on HMEventTrigger) — the same rule the resolver
+    /// enforces at execution, stated eagerly so the agent fixes the request
+    /// before staging.
+    private static func validateEventTriggerRecurrences(_ recurrences: [[String: Int]]?) throws {
+        for components in recurrences ?? [] {
+            guard components.count == 1, let weekday = components["weekday"], (1...7).contains(weekday) else {
+                throw PlannerError.invalidInput(
+                    "Event-trigger recurrences are days of the week — one “weekday” component (1…7, 1 = Sunday) per entry."
+                )
+            }
         }
     }
 

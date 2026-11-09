@@ -146,7 +146,14 @@ enum DeviceWriteStep: Equatable, Sendable {
     case renameServiceGroup(homeId: String, groupId: String, to: String)
     case removeServiceGroup(homeId: String, groupId: String)
     case createTimerTrigger(homeId: String, name: String, fireDate: Date, recurrence: DateComponents?, sceneId: String?)
-    case createEventTrigger(homeId: String, name: String, events: [ResolvedEvent], sceneId: String?)
+    case createEventTrigger(
+        homeId: String, name: String, events: [ResolvedEvent], endEvents: [ResolvedEvent],
+        executeOnce: Bool, sceneId: String?
+    )
+    case updateEventTrigger(
+        homeId: String, triggerId: String, events: [ResolvedEvent], endEvents: [ResolvedEvent]?,
+        recurrences: [DateComponents]?, executeOnce: Bool?, sceneId: String?
+    )
     case setTriggerEnabled(homeId: String, triggerId: String, enabled: Bool)
     /// `HMTimerTrigger.fireDate` is readonly — a schedule change removes the
     /// old trigger and re-adds a new one with the same shape, then restores
@@ -293,8 +300,18 @@ enum DeviceWriteResolver {
             return [.renameServiceGroup(homeId: home.id, groupId: group.id, to: to)]
         case .addTimerTrigger(let homeId, let name, let fireDate, let recurrence, let sceneId):
             return [try resolveCreateTimerTrigger(homeId: homeId, name: name, fireDate: fireDate, recurrence: recurrence, sceneId: sceneId, in: view)]
-        case .addEventTrigger(let homeId, let name, let events, let sceneId):
-            return [try resolveCreateEventTrigger(homeId: homeId, name: name, events: events, sceneId: sceneId, in: view)]
+        case .addEventTrigger(let homeId, let name, let events, let endEvents, let executeOnce, let sceneId):
+            return [try resolveCreateEventTrigger(
+                homeId: homeId, name: name, events: events, endEvents: endEvents,
+                executeOnce: executeOnce, sceneId: sceneId, in: view
+            )]
+        case .updateEventTrigger(
+            let homeId, let triggerId, let events, let endEvents, let recurrences, let executeOnce, let sceneId
+        ):
+            return [try resolveUpdateEventTrigger(
+                homeId: homeId, triggerId: triggerId, events: events, endEvents: endEvents,
+                recurrences: recurrences, executeOnce: executeOnce, sceneId: sceneId, in: view
+            )]
         case .setTriggerEnabled(let homeId, let triggerId, let enabled):
             let resolvedHome = try home(id: homeId, in: view)
             let resolvedTrigger = try trigger(id: triggerId, in: view)
@@ -451,12 +468,57 @@ enum DeviceWriteResolver {
     }
 
     private static func resolveCreateEventTrigger(
-        homeId: String, name: String, events: [TriggerEventSpec], sceneId: String?, in view: DeviceHomeView
+        homeId: String, name: String, events: [TriggerEventSpec], endEvents: [TriggerEventSpec],
+        executeOnce: Bool, sceneId: String?, in view: DeviceHomeView
     ) throws -> DeviceWriteStep {
         let home = try home(id: homeId, in: view)
         let resolved = try resolveEvents(events, in: home)
+        let resolvedEndEvents = try resolveEvents(endEvents, in: home)
         let scene = try optionalScene(id: sceneId, in: home)
-        return .createEventTrigger(homeId: home.id, name: name, events: resolved, sceneId: scene?.id)
+        return .createEventTrigger(
+            homeId: home.id, name: name, events: resolved, endEvents: resolvedEndEvents,
+            executeOnce: executeOnce, sceneId: scene?.id
+        )
+    }
+
+    private static func resolveUpdateEventTrigger(
+        homeId: String, triggerId: String, events: [TriggerEventSpec], endEvents: [TriggerEventSpec]?,
+        recurrences: [[String: Int]]?, executeOnce: Bool?, sceneId: String?, in view: DeviceHomeView
+    ) throws -> DeviceWriteStep {
+        let home = try home(id: homeId, in: view)
+        let old = try trigger(id: triggerId, in: view)
+        guard !old.isTimer else {
+            throw HomeKitWriteError.invalidOperation(
+                "Trigger \(old.name) is a timer trigger — set_trigger_state moves its schedule; event triggers have no fire date."
+            )
+        }
+        let resolvedEvents = try resolveEvents(events, in: home)
+        let resolvedEndEvents = try endEvents.map { try resolveEvents($0, in: home) }
+        let components = try eventTriggerRecurrences(recurrences)
+        let scene = try optionalScene(id: sceneId, in: home)
+        return .updateEventTrigger(
+            homeId: home.id, triggerId: old.id, events: resolvedEvents,
+            endEvents: resolvedEndEvents, recurrences: components,
+            executeOnce: executeOnce, sceneId: scene?.id
+        )
+    }
+
+    /// Event-trigger recurrences are days of the week — HomeKit honors only
+    /// the `weekday` component (`HMEventTrigger.updateRecurrences`). The same
+    /// JSON shape timers use, one weekday (1…7, 1 = Sunday) per entry; an
+    /// empty array clears the recurrence.
+    private static func eventTriggerRecurrences(_ recurrences: [[String: Int]]?) throws -> [DateComponents]? {
+        guard let recurrences else { return nil }
+        return try recurrences.map { components in
+            guard components.count == 1, let weekday = components["weekday"], (1...7).contains(weekday) else {
+                throw HomeKitWriteError.invalidOperation(
+                    "Event-trigger recurrences are days of the week — one “weekday” component (1…7, 1 = Sunday) per entry."
+                )
+            }
+            var dateComponents = DateComponents()
+            dateComponents.weekday = weekday
+            return dateComponents
+        }
     }
 
     private static func resolveReplaceTimerTrigger(

@@ -234,7 +234,7 @@ public enum ProposalEvidenceCollector {
                 name: name, createdId: createdId, sceneId: sceneId, graph: graph
             )
 
-        case .addEventTrigger(_, let name, _, let sceneId):
+        case .addEventTrigger(_, let name, _, _, _, let sceneId):
             return triggerCreatedEvidence(
                 claim: "Event trigger “\(name)” exists (disabled)",
                 name: name, createdId: createdId, sceneId: sceneId, graph: graph
@@ -264,6 +264,42 @@ public enum ProposalEvidenceCollector {
                 observed: confirmed
                     ? "Trigger “\(trigger.name)” now fires \(ISOTimestamps.render(observedDate))"
                     : "Trigger “\(trigger.name)” shows a different schedule after execution",
+                confirmed: confirmed
+            )
+
+        case .updateEventTrigger(
+            _, let triggerId, let events, _, _, _, let sceneId
+        ):
+            // Read-back for a declarative edit: the trigger exists, is still
+            // an event trigger, and now watches exactly the proposed events
+            // — matched by canonical identity (name or UUID), the one shared
+            // rule — and runs the proposed scene when one was passed.
+            guard let home = graph.homes.first(where: { $0.triggers.contains { $0.id == triggerId } }),
+                let trigger = home.triggers.first(where: { $0.id == triggerId })
+            else {
+                return ProposalEvidence(
+                    claim: "Event trigger \(triggerId) events updated",
+                    observed: "Trigger \(triggerId) not found after execution",
+                    confirmed: false
+                )
+            }
+            guard case .event(let currentEvents, _) = trigger.detail else {
+                return ProposalEvidence(
+                    claim: "Event trigger \(triggerId) events updated",
+                    observed: "Trigger “\(trigger.name)” is no longer an event trigger",
+                    confirmed: false
+                )
+            }
+            let currentKeys = Set(currentEvents.map { $0.canonicalKey(in: home) })
+            let eventsConfirmed = events.allSatisfy { currentKeys.contains($0.canonicalKey(in: home)) }
+            let sceneConfirmed = sceneId.map { trigger.linkedSceneIds.contains($0) } ?? true
+            let confirmed = eventsConfirmed && sceneConfirmed
+            let state = trigger.isEnabled ? "enabled" : "disabled"
+            return ProposalEvidence(
+                claim: "Event trigger \(triggerId) events updated",
+                observed: confirmed
+                    ? "Trigger “\(trigger.name)” now watches \(currentEvents.count) event\(currentEvents.count == 1 ? "" : "s") and stays \(state)"
+                    : "Trigger “\(trigger.name)” shows different events after execution",
                 confirmed: confirmed
             )
 

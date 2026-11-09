@@ -26,7 +26,14 @@ public enum WriteRequest: Sendable, Equatable {
     case createTimerTrigger(
         homeId: String, name: String, fireDate: Date, recurrence: [String: Int]?, sceneId: String?
     )
-    case createEventTrigger(homeId: String, name: String, events: [TriggerEventSpec], sceneId: String?)
+    case createEventTrigger(
+        homeId: String, name: String, events: [TriggerEventSpec], endEvents: [TriggerEventSpec],
+        executeOnce: Bool, sceneId: String?
+    )
+    case updateEventTrigger(
+        triggerId: String, events: [TriggerEventSpec], endEvents: [TriggerEventSpec]?,
+        recurrences: [[String: Int]]?, executeOnce: Bool?, sceneId: String?
+    )
     case setTriggerState(triggerId: String, enabled: Bool, fireDate: Date?, recurrence: [String: Int]?)
     case deleteTrigger(triggerId: String)
     case renameAccessory(accessoryId: String, name: String)
@@ -95,6 +102,17 @@ public enum WriteRequest: Sendable, Equatable {
                 homeId: try args.string("homeId"),
                 name: try args.string("name"),
                 events: try args.eventArray("events"),
+                endEvents: try args.optionalEventArray("endEvents") ?? [],
+                executeOnce: try args.optionalBool("executeOnce") ?? false,
+                sceneId: try args.optionalString("sceneId")
+            )
+        case "update_event_trigger":
+            return .updateEventTrigger(
+                triggerId: try args.string("triggerId"),
+                events: try args.eventArray("events"),
+                endEvents: try args.optionalEventArray("endEvents"),
+                recurrences: try args.optionalRecurrenceArray("recurrences"),
+                executeOnce: try args.optionalBool("executeOnce"),
                 sceneId: try args.optionalString("sceneId")
             )
         case "set_trigger_state":
@@ -226,6 +244,14 @@ private struct Args {
     /// instead of staging a recurrence that silently never matches.
     func optionalRecurrence(_ name: String) throws -> [String: Int]? {
         guard let value = raw?[name] else { return nil }
+        return try recurrence(value, at: name)
+    }
+
+    /// One date-components object, e.g. `{"hour": 7, "minute": 30}` — the
+    /// same shape `get_triggers` renders. Component names are HomeKit's date
+    /// components; unknown names are rejected so agents fix the request
+    /// instead of staging a recurrence that silently never matches.
+    private func recurrence(_ value: MCP.Value, at name: String) throws -> [String: Int] {
         guard let object = value.objectValue else {
             throw ProposalStoreError.invalidArguments(
                 "Argument “\(name)” must be an object of date components, e.g. {\"hour\": 7, \"minute\": 30}."
@@ -246,6 +272,28 @@ private struct Args {
             components[key] = int
         }
         return components
+    }
+
+    /// An optional array of day-of-week recurrences for event triggers —
+    /// e.g. `[\{"weekday": 1\}]`. Shape validation happens here; the
+    /// weekday-only rule is enforced where the write is resolved (event
+    /// triggers recur weekly, not daily).
+    func optionalRecurrenceArray(_ name: String) throws -> [[String: Int]]? {
+        guard let value = raw?[name] else { return nil }
+        guard let array = value.arrayValue else {
+            throw ProposalStoreError.invalidArguments(
+                "Argument “\(name)” must be an array of date components, e.g. [{\"weekday\": 1}]."
+            )
+        }
+        return try array.enumerated().map { index, element in
+            try recurrence(element, at: "\(name)[\(index)]")
+        }
+    }
+
+    /// An optional array of trigger events; absent means "leave unchanged".
+    func optionalEventArray(_ name: String) throws -> [TriggerEventSpec]? {
+        guard raw?[name] != nil else { return nil }
+        return try eventArray(name)
     }
 
     func eventArray(_ name: String) throws -> [TriggerEventSpec] {

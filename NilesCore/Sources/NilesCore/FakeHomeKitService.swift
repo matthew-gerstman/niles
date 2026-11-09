@@ -204,7 +204,10 @@ public actor FakeHomeKitService: HomeKitWriting {
             )
             return id
 
-        case .addEventTrigger(let homeId, let name, let events, let sceneId):
+        case .addEventTrigger(let homeId, let name, let events, _, _, let sceneId):
+            // endEvents and executeOnce are executed by the device but not
+            // yet graph-observable — the read side's trigger detail carries
+            // events and predicate only.
             let h = try indexOfHome(id: homeId)
             let id = nextId(prefix: "trigger", existing: graph.homes[h].triggers.map(\.id))
             graph.homes[h].triggers.append(
@@ -215,6 +218,30 @@ public actor FakeHomeKitService: HomeKitWriting {
                 )
             )
             return id
+
+        case .updateEventTrigger(_, let triggerId, let events, _, _, _, let sceneId):
+            let (h, t) = try indexOfTrigger(id: triggerId)
+            guard case .event = graph.homes[h].triggers[t].detail else {
+                throw HomeKitWriteError.invalidOperation(
+                    "Trigger \(graph.homes[h].triggers[t].name) is not an event trigger; it has no events to edit."
+                )
+            }
+            if let sceneId {
+                _ = try indexOfScene(id: sceneId)
+            }
+            // Declarative replacement, mirroring the device executor: events
+            // swap wholesale and the predicate follows them. endEvents,
+            // recurrences, and executeOnce are not yet graph-observable (the
+            // read side doesn't surface them); the fake records what reads
+            // show. The create/arm firewall: isEnabled is never touched here.
+            graph.homes[h].triggers[t].detail = .event(
+                events: events.map(Self.eventRef(from:)),
+                predicate: Self.predicateDescription(events)
+            )
+            if let sceneId {
+                graph.homes[h].triggers[t].linkedSceneIds = [sceneId]
+            }
+            return nil
 
         case .setTriggerEnabled(_, let triggerId, let enabled):
             let (h, t) = try indexOfTrigger(id: triggerId)
