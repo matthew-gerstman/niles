@@ -300,7 +300,7 @@ enum RevertPlanBuilder {
             )
         case .setSceneActions(let homeId, let sceneId, let add, let remove):
             guard let scene = home?.scenes.first(where: { $0.id == sceneId }) else { return nil }
-            let removedKeys = Set(remove.map(SceneActionKey.init(action:)))
+            let removedKeys = Set(remove)
             let removedActions = scene.actions.filter { removedKeys.contains(SceneActionKey(action: $0)) }
             guard let removedSpecs = Self.sceneSpecs(from: removedActions), removedSpecs.count == removedActions.count
             else { return nil }
@@ -332,7 +332,7 @@ enum RevertPlanBuilder {
             )
         case .updateEventTrigger(let homeId, let triggerId, _, _, _, _, _):
             guard let trigger = home?.triggers.first(where: { $0.id == triggerId }),
-                  case .event(let events, _)? = trigger.detail,
+                  case .event(let events, _) = trigger.detail,
                   let specs = Self.eventSpecs(from: events)
             else { return nil }
             return BuiltRevert(
@@ -384,7 +384,7 @@ enum RevertPlanBuilder {
 
     private static func accessories(in graph: HomeGraph) -> [HomeGraph.Accessory] {
         var seen = Set<String>()
-        return (graph.homes.flatMap(\.accessories) + graph.homes.flatMap(\.rooms).flatMap(\.accessories))
+        return graph.homes.flatMap(\.rooms).flatMap(\.accessories)
             .filter { seen.insert($0.id).inserted }
     }
 

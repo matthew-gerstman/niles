@@ -34,7 +34,7 @@ struct ProposalDetailSheet: View {
                     ForEach(Array(proposal.evidence.enumerated()), id: \.offset) { _, item in
                         HStack(alignment: .top, spacing: 6) {
                             Text(item.confirmed ? "✓" : "✗")
-                                .foregroundStyle(item.confirmed ? NilesTheme.good : NilesTheme.bad)
+                                .foregroundStyle(item.confirmed ? NilesTheme.good : NilesTheme.destructive)
                             Text("\(item.claim) — \(item.observed)")
                         }
                         .font(.system(size: 12))
