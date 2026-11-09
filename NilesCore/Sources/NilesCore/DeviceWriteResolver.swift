@@ -220,6 +220,9 @@ enum DeviceWriteResolver {
         switch operation {
         case .addRoom(let homeId, let name):
             let home = try home(id: homeId, in: view)
+            if let why = nameViolation(name) {
+                throw HomeKitWriteError.invalidOperation("New room name “\(name)” in “\(home.name)”: \(why).")
+            }
             if home.rooms.contains(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
                 throw HomeKitWriteError.duplicateName("Home already has a room named “\(name)”.")
             }
@@ -227,6 +230,9 @@ enum DeviceWriteResolver {
         case .renameRoom(let homeId, let roomId, let to):
             let home = try home(id: homeId, in: view)
             let room = try resolvedRoom(id: roomId, in: home)
+            if let why = nameViolation(to) {
+                throw HomeKitWriteError.invalidOperation("Room “\(room.name)” cannot be renamed to “\(to)”: \(why).")
+            }
             return [.renameRoom(homeId: home.id, roomId: room.id, to: to)]
         case .removeRoom(let homeId, let roomId):
             let home = try home(id: homeId, in: view)
@@ -236,6 +242,9 @@ enum DeviceWriteResolver {
             return [try resolveZoneRooms(homeId: homeId, zoneId: zoneId, addRoomIds: addRoomIds, removeRoomIds: removeRoomIds, in: view)]
         case .createZone(let homeId, let name):
             let home = try home(id: homeId, in: view)
+            if let why = nameViolation(name) {
+                throw HomeKitWriteError.invalidOperation("New zone name “\(name)” in “\(home.name)”: \(why).")
+            }
             if home.zones.contains(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
                 throw HomeKitWriteError.duplicateName("Home already has a zone named “\(name)”.")
             }
@@ -243,6 +252,9 @@ enum DeviceWriteResolver {
         case .renameZone(let homeId, let zoneId, let to):
             let home = try home(id: homeId, in: view)
             let zone = try zone(id: zoneId, in: home)
+            if let why = nameViolation(to) {
+                throw HomeKitWriteError.invalidOperation("Zone “\(zone.name)” cannot be renamed to “\(to)”: \(why).")
+            }
             // Zone names are unique within a home; the new name cannot
             // collide with another zone — this one included.
             if home.zones.contains(where: { $0.id != zone.id && $0.name.caseInsensitiveCompare(to) == .orderedSame }) {
@@ -279,6 +291,9 @@ enum DeviceWriteResolver {
             return [.executeActionSet(homeId: home.id, sceneId: scene.id)]
         case .addServiceGroup(let homeId, let name):
             let home = try home(id: homeId, in: view)
+            if let why = nameViolation(name) {
+                throw HomeKitWriteError.invalidOperation("New service group name “\(name)” in “\(home.name)”: \(why).")
+            }
             if home.serviceGroups.contains(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
                 throw HomeKitWriteError.duplicateName("Home already has a service group named “\(name)”.")
             }
@@ -292,6 +307,9 @@ enum DeviceWriteResolver {
         case .renameServiceGroup(let homeId, let groupId, let to):
             let home = try home(id: homeId, in: view)
             let group = try serviceGroup(id: groupId, in: home)
+            if let why = nameViolation(to) {
+                throw HomeKitWriteError.invalidOperation("Service group “\(group.name)” cannot be renamed to “\(to)”: \(why).")
+            }
             // Group names are unique within a home; the new name cannot
             // collide with another group — this one included.
             if home.serviceGroups.contains(where: { $0.id != group.id && $0.name.caseInsensitiveCompare(to) == .orderedSame }) {
@@ -333,6 +351,16 @@ enum DeviceWriteResolver {
         case .renameAccessory(let homeId, let accessoryId, let to):
             let resolvedHome = try home(id: homeId, in: view)
             let resolvedAccessory = try accessory(id: accessoryId, in: resolvedHome)
+            // Device law: HomeKit refuses names that do not start and end
+            // with a letter or digit (HMError 60 felled the QA rename to
+            // “Office Lights (QA)”). Rejecting here — naming the accessory
+            // and the offending characters — keeps a passing proposal from
+            // failing at execution.
+            if let why = nameViolation(to) {
+                throw HomeKitWriteError.invalidOperation(
+                    "Accessory “\(resolvedAccessory.name)” cannot be renamed to “\(to)”: \(why)."
+                )
+            }
             return [.renameAccessory(homeId: resolvedHome.id, accessoryId: resolvedAccessory.id, to: to)]
         case .identifyAccessory(let homeId, let accessoryId):
             let resolvedHome = try home(id: homeId, in: view)
@@ -409,6 +437,9 @@ enum DeviceWriteResolver {
         let home = try home(id: homeId, in: view)
         // Duplicate scene names are rejected the way HomeKit's are, across
         // all homes — the same rule the fake and the evidence read-back use.
+        if let why = nameViolation(name) {
+            throw HomeKitWriteError.invalidOperation("New scene name “\(name)” in “\(home.name)”: \(why).")
+        }
         if view.homes.contains(where: { $0.scenes.contains { $0.name.caseInsensitiveCompare(name) == .orderedSame } }) {
             throw HomeKitWriteError.duplicateName("Home already has a scene named “\(name)”.")
         }
@@ -429,6 +460,9 @@ enum DeviceWriteResolver {
     ) throws -> DeviceWriteStep {
         let home = try home(id: homeId, in: view)
         let scene = try scene(id: sceneId, in: home)
+        if let why = nameViolation(to) {
+            throw HomeKitWriteError.invalidOperation("Scene “\(scene.name)” cannot be renamed to “\(to)”: \(why).")
+        }
         if scene.name.caseInsensitiveCompare(to) == .orderedSame {
             return .renameActionSet(homeId: home.id, sceneId: scene.id, to: to)
         }
@@ -762,6 +796,41 @@ enum DeviceWriteResolver {
             throw HomeKitWriteError.invalidOperation("Timer recurrence must be at most 5 weeks.")
         }
         return components
+    }
+
+    /// Why HomeKit would refuse this name for a room, zone, scene, service
+    /// group, or accessory, or nil when the name fits.
+    ///
+    /// HomeKit's rules (the HomeKit HIG, and the HMError family the live QA
+    /// rename hit — code 60, “Name does not end with valid characters”): a
+    /// name must be non-empty, at most 64 characters (the HAP Name
+    /// characteristic cap), and start and end with a letter or digit.
+    /// Interior punctuation the Home app itself tolerates (`&!-_:;()/+`) is
+    /// deliberately not policed — refusing interior characters would reject
+    /// names HomeKit accepts, the skew in mirror image. Trigger names are
+    /// not written through the `updateName` family, so they are not held to
+    /// this.
+    static func nameViolation(_ name: String) -> String? {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return "names must not be empty"
+        }
+        if trimmed.count > maximumHomeKitNameLength {
+            return "names are at most \(maximumHomeKitNameLength) characters, and this one is \(trimmed.count)"
+        }
+        if let first = trimmed.first, !isNameCharacter(first) {
+            return "names must start with a letter or digit, and “\(first)” is neither"
+        }
+        if let last = trimmed.last, !isNameCharacter(last) {
+            return "names must end with a letter or digit, and “\(last)” is neither"
+        }
+        return nil
+    }
+
+    private static let maximumHomeKitNameLength = 64
+
+    private static func isNameCharacter(_ character: Character) -> Bool {
+        character.isLetter || character.isNumber
     }
 
     // MARK: View lookups

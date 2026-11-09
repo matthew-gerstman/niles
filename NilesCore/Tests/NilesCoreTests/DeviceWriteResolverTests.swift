@@ -1004,6 +1004,46 @@ import Testing
         }?.message.contains("No room room-nowhere") == true)
     }
 
+    /// Device law: HomeKit refuses names that do not start and end with a
+    /// letter or digit (HMError 60 felled the QA rename to “Office Lights
+    /// (QA)”). Resolution rejects them where the agent gets a typed error
+    /// naming the accessory, the proposed name, and the offending
+    /// characters — and accepts names HomeKit itself would.
+    @Test func accessoryRenameRejectsNamesHomeKitRefuses() throws {
+        #expect(error {
+            _ = try self.resolve(.renameAccessory(homeId: "home-1", accessoryId: "acc-light-a", to: "Office Lights (QA)"))
+        }?.message == "Accessory “Light A” cannot be renamed to “Office Lights (QA)”: names must end with a letter or digit, and “)” is neither.")
+        #expect(error {
+            _ = try self.resolve(.renameAccessory(homeId: "home-1", accessoryId: "acc-light-a", to: "—Office Lights"))
+        }?.message.contains("names must start with a letter or digit") == true)
+        #expect(error {
+            _ = try self.resolve(.renameAccessory(homeId: "home-1", accessoryId: "acc-light-a", to: String(repeating: "A", count: 65)))
+        }?.message.contains("at most 64 characters") == true)
+
+        // Interior punctuation and international letters survive — HomeKit
+        // accepts every name the anchor rule lets through.
+        #expect(try resolve(.renameAccessory(homeId: "home-1", accessoryId: "acc-light-a", to: "Office (QA) Lights"))
+            == [.renameAccessory(homeId: "home-1", accessoryId: "acc-light-a", to: "Office (QA) Lights")])
+        #expect(try resolve(.renameAccessory(homeId: "home-1", accessoryId: "acc-light-a", to: "Salón"))
+            == [.renameAccessory(homeId: "home-1", accessoryId: "acc-light-a", to: "Salón")])
+    }
+
+    /// The name rules themselves, as one table: the anchor and length
+    /// constraints reject; apostrophes, digits, interior punctuation, and
+    /// non-ASCII letters pass.
+    @Test func nameViolationCoversTheHomeKitNameRules() {
+        #expect(DeviceWriteResolver.nameViolation("") == "names must not be empty")
+        #expect(DeviceWriteResolver.nameViolation("   ") == "names must not be empty")
+        #expect(DeviceWriteResolver.nameViolation(String(repeating: "A", count: 65))?.contains("at most 64") == true)
+        #expect(DeviceWriteResolver.nameViolation(String(repeating: "A", count: 64)) == nil)
+        #expect(DeviceWriteResolver.nameViolation("-Office Lights")?.contains("must start with") == true)
+        #expect(DeviceWriteResolver.nameViolation("Office 🏠")?.contains("must end with") == true)
+        #expect(DeviceWriteResolver.nameViolation("Office (QA) Lights") == nil)
+        #expect(DeviceWriteResolver.nameViolation("John's Office") == nil)
+        #expect(DeviceWriteResolver.nameViolation("Room 2") == nil)
+        #expect(DeviceWriteResolver.nameViolation("Salón") == nil)
+    }
+
     /// Device law: identifying means flashing the Identify characteristic;
     /// an accessory known not to support it rejects at resolution with the
     /// typed reason, while unknown capability data stays permissive.

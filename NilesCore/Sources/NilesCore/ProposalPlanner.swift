@@ -145,7 +145,7 @@ public enum ProposalPlanner {
     // MARK: - Rooms
 
     private static func createRoom(homeId: String, name: String, graph: HomeGraph) throws -> Plan {
-        let trimmed = try requiredName(name, kind: "room")
+        let trimmed = try requiredHomeKitName(name, kind: "room")
         let home = try self.home(id: homeId, in: graph)
         try rejectDuplicate(kind: "room", name: trimmed, in: home.rooms.map(\.name), homeName: home.name)
         return Plan(
@@ -165,7 +165,7 @@ public enum ProposalPlanner {
     }
 
     private static func renameRoom(roomId: String, name: String, graph: HomeGraph) throws -> Plan {
-        let trimmed = try requiredName(name, kind: "room")
+        let trimmed = try requiredHomeKitName(name, kind: "room")
         let (home, room) = try self.room(id: roomId, in: graph)
         if room.name == trimmed {
             throw PlannerError.noChange("room “\(room.name)” is already named “\(trimmed)”.")
@@ -304,7 +304,7 @@ public enum ProposalPlanner {
     }
 
     private static func createZone(homeId: String, name: String, graph: HomeGraph) throws -> Plan {
-        let trimmed = try requiredName(name, kind: "zone")
+        let trimmed = try requiredHomeKitName(name, kind: "zone")
         let home = try self.home(id: homeId, in: graph)
         try rejectDuplicate(kind: "zone", name: trimmed, in: home.zones.map(\.name), homeName: home.name)
         return Plan(
@@ -324,7 +324,7 @@ public enum ProposalPlanner {
     }
 
     private static func renameZone(zoneId: String, name: String, graph: HomeGraph) throws -> Plan {
-        let trimmed = try requiredName(name, kind: "zone")
+        let trimmed = try requiredHomeKitName(name, kind: "zone")
         let (home, zone) = try self.zone(id: zoneId, in: graph)
         if zone.name.caseInsensitiveCompare(trimmed) == .orderedSame {
             throw PlannerError.noChange("zone “\(zone.name)” is already named “\(trimmed)”.")
@@ -390,7 +390,7 @@ public enum ProposalPlanner {
     // MARK: - Scenes
 
     private static func createScene(homeId: String, name: String, actions: [SceneActionSpec], graph: HomeGraph) throws -> Plan {
-        let trimmed = try requiredName(name, kind: "scene")
+        let trimmed = try requiredHomeKitName(name, kind: "scene")
         let home = try self.home(id: homeId, in: graph)
         try rejectDuplicate(kind: "scene", name: trimmed, in: home.scenes.map(\.name), homeName: home.name)
         let capabilityNotes = try validate(accessories: actions, home: home)
@@ -477,7 +477,7 @@ public enum ProposalPlanner {
     }
 
     private static func renameScene(sceneId: String, name: String, graph: HomeGraph) throws -> Plan {
-        let trimmed = try requiredName(name, kind: "scene")
+        let trimmed = try requiredHomeKitName(name, kind: "scene")
         let (home, scene) = try self.scene(id: sceneId, in: graph)
         if scene.name.caseInsensitiveCompare(trimmed) == .orderedSame {
             throw PlannerError.noChange("scene “\(scene.name)” is already named “\(trimmed)”.")
@@ -603,7 +603,7 @@ public enum ProposalPlanner {
     // MARK: - Service groups
 
     private static func createServiceGroup(homeId: String, name: String, graph: HomeGraph) throws -> Plan {
-        let trimmed = try requiredName(name, kind: "service group")
+        let trimmed = try requiredHomeKitName(name, kind: "service group")
         let home = try self.home(id: homeId, in: graph)
         try rejectDuplicate(kind: "service group", name: trimmed, in: home.serviceGroups.map(\.name), homeName: home.name)
         return Plan(
@@ -623,7 +623,7 @@ public enum ProposalPlanner {
     }
 
     private static func renameServiceGroup(groupId: String, name: String, graph: HomeGraph) throws -> Plan {
-        let trimmed = try requiredName(name, kind: "service group")
+        let trimmed = try requiredHomeKitName(name, kind: "service group")
         let (home, group) = try self.serviceGroup(id: groupId, in: graph)
         if group.name.caseInsensitiveCompare(trimmed) == .orderedSame {
             throw PlannerError.noChange("service group “\(group.name)” is already named “\(trimmed)”.")
@@ -1042,8 +1042,8 @@ public enum ProposalPlanner {
     // MARK: - Accessories
 
     private static func renameAccessory(accessoryId: String, name: String, graph: HomeGraph) throws -> Plan {
-        let trimmed = try requiredName(name, kind: "accessory")
         let (home, accessory) = try self.accessory(id: accessoryId, in: graph)
+        let trimmed = try requiredHomeKitName(name, kind: "accessory")
         if accessory.name.caseInsensitiveCompare(trimmed) == .orderedSame {
             throw PlannerError.noChange("accessory “\(accessory.name)” is already named “\(trimmed)”.")
         }
@@ -1370,6 +1370,21 @@ public enum ProposalPlanner {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             throw PlannerError.invalidInput("\(kind.capitalized) name must not be empty.")
+        }
+        return trimmed
+    }
+
+    /// Names written through HomeKit's `updateName` family (rooms, zones,
+    /// scenes, service groups, accessories) face its naming rules — see
+    /// `DeviceWriteResolver.nameViolation`, the same check the executor's
+    /// resolution runs. Rejecting here keeps staging and execution in
+    /// agreement: nothing reaches approval that HomeKit will refuse.
+    private static func requiredHomeKitName(_ name: String, kind: String) throws -> String {
+        let trimmed = try requiredName(name, kind: kind)
+        if let why = DeviceWriteResolver.nameViolation(trimmed) {
+            throw PlannerError.invalidInput(
+                "\(kind.capitalized) name “\(trimmed)” is not a valid HomeKit name: \(why)."
+            )
         }
         return trimmed
     }
