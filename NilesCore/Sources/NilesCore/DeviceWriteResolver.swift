@@ -111,6 +111,9 @@ enum DeviceWriteStep: Equatable, Sendable {
     case renameRoom(homeId: String, roomId: String, to: String)
     case removeRoom(homeId: String, roomId: String)
     case updateZoneRooms(homeId: String, zoneId: String, addRoomIds: [String], removeRoomIds: [String])
+    case createZone(homeId: String, name: String)
+    case renameZone(homeId: String, zoneId: String, to: String)
+    case removeZone(homeId: String, zoneId: String)
     case createActionSet(homeId: String, name: String, actions: [ResolvedAction])
     case updateSceneActions(homeId: String, sceneId: String, add: [ResolvedAction], remove: [SceneActionKey])
     case renameActionSet(homeId: String, sceneId: String, to: String)
@@ -118,6 +121,7 @@ enum DeviceWriteStep: Equatable, Sendable {
     case executeActionSet(homeId: String, sceneId: String)
     case addServiceGroup(homeId: String, name: String)
     case updateServiceGroupMembers(homeId: String, groupId: String, addServiceIds: [String], removeServiceIds: [String])
+    case renameServiceGroup(homeId: String, groupId: String, to: String)
     case removeServiceGroup(homeId: String, groupId: String)
     case createTimerTrigger(homeId: String, name: String, fireDate: Date, recurrence: DateComponents?, sceneId: String?)
     case createEventTrigger(homeId: String, name: String, events: [ResolvedEvent], sceneId: String?)
@@ -195,6 +199,27 @@ enum DeviceWriteResolver {
             return [.removeRoom(homeId: home.id, roomId: room.id)]
         case .setZoneRooms(let homeId, let zoneId, let addRoomIds, let removeRoomIds):
             return [try resolveZoneRooms(homeId: homeId, zoneId: zoneId, addRoomIds: addRoomIds, removeRoomIds: removeRoomIds, in: view)]
+        case .createZone(let homeId, let name):
+            let home = try home(id: homeId, in: view)
+            if home.zones.contains(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
+                throw HomeKitWriteError.duplicateName("Home already has a zone named “\(name)”.")
+            }
+            return [.createZone(homeId: home.id, name: name)]
+        case .renameZone(let homeId, let zoneId, let to):
+            let home = try home(id: homeId, in: view)
+            let zone = try zone(id: zoneId, in: home)
+            // Zone names are unique within a home; the new name cannot
+            // collide with another zone — this one included.
+            if home.zones.contains(where: { $0.id != zone.id && $0.name.caseInsensitiveCompare(to) == .orderedSame }) {
+                throw HomeKitWriteError.duplicateName("Home already has a zone named “\(to)”.")
+            }
+            return [.renameZone(homeId: home.id, zoneId: zone.id, to: to)]
+        case .removeZone(let homeId, let zoneId):
+            let home = try home(id: homeId, in: view)
+            let zone = try zone(id: zoneId, in: home)
+            // Rooms survive untouched — removing a zone dissolves only the
+            // grouping; the review card says so.
+            return [.removeZone(homeId: home.id, zoneId: zone.id)]
         case .addActionSet(let homeId, let name, let actions):
             return [try resolveCreateActionSet(homeId: homeId, name: name, actions: actions, in: view)]
         case .setSceneActions(let homeId, let sceneId, let add, let remove):
@@ -229,6 +254,15 @@ enum DeviceWriteResolver {
             let home = try home(id: homeId, in: view)
             let group = try serviceGroup(id: groupId, in: home)
             return [.removeServiceGroup(homeId: home.id, groupId: group.id)]
+        case .renameServiceGroup(let homeId, let groupId, let to):
+            let home = try home(id: homeId, in: view)
+            let group = try serviceGroup(id: groupId, in: home)
+            // Group names are unique within a home; the new name cannot
+            // collide with another group — this one included.
+            if home.serviceGroups.contains(where: { $0.id != group.id && $0.name.caseInsensitiveCompare(to) == .orderedSame }) {
+                throw HomeKitWriteError.duplicateName("Home already has a service group named “\(to)”.")
+            }
+            return [.renameServiceGroup(homeId: home.id, groupId: group.id, to: to)]
         case .addTimerTrigger(let homeId, let name, let fireDate, let recurrence, let sceneId):
             return [try resolveCreateTimerTrigger(homeId: homeId, name: name, fireDate: fireDate, recurrence: recurrence, sceneId: sceneId, in: view)]
         case .addEventTrigger(let homeId, let name, let events, let sceneId):

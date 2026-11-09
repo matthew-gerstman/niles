@@ -154,6 +154,52 @@ import Testing
         } == .objectMissing("No room room-x to add to zone “Upstairs”."))
     }
 
+    // MARK: Zone create, rename, delete
+
+    @Test func createZoneResolvesAndRejectsDuplicateName() throws {
+        let steps = try resolve(.createZone(homeId: "home-1", name: "Downstairs"))
+        #expect(steps == [.createZone(homeId: "home-1", name: "Downstairs")])
+        #expect(error {
+            _ = try self.resolve(.createZone(homeId: "home-1", name: "upstairs"))
+        } == .duplicateName("Home already has a zone named “upstairs”."))
+        // Zones are scoped per home — the other home's names never collide.
+        #expect(try resolve(.createZone(homeId: "home-2", name: "Upstairs")) ==
+            [.createZone(homeId: "home-2", name: "Upstairs")])
+    }
+
+    @Test func createZoneRejectsDriftedHome() {
+        #expect(error { _ = try self.resolve(.createZone(homeId: "home-x", name: "Downstairs")) }
+            == .objectMissing("No home home-x."))
+    }
+
+    @Test func renameZoneResolvesTheZone() throws {
+        let steps = try resolve(.renameZone(homeId: "home-1", zoneId: "zone-upstairs", to: "Top Floor"))
+        #expect(steps == [.renameZone(homeId: "home-1", zoneId: "zone-upstairs", to: "Top Floor")])
+        #expect(error { _ = try self.resolve(.renameZone(homeId: "home-1", zoneId: "zone-x", to: "Top Floor")) }
+            == .objectMissing("No zone zone-x."))
+    }
+
+    @Test func renameZoneRejectsDuplicateNameInItsHome() throws {
+        var view = fixtureView()
+        view.homes[0].zones.append(DeviceHomeView.Zone(id: "zone-downstairs", name: "Downstairs"))
+        #expect(error {
+            _ = try self.resolve(.renameZone(homeId: "home-1", zoneId: "zone-upstairs", to: "downstairs"), view: view)
+        } == .duplicateName("Home already has a zone named “downstairs”."))
+        // Case-insensitively renaming a zone to its own name is legal — the
+        // executor's updateName accepts it; nothing here needs to reject.
+        let steps = try resolve(.renameZone(homeId: "home-1", zoneId: "zone-upstairs", to: "UPSTAIRS"), view: view)
+        #expect(steps == [.renameZone(homeId: "home-1", zoneId: "zone-upstairs", to: "UPSTAIRS")])
+    }
+
+    @Test func removeZoneResolvesTheZone() throws {
+        // Zone delete preserves rooms by construction — the resolver only
+        // removes the zone object; rooms are never touched.
+        let steps = try resolve(.removeZone(homeId: "home-1", zoneId: "zone-upstairs"))
+        #expect(steps == [.removeZone(homeId: "home-1", zoneId: "zone-upstairs")])
+        #expect(error { _ = try self.resolve(.removeZone(homeId: "home-1", zoneId: "zone-x")) }
+            == .objectMissing("No zone zone-x."))
+    }
+
     // MARK: Scenes
 
     @Test func addActionSetResolvesActionsToCharacteristics() throws {
@@ -397,6 +443,25 @@ import Testing
         #expect(steps == [.removeServiceGroup(homeId: "home-1", groupId: "group-all")])
         #expect(error { _ = try self.resolve(.removeServiceGroup(homeId: "home-1", groupId: "group-x")) }
             == .objectMissing("No service group group-x."))
+    }
+
+    @Test func renameServiceGroupResolvesTheGroup() throws {
+        let steps = try resolve(.renameServiceGroup(homeId: "home-1", groupId: "group-all", to: "All Lights"))
+        #expect(steps == [.renameServiceGroup(homeId: "home-1", groupId: "group-all", to: "All Lights")])
+        #expect(error { _ = try self.resolve(.renameServiceGroup(homeId: "home-1", groupId: "group-x", to: "All Lights")) }
+            == .objectMissing("No service group group-x."))
+    }
+
+    @Test func renameServiceGroupRejectsDuplicateName() throws {
+        var view = fixtureView()
+        view.homes[0].serviceGroups.append(DeviceHomeView.ServiceGroup(id: "group-two", name: "Media"))
+        #expect(error {
+            _ = try self.resolve(.renameServiceGroup(homeId: "home-1", groupId: "group-all", to: "media"), view: view)
+        } == .duplicateName("Home already has a service group named “media”."))
+        // Case-insensitively renaming a group to its own name is legal — the
+        // executor's updateName accepts it; nothing here needs to reject.
+        let steps = try resolve(.renameServiceGroup(homeId: "home-1", groupId: "group-all", to: "everything"), view: view)
+        #expect(steps == [.renameServiceGroup(homeId: "home-1", groupId: "group-all", to: "everything")])
     }
 
     // MARK: Timer triggers

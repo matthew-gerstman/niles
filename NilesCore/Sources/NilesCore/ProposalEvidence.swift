@@ -74,6 +74,37 @@ public enum ProposalEvidenceCollector {
                 && removeRoomIds.allSatisfy { !zone.roomIds.contains($0) }
             return ProposalEvidence(claim: "Zone \(zoneId) membership updated", observed: observed, confirmed: confirmed)
 
+        case .createZone(_, let name):
+            let zones = graph.homes.flatMap(\.zones)
+            let zone = createdId.flatMap { id in zones.first { $0.id == id } } ?? zones.first { $0.name == name }
+            return ProposalEvidence(
+                claim: "Zone “\(name)” exists",
+                observed: zone.map {
+                    "Zone “\($0.name)” contains \($0.roomIds.count) room\($0.roomIds.count == 1 ? "" : "s")"
+                } ?? "Zone “\(name)” not found after execution",
+                confirmed: zone != nil
+            )
+
+        case .renameZone(_, let zoneId, let to):
+            let zone = graph.homes.flatMap(\.zones).first { $0.id == zoneId }
+            return ProposalEvidence(
+                claim: "Zone \(zoneId) is named “\(to)”",
+                observed: zone.map { "Zone now named “\($0.name)”" }
+                    ?? "Zone \(zoneId) not found after execution",
+                confirmed: zone?.name == to
+            )
+
+        case .removeZone(_, let zoneId):
+            let stillPresent = contains(zoneId, in: graph.homes.flatMap(\.zones).map(\.id))
+            let roomsStillThere = graph.homes.flatMap(\.rooms).count
+            return ProposalEvidence(
+                claim: "Zone \(zoneId) is deleted, rooms preserved",
+                observed: stillPresent
+                    ? "Zone still present — delete did not take effect"
+                    : "No zone with id \(zoneId) remains; \(roomsStillThere) room\(roomsStillThere == 1 ? "" : "s") untouched",
+                confirmed: !stillPresent
+            )
+
         case .addActionSet(_, let name, _):
             let scenes = graph.homes.flatMap(\.scenes)
             let scene = createdId.flatMap { id in scenes.first { $0.id == id } } ?? scenes.first { $0.name == name }
@@ -178,6 +209,15 @@ public enum ProposalEvidenceCollector {
                 claim: "Service group \(groupId) membership updated",
                 observed: observed,
                 confirmed: confirmed
+            )
+
+        case .renameServiceGroup(_, let groupId, let to):
+            let group = graph.homes.flatMap(\.serviceGroups).first { $0.id == groupId }
+            return ProposalEvidence(
+                claim: "Service group \(groupId) is named “\(to)”",
+                observed: group.map { "Group now named “\($0.name)”" }
+                    ?? "Service group \(groupId) not found after execution",
+                confirmed: group?.name == to
             )
 
         case .removeServiceGroup(_, let groupId):

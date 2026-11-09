@@ -299,6 +299,20 @@ extension HomeManagerHomeKitService: HomeKitWriting {
             }
             return nil
 
+        case .createZone(let homeId, let name):
+            let home = try Self.home(homeId, in: homes)
+            return try await home.addZone(named: name).uniqueIdentifier.uuidString
+
+        case .renameZone(let homeId, let zoneId, let to):
+            let home = try Self.home(homeId, in: homes)
+            try await Self.updateName(try Self.zone(zoneId, in: home), to: to)
+            return nil
+
+        case .removeZone(let homeId, let zoneId):
+            let home = try Self.home(homeId, in: homes)
+            try await home.removeZone(try Self.zone(zoneId, in: home))
+            return nil
+
         case .createActionSet(let homeId, let name, let actions):
             let home = try Self.home(homeId, in: homes)
             let scene = try await home.addActionSet(named: name)
@@ -354,6 +368,11 @@ extension HomeManagerHomeKitService: HomeKitWriting {
                 guard !group.services.contains(where: { $0.uniqueIdentifier.uuidString == serviceId }) else { continue }
                 try await Self.add(try Self.service(serviceId, in: home), to: group)
             }
+            return nil
+
+        case .renameServiceGroup(let homeId, let groupId, let to):
+            let home = try Self.home(homeId, in: homes)
+            try await Self.updateName(try Self.serviceGroup(groupId, in: home), to: to)
             return nil
 
         case .removeServiceGroup(let homeId, let groupId):
@@ -692,6 +711,22 @@ extension HomeManagerHomeKitService: HomeKitWriting {
     private static func updateName(_ actionSet: HMActionSet, to name: String) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             actionSet.updateName(name) { error in
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            }
+        }
+    }
+
+    private static func updateName(_ zone: HMZone, to name: String) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            zone.updateName(name) { error in
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            }
+        }
+    }
+
+    private static func updateName(_ group: HMServiceGroup, to name: String) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            group.updateName(name) { error in
                 if let error { continuation.resume(throwing: error) } else { continuation.resume() }
             }
         }

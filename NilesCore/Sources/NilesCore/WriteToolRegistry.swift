@@ -1,7 +1,7 @@
 import Foundation
 import MCP
 
-/// The mutating MCP tools: sixteen declarative write tools plus the
+/// The mutating MCP tools: twenty declarative write tools plus the
 /// `get_proposal` poll. None of them touches HomeKit — a call plans the
 /// request against the current graph and stages exactly one proposal
 /// (spec: "one agent request is always exactly one approval card"); the
@@ -95,6 +95,39 @@ public struct WriteToolRegistry: Sendable {
             annotations: Tool.Annotations(readOnlyHint: false)
         ),
         Tool(
+            name: "create_zone",
+            description: "Create an empty zone (e.g. 'Upstairs'); add rooms with set_zone_rooms. Zone names are unique within a home. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            inputSchema: objectSchema(
+                [
+                    "homeId": stringProperty("The home to create the zone in (from get_homes)."),
+                    "name": stringProperty("The new zone's name."),
+                ],
+                required: ["homeId", "name"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false)
+        ),
+        Tool(
+            name: "rename_zone",
+            description: "Rename a zone. Its rooms are unaffected. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            inputSchema: objectSchema(
+                [
+                    "zoneId": stringProperty("The zone to rename (from get_zones)."),
+                    "name": stringProperty("The zone's new name."),
+                ],
+                required: ["zoneId", "name"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false)
+        ),
+        Tool(
+            name: "delete_zone",
+            description: "Delete a zone. Its rooms survive untouched — only the grouping is removed (the review card says which rooms were grouped). DESTRUCTIVE. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            inputSchema: objectSchema(
+                ["zoneId": stringProperty("The zone to delete (from get_zones).")],
+                required: ["zoneId"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false, destructiveHint: true)
+        ),
+        Tool(
             name: "create_scene",
             description: "Create a scene (HomeKit action set) whose actions are characteristic writes. Niles stages scenes; it never executes them — running the scene stays in the Home app or Siri. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
             inputSchema: objectSchema(
@@ -164,6 +197,18 @@ public struct WriteToolRegistry: Sendable {
                     "name": stringProperty("The new group's name."),
                 ],
                 required: ["homeId", "name"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false)
+        ),
+        Tool(
+            name: "rename_service_group",
+            description: "Rename a service group. Its members and devices are unaffected. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            inputSchema: objectSchema(
+                [
+                    "groupId": stringProperty("The group to rename (from get_service_groups)."),
+                    "name": stringProperty("The group's new name."),
+                ],
+                required: ["groupId", "name"]
             ),
             annotations: Tool.Annotations(readOnlyHint: false)
         ),
