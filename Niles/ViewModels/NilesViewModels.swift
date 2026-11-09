@@ -20,13 +20,21 @@ protocol DashboardViewModel: Observable {
 }
 
 @MainActor
-protocol ApprovalsViewModel: Observable {
+protocol QueueViewModel: Observable {
     var proposals: [NilesProposal] { get }
     /// Proposal id -> decision in flight; present from the tap until the
     /// pipeline settles (or the decision fails and the card reverts).
     var decisionsInFlight: [String: ProposalDecision] { get }
+    /// Per-row Undo affordance state. Only executed rows that currently
+    /// offer Undo appear: unrevertable operations, already-undone rows, and
+    /// refused rows render no Undo button.
+    var undoStates: [String: UndoState] { get }
+    /// True from the Approve-all tap until the whole batch settles.
+    var isApprovingAll: Bool { get }
     func approve(_ id: String)
     func deny(_ id: String)
+    func approveAll()
+    func undo(_ id: String)
 }
 
 /// The direction of a decision whose pipeline round-trip is still running.
@@ -35,6 +43,23 @@ protocol ApprovalsViewModel: Observable {
 enum ProposalDecision: Hashable {
     case approving
     case denying
+}
+
+/// The Undo affordance's state on one executed Queue row. Tapping Undo
+/// applies the paired revert immediately — the tap IS the approval — and a
+/// refused undo renders its typed cause inline on the row.
+enum UndoState: Equatable {
+    /// Undo shown, not running.
+    case idle
+    /// The revert is staging and executing.
+    case inFlight
+    /// The store refused: the home has diverged from what execution
+    /// produced. The divergences name what moved; nothing was changed.
+    case conflict([ProposalEvidence])
+    /// The store refused: no paired revert exists for this row (its undo
+    /// coverage was lost, e.g. a failed read at execution time). The row
+    /// stops offering Undo.
+    case notRevertable
 }
 
 @MainActor
@@ -56,7 +81,7 @@ protocol PairingViewModel: Observable {
 /// only: approving transitions the local state machine, nothing more.
 @MainActor
 @Observable
-final class InMemoryNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphViewModel, PairingViewModel {
+final class InMemoryNilesStore: DashboardViewModel, QueueViewModel, HomeGraphViewModel, PairingViewModel {
     private(set) var serverIsRunning = true
     let homeName = "Gerstman Home"
     let endpoint = "http://192.168.1.24:8901/mcp"
@@ -69,6 +94,9 @@ final class InMemoryNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGrap
     /// The in-memory store settles decisions synchronously, so nothing is
     /// ever in flight here.
     let decisionsInFlight: [String: ProposalDecision] = [:]
+    /// Previews set this directly to render the Undo affordance states.
+    var undoStates: [String: UndoState] = [:]
+    var isApprovingAll = false
 
     private(set) var sections: [HomeSection] = []
 
@@ -132,7 +160,24 @@ final class InMemoryNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGrap
                         + "automations referencing this room will see the change immediately."
                 )]
             ),
+            // An already-executed change: the Queue row renders the executed
+            // chip with read-back evidence and the Undo affordance.
+            NilesProposal(
+                id: "prop_8f50",
+                tool: "create_room",
+                title: "Create room “Studio”",
+                agentName: "Obvious Agent",
+                createdAt: now.addingTimeInterval(-52 * minute),
+                isDestructive: false,
+                evidence: [
+                    ProposalEvidence(claim: "Room “Studio” exists", observed: "Confirmed in the live home", confirmed: true),
+                ],
+                diff: [ProposalDiffLine(.add, "+ Room “Studio”")],
+                context: [],
+                state: .executed
+            ),
         ]
+        undoStates = ["prop_8f50": .idle]
 
         sections = [
             HomeSection(title: "Rooms", rows: [
@@ -175,6 +220,16 @@ final class InMemoryNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGrap
     func deny(_ id: String) {
         decide(id, to: .denied)
     }
+
+    /// Presentational: staged rows flip to approved so previews react.
+    func approveAll() {
+        for proposal in proposals where proposal.isPending {
+            decide(proposal.id, to: .approved)
+        }
+    }
+
+    /// Presentational: previews render whatever `undoStates` was seeded with.
+    func undo(_ id: String) {}
 
     private func decide(_ id: String, to next: ProposalState) {
         guard let index = proposals.firstIndex(where: { $0.id == id }),

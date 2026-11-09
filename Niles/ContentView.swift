@@ -33,7 +33,7 @@ struct ContentView: View {
 
     var body: some View {
         TabView(selection: $selectedTab) {
-            ApprovalsScreen(model: store)
+            QueueScreen(model: store)
                 .tabItem { Label("Queue", systemImage: "list.bullet.rectangle") }
                 .badge(pendingCount)
                 .tag(NilesTab.queue)
@@ -47,7 +47,10 @@ struct ContentView: View {
                 .tabItem { Label("Settings", systemImage: "gearshape") }
                 .tag(NilesTab.settings)
         }
-        .task { store.start() }
+        .task {
+            store.start()
+            await store.seedQueueFixtureIfRequested()
+        }
     }
 }
 
