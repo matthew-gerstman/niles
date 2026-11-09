@@ -126,12 +126,20 @@ public actor ProposalStore {
     public func approve(id: String) async throws -> Proposal {
         try await decide(id: id, to: .approved) { [homeKit] proposal, operations in
             var updated = proposal
+            // perform returns the created object's id per operation. Threading
+            // those ids into evidence collection matches created rooms,
+            // scenes, groups, and triggers by id — name matching is only the
+            // fallback — so a same-named pre-existing object cannot
+            // false-confirm a creation.
+            var createdIds = [String?](repeating: nil, count: operations.count)
             do {
-                for operation in operations {
-                    _ = try await homeKit.perform(operation)
+                for (index, operation) in operations.enumerated() {
+                    createdIds[index] = try await homeKit.perform(operation)
                 }
                 let fresh = try await homeKit.snapshot()
-                updated.evidence = ProposalEvidenceCollector.collect(operations: operations, graph: fresh)
+                updated.evidence = ProposalEvidenceCollector.collect(
+                    operations: operations, createdIds: createdIds, graph: fresh
+                )
                 updated.state = .executed
             } catch {
                 // The HomeKit failure is recorded verbatim; evidence from
@@ -140,7 +148,9 @@ public actor ProposalStore {
                 // error line stands alone — and empty evidence is itself the
                 // honest observation.
                 if let fresh = try? await homeKit.snapshot() {
-                    updated.evidence = ProposalEvidenceCollector.collect(operations: operations, graph: fresh)
+                    updated.evidence = ProposalEvidenceCollector.collect(
+                        operations: operations, createdIds: createdIds, graph: fresh
+                    )
                 }
                 updated.error = String(describing: error)
                 updated.state = .failed

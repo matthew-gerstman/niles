@@ -322,6 +322,67 @@ import Testing
         #expect(failed.evidence.first?.observed.contains("not found") == true)
     }
 
+    // MARK: - Evidence id threading
+
+    /// A same-named room in an earlier home would fool name-based evidence
+    /// matching (the flatMap finds the wrong room first). The created id
+    /// pins the evidence to the room the approval actually made.
+    @Test func createdRoomEvidenceMatchesByIdNotByName() async throws {
+        var graph = fixtureGraph()
+        // The decoy lives in the FIRST home, the creation targets the second:
+        // name-based matching (flatMap in home order) would describe the
+        // decoy, not the room the approval just made.
+        graph.homes[0].rooms.append(HomeGraph.Room(
+            id: "room-preexisting", name: "Movie Room",
+            accessories: [HomeGraph.Accessory(id: "acc-old", name: "Old Light")]
+        ))
+        graph.homes.append(HomeGraph.Home(id: "home-2", name: "Cottage", rooms: []))
+        let (fake, store, registry, _) = makeContext(graph: graph)
+
+        let staged = try proposal(from: await registry.call(
+            name: "create_room",
+            arguments: ["homeId": .string("home-2"), "name": .string("Movie Room")]
+        ))
+        let approved = try await store.approve(id: staged.id)
+        #expect(approved.state == .executed)
+        #expect(approved.evidence.first?.confirmed == true)
+        // The decoy holds 1 accessory; the created room starts empty. The
+        // created id is what pins the evidence to the right room.
+        #expect(approved.evidence.first?.observed.contains("0 accessories") == true)
+
+        let graphAfter = await fake.graph
+        #expect(graphAfter.homes.first(where: { $0.id == "home-2" })!.rooms.contains { $0.id == "room-1" })
+    }
+
+    /// Creation evidence must assert the NEW trigger is still disabled. A
+    /// same-named, already-enabled trigger in an earlier home would
+    /// false-fail (or false-confirm arming) under name matching.
+    @Test func createdTriggerEvidenceMatchesByIdNotByName() async throws {
+        var graph = fixtureGraph()
+        // Decoy in home-1 (earlier in flatMap order); creation targets home-2.
+        graph.homes[0].triggers.append(HomeGraph.Trigger(
+            id: "trigger-preexisting", name: "Evening Lights", isEnabled: true,
+            detail: .timer(fireDate: t0, recurrence: [:])
+        ))
+        graph.homes.append(HomeGraph.Home(id: "home-2", name: "Cottage", rooms: []))
+        let (fake, store, registry, _) = makeContext(graph: graph)
+
+        let staged = try proposal(from: await registry.call(
+            name: "create_timer_trigger",
+            arguments: [
+                "homeId": .string("home-2"),
+                "name": .string("Evening Lights"),
+                "fireDate": .string("2026-11-09T07:30:00Z"),
+                "recurrence": .object(["hour": .int(7), "minute": .int(30)]),
+            ]
+        ))
+        let approved = try await store.approve(id: staged.id)
+        #expect(approved.state == .executed)
+        #expect(approved.evidence.first?.confirmed == true)
+        // Name matching would have found the decoy's enabled state instead.
+        #expect(approved.evidence.first?.observed.contains("disabled") == true)
+    }
+
     // MARK: - Polling surface
 
     @Test func getProposalPollReportsStagedAndDeniedStates() async throws {

@@ -7,15 +7,28 @@ import Foundation
 /// computed from what the graph actually shows.
 public enum ProposalEvidenceCollector {
 
-    /// One evidence entry per operation, in execution order.
-    public static func collect(operations: [HomeKitOperation], graph: HomeGraph) -> [ProposalEvidence] {
-        operations.map { collect(operation: $0, graph: graph) }
+    /// One evidence entry per operation, in execution order. `createdIds`
+    /// carries the id `perform` returned for each operation (nil for pure
+    /// mutations or operations that never ran): a created room, scene,
+    /// service group, or trigger is then matched by id, so a same-named
+    /// pre-existing object cannot false-confirm a creation. Name matching
+    /// is only the fallback when no created id is known.
+    public static func collect(
+        operations: [HomeKitOperation], createdIds: [String?], graph: HomeGraph
+    ) -> [ProposalEvidence] {
+        let ids = createdIds.count == operations.count
+            ? createdIds
+            : Array(repeating: nil as String?, count: operations.count)
+        return zip(operations, ids).map { op, createdId in
+            collect(operation: op, createdId: createdId, graph: graph)
+        }
     }
 
-    private static func collect(operation: HomeKitOperation, graph: HomeGraph) -> ProposalEvidence {
+    private static func collect(operation: HomeKitOperation, createdId: String?, graph: HomeGraph) -> ProposalEvidence {
         switch operation {
         case .addRoom(_, let name):
-            let room = graph.homes.flatMap(\.rooms).first { $0.name == name }
+            let rooms = graph.homes.flatMap(\.rooms)
+            let room = createdId.flatMap { id in rooms.first { $0.id == id } } ?? rooms.first { $0.name == name }
             let noun = room.map { $0.accessories.count == 1 ? "accessory" : "accessories" } ?? ""
             return ProposalEvidence(
                 claim: "Room “\(name)” exists",
@@ -62,7 +75,8 @@ public enum ProposalEvidenceCollector {
             return ProposalEvidence(claim: "Zone \(zoneId) membership updated", observed: observed, confirmed: confirmed)
 
         case .addActionSet(_, let name, _):
-            let scene = graph.homes.flatMap(\.scenes).first { $0.name == name }
+            let scenes = graph.homes.flatMap(\.scenes)
+            let scene = createdId.flatMap { id in scenes.first { $0.id == id } } ?? scenes.first { $0.name == name }
             let noun = scene.map { $0.actions.count == 1 ? "action" : "actions" } ?? ""
             return ProposalEvidence(
                 claim: "Scene “\(name)” exists",
@@ -90,7 +104,8 @@ public enum ProposalEvidenceCollector {
             )
 
         case .addServiceGroup(_, let name):
-            let group = graph.homes.flatMap(\.serviceGroups).first { $0.name == name }
+            let groups = graph.homes.flatMap(\.serviceGroups)
+            let group = createdId.flatMap { id in groups.first { $0.id == id } } ?? groups.first { $0.name == name }
             let noun = group.map { $0.services.count == 1 ? "service" : "services" } ?? ""
             return ProposalEvidence(
                 claim: "Service group “\(name)” exists",
@@ -132,13 +147,13 @@ public enum ProposalEvidenceCollector {
         case .addTimerTrigger(_, let name, let fireDate, let recurrence, let sceneId):
             return triggerCreatedEvidence(
                 claim: "Timer trigger “\(name)” exists (disabled)",
-                name: name, sceneId: sceneId, graph: graph
+                name: name, createdId: createdId, sceneId: sceneId, graph: graph
             )
 
         case .addEventTrigger(_, let name, _, let sceneId):
             return triggerCreatedEvidence(
                 claim: "Event trigger “\(name)” exists (disabled)",
-                name: name, sceneId: sceneId, graph: graph
+                name: name, createdId: createdId, sceneId: sceneId, graph: graph
             )
 
         case .setTriggerEnabled(_, let triggerId, let enabled):
@@ -182,9 +197,10 @@ public enum ProposalEvidenceCollector {
     /// (the locked rule — creation never arms), and any referenced scene
     /// must exist in the same graph.
     private static func triggerCreatedEvidence(
-        claim: String, name: String, sceneId: String?, graph: HomeGraph
+        claim: String, name: String, createdId: String?, sceneId: String?, graph: HomeGraph
     ) -> ProposalEvidence {
-        let trigger = graph.homes.flatMap(\.triggers).first { $0.name == name }
+        let triggers = graph.homes.flatMap(\.triggers)
+        let trigger = createdId.flatMap { id in triggers.first { $0.id == id } } ?? triggers.first { $0.name == name }
         let scenePresent = sceneId.map { id in
             graph.homes.flatMap(\.scenes).contains { $0.id == id }
         } ?? true
