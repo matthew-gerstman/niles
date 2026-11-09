@@ -158,6 +158,26 @@ import Testing
         #expect(await store.allProposals().isEmpty)
     }
 
+    /// The QA defect (report art_sTtm4Gzl, F2): staging accepted “Office
+    /// Lights (QA)”, but HomeKit rejected it at execution with HMError 60
+    /// (“Name does not end with valid characters”). Staging now refuses
+    /// names HomeKit will not take, naming the accessory and the offending
+    /// characters — nothing reaches approval, let alone execution.
+    @Test func renameAccessoryToHomeKitInvalidNameFailsBeforeStaging() async throws {
+        let (_, store, registry, _) = makeContext()
+
+        let result = await registry.call(
+            name: "rename_accessory",
+            arguments: ["accessoryId": .string("acc-light-a"), "name": .string("Office Lights (QA)")]
+        )
+        let text = try #require(errorText(of: result))
+        #expect(text.contains("Nothing was staged"))
+        #expect(text.contains("Light A"))
+        #expect(text.contains("Office Lights (QA)"))
+        #expect(text.contains("must end with a letter or digit"))
+        #expect(await store.allProposals().isEmpty)
+    }
+
     // MARK: - Identify
 
     @Test func identifyStagesAndExecutesWithPresenceEvidence() async throws {

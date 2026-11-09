@@ -96,8 +96,7 @@ final class InMemoryNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGrap
                 agentName: "Claude Code",
                 createdAt: now.addingTimeInterval(-2 * minute),
                 isDestructive: false,
-                evidence: "After approval, Niles re-reads the zone from HomeKit and attaches the read-back "
-                    + "evidence to this proposal. Reversible by a follow-up proposal.",
+                evidence: [],
                 diff: [ProposalDiffLine(.add, "+ Upstairs · add room “Office”")],
                 context: [ProposalDiffLine(.plain, "No rooms removed — Master Bedroom and Guest stay.")]
             ),
@@ -108,8 +107,7 @@ final class InMemoryNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGrap
                 agentName: "Claude Code",
                 createdAt: now.addingTimeInterval(-14 * minute),
                 isDestructive: false,
-                evidence: "Creating a trigger stages one proposal. Enabling an existing trigger is always a "
-                    + "separate proposal — agents can never flip automations on silently.",
+                evidence: [],
                 diff: [
                     ProposalDiffLine(.add, "+ Timer “Weekday morning” · 06:45"),
                     ProposalDiffLine(.add, "+ Repeats Mon–Fri · runs scene “Good Morning”"),
@@ -123,8 +121,7 @@ final class InMemoryNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGrap
                 agentName: "Claude Code",
                 createdAt: now.addingTimeInterval(-31 * minute),
                 isDestructive: true,
-                evidence: "Same blast radius as deleting a room in the Home app. Denied proposals never "
-                    + "execute; pending proposals expire after 24 hours.",
+                evidence: [],
                 diff: [
                     ProposalDiffLine(.note, "⚠ 3 accessories will move to Default Room"),
                     ProposalDiffLine(.remove, "− Room “Storage”"),

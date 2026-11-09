@@ -35,8 +35,10 @@ struct NilesProposal: Identifiable, Hashable {
     /// Destructive proposals (room/zone/scene deletion) get the danger treatment:
     /// red edge on the card, danger-styled Deny in the detail sheet.
     let isDestructive: Bool
-    /// Post-execution read-back expectations shown in the detail sheet.
-    let evidence: String
+    /// Post-execution read-back evidence, structured: what each change
+    /// claimed, what the home actually showed, and whether they agree.
+    /// Empty until the proposal executes.
+    let evidence: [ProposalEvidence]
     /// Diff lines shown on the queue card.
     let diff: [ProposalDiffLine]
     /// Extra context lines shown only in the detail sheet.
@@ -45,6 +47,8 @@ struct NilesProposal: Identifiable, Hashable {
     var isPending: Bool { state == .staged }
     /// Defaults to staged — every proposal enters the pipeline staged.
     var state: ProposalState = .staged
+    /// Set on a revert proposal: the id of the executed proposal it reverts.
+    var revertsProposalId: String?
 }
 
 /// An agent seen on the LAN, for the dashboard and pairing lists.
