@@ -1,7 +1,7 @@
 import Foundation
 import MCP
 
-/// The mutating MCP tools: thirteen declarative write tools plus the
+/// The mutating MCP tools: sixteen declarative write tools plus the
 /// `get_proposal` poll. None of them touches HomeKit — a call plans the
 /// request against the current graph and stages exactly one proposal
 /// (spec: "one agent request is always exactly one approval card"); the
@@ -116,6 +116,42 @@ public struct WriteToolRegistry: Sendable {
                     "actions": sceneActionsProperty,
                 ],
                 required: ["sceneId", "actions"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false)
+        ),
+        Tool(
+            name: "rename_scene",
+            description: "Rename a scene (HomeKit action set). Scene names are unique across all homes. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            inputSchema: objectSchema(
+                [
+                    "sceneId": stringProperty("The scene to rename (from get_scenes)."),
+                    "name": stringProperty("The scene's new name."),
+                ],
+                required: ["sceneId", "name"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false)
+        ),
+        Tool(
+            name: "delete_scene",
+            description: "Delete a scene. Any trigger that runs it keeps existing but no longer runs anything — the review card names every linked trigger; pass deleteLinkedTriggers to delete those too. DESTRUCTIVE. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            inputSchema: objectSchema(
+                [
+                    "sceneId": stringProperty("The scene to delete (from get_scenes)."),
+                    "deleteLinkedTriggers": .object([
+                        "type": .string("boolean"),
+                        "description": .string("true also deletes every trigger that runs this scene; omit or false keeps them (they run nothing)."),
+                    ]),
+                ],
+                required: ["sceneId"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false, destructiveHint: true)
+        ),
+        Tool(
+            name: "execute_scene",
+            description: "Run a scene NOW — every action applies to the devices as soon as a human approves it (device-immediate; the review card says so). HomeKit refuses to execute an empty scene. STAGES A PROPOSAL — nothing runs until a human approves it in Niles. Poll get_proposal afterwards.",
+            inputSchema: objectSchema(
+                ["sceneId": stringProperty("The scene to run (from get_scenes).")],
+                required: ["sceneId"]
             ),
             annotations: Tool.Annotations(readOnlyHint: false)
         ),

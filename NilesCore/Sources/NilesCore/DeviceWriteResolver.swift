@@ -109,6 +109,9 @@ enum DeviceWriteStep: Equatable, Sendable {
     case updateZoneRooms(homeId: String, zoneId: String, addRoomIds: [String], removeRoomIds: [String])
     case createActionSet(homeId: String, name: String, actions: [ResolvedAction])
     case updateSceneActions(homeId: String, sceneId: String, add: [ResolvedAction], remove: [SceneActionKey])
+    case renameActionSet(homeId: String, sceneId: String, to: String)
+    case removeActionSet(homeId: String, sceneId: String)
+    case executeActionSet(homeId: String, sceneId: String)
     case addServiceGroup(homeId: String, name: String)
     case updateServiceGroupMembers(homeId: String, groupId: String, addServiceIds: [String], removeServiceIds: [String])
     case removeServiceGroup(homeId: String, groupId: String)
@@ -192,6 +195,24 @@ enum DeviceWriteResolver {
             return [try resolveCreateActionSet(homeId: homeId, name: name, actions: actions, in: view)]
         case .setSceneActions(let homeId, let sceneId, let add, let remove):
             return [try resolveSceneActions(homeId: homeId, sceneId: sceneId, add: add, remove: remove, in: view)]
+        case .renameActionSet(let homeId, let sceneId, let to):
+            return [try resolveRenameActionSet(homeId: homeId, sceneId: sceneId, to: to, in: view)]
+        case .removeActionSet(let homeId, let sceneId):
+            let home = try home(id: homeId, in: view)
+            let scene = try scene(id: sceneId, in: home)
+            // Triggers linking this scene keep pointing at it — HomeKit
+            // detaches the action set itself; the card says so. Keeping is
+            // legal, so nothing here blocks or warns.
+            return [.removeActionSet(homeId: home.id, sceneId: scene.id)]
+        case .executeActionSet(let homeId, let sceneId):
+            let home = try home(id: homeId, in: view)
+            let scene = try scene(id: sceneId, in: home)
+            if scene.actionKeys.isEmpty {
+                throw HomeKitWriteError.invalidOperation(
+                    "Scene “\(scene.name)” has no actions — HomeKit refuses to execute an empty scene."
+                )
+            }
+            return [.executeActionSet(homeId: home.id, sceneId: scene.id)]
         case .addServiceGroup(let homeId, let name):
             let home = try home(id: homeId, in: view)
             if home.serviceGroups.contains(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
@@ -265,6 +286,23 @@ enum DeviceWriteResolver {
         let scene = try scene(id: sceneId, in: home)
         let resolved = try add.map { try resolveAction($0, in: home) }
         return .updateSceneActions(homeId: home.id, sceneId: scene.id, add: resolved, remove: remove)
+    }
+    private static func resolveRenameActionSet(
+        homeId: String, sceneId: String, to: String, in view: DeviceHomeView
+    ) throws -> DeviceWriteStep {
+        let home = try home(id: homeId, in: view)
+        let scene = try scene(id: sceneId, in: home)
+        if scene.name.caseInsensitiveCompare(to) == .orderedSame {
+            return .renameActionSet(homeId: home.id, sceneId: scene.id, to: to)
+        }
+        // Duplicate scene names are rejected the way HomeKit's are, across
+        // all homes — the renamed scene cannot collide with another.
+        if view.homes.contains(where: {
+            $0.scenes.contains { $0.id != scene.id && $0.name.caseInsensitiveCompare(to) == .orderedSame }
+        }) {
+            throw HomeKitWriteError.duplicateName("Home already has a scene named “\(to)”.")
+        }
+        return .renameActionSet(homeId: home.id, sceneId: scene.id, to: to)
     }
 
     private static func resolveServiceGroupMembers(
