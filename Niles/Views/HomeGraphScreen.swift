@@ -1,41 +1,47 @@
 import SwiftUI
 
 /// Home graph: Rooms, Zones, Scenes and Triggers — exactly what agents see
-/// through the read tools. Rows are actionable: swipe right full-swipes the
-/// primary action (Run scene, Arm/Disarm trigger, Rename otherwise); swipe
-/// left opens quick actions (Run / Rename / Delete, context-appropriate).
+/// through the read tools. A native List: rows push a detail, and quick
+/// actions live in the row's trailing menu (mirrored in the context menu).
 /// Every action stages a proposal — nothing applies from this screen.
 struct HomeGraphScreen: View {
     var model: any HomeGraphViewModel
 
-    /// Test hook (same family as `-UITabSelect` in ContentView):
-    /// `-UIRevealQuickActions <row name>` pre-reveals that row's quick
-    /// actions so UI tests can drive the real buttons without synthesizing
-    /// drag gestures — XCUITest's synthesized drags are unreliably delivered
-    /// (cancelled mid-path), which made gesture-driven assertions flaky.
-    private let revealRowName: String? = {
-        let args = ProcessInfo.processInfo.arguments
-        if let i = args.firstIndex(of: "-UIRevealQuickActions"), i + 1 < args.count {
-            return args[i + 1]
-        }
-        return nil
-    }()
-
     /// The rename prompt's target row; non-nil shows the alert.
     @State private var renameTarget: HomeRow?
     @State private var renameText = ""
+    /// The row pending a delete-stage confirmation; non-nil shows the dialog.
+    @State private var deleteTarget: HomeRow?
 
     var body: some View {
-        ScreenScaffold(title: "Home", subtitle: "Swipe a row to stage a change — nothing runs until you approve it") {
-            if model.sections.isEmpty {
-                EmptyStateCard(text: "No home graph yet. Connect to HomeKit to see rooms, zones, scenes, and triggers.")
-            } else {
-                ForEach(model.sections) { section in
-                    SectionHeader(title: section.title)
-                    sectionCard(section)
+        NavigationStack {
+            Group {
+                if model.sections.isEmpty {
+                    ContentUnavailableView(
+                        "No home graph yet",
+                        systemImage: "house",
+                        description: Text("Connect to HomeKit to see rooms, zones, scenes, and triggers.")
+                    )
+                } else {
+                    List {
+                        ForEach(model.sections) { section in
+                            Section(section.title) {
+                                ForEach(section.rows) { row in
+                                    rowView(row)
+                                }
+                            }
+                        }
+                        Section {
+                            Text("Actions here stage proposals — nothing runs until you approve them in the Queue.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
             }
+            .navigationTitle("Home")
         }
+        .tint(NilesTheme.accent)
         .alert(
             "Rename “\(renameTarget?.name ?? "")”",
             isPresented: Binding(
@@ -52,223 +58,181 @@ struct HomeGraphScreen: View {
         } message: {
             Text("The rename is staged for your review — nothing applies until you approve it.")
         }
+        .confirmationDialog(
+            "Delete “\(deleteTarget?.name ?? "")”?",
+            isPresented: Binding(
+                get: { deleteTarget != nil },
+                set: { if !$0 { deleteTarget = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Stage Delete Proposal", role: .destructive) {
+                if let target = deleteTarget {
+                    Task { await model.stage(row: target, action: .delete, newName: nil) }
+                }
+                deleteTarget = nil
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This adds a delete proposal to the Queue for your review — nothing is removed until you approve it.")
+        }
     }
 
-    private func sectionCard(_ section: HomeSection) -> some View {
-        VStack(spacing: 0) {
-            ForEach(Array(section.rows.enumerated()), id: \.element.id) { index, row in
-                SwipeableHomeRow(row: row, revealRowName: revealRowName) { action, newName in
-                    stage(row, action, newName: newName)
-                }
-                if index < section.rows.count - 1 {
-                    Divider()
-                }
+    /// Actionable rows push their detail and carry quick actions; rows
+    /// without identity stay inert.
+    @ViewBuilder
+    private func rowView(_ row: HomeRow) -> some View {
+        if row.isActionable {
+            NavigationLink {
+                HomeRowDetail(row: row, onStage: { stage(row, $0) })
+            } label: {
+                HomeRowCell(row: row, quickActions: row.quickActions) { stage(row, $0) }
+            }
+            .contextMenu { quickActionButtons(for: row) }
+        } else {
+            HomeRowCell(row: row) { _ in }
+        }
+    }
+
+    /// The menu and context menu share these items.
+    @ViewBuilder
+    private func quickActionButtons(for row: HomeRow) -> some View {
+        ForEach(row.quickActions, id: \.self) { action in
+            Button(role: action.buttonRole) {
+                stage(row, action)
+            } label: {
+                Label(action.title, systemImage: action.systemImage)
             }
         }
-        .card()
     }
 
-    /// The single funnel to the store's stage path — gestures and the rename
-    /// alert both end here, so nothing on Home can apply directly. Rename
-    /// without a name yet opens the prompt instead of staging.
+    /// The single funnel to the store's stage path — menus, context menus,
+    /// the detail page, and the rename alert all end here, so nothing on
+    /// Home can apply directly. Rename without a name yet opens the prompt
+    /// instead of staging; delete confirms before staging.
     private func stage(_ row: HomeRow, _ action: HomeRowAction, newName: String? = nil) {
         if action == .rename && newName == nil {
             renameText = row.name
             renameTarget = row
             return
         }
+        if action == .delete {
+            deleteTarget = row
+            return
+        }
         Task { await model.stage(row: row, action: action, newName: newName) }
     }
 }
 
-/// One graph row wrapped in the swipe affordances. Swipe right reveals the
-/// primary action; releasing past the threshold stages it (a full swipe).
-/// Swipe left reveals the quick-action buttons and snaps open; tapping one
-/// stages it and closes. Rows without identity stay inert.
-private struct SwipeableHomeRow: View {
+/// One graph row: glyph, name + subtitle, then either the member count or
+/// the Off tag for disabled rows, and the trailing quick-action menu.
+private struct HomeRowCell: View {
     let row: HomeRow
-    /// Non-nil pre-reveals this row's quick actions (launch-argument hook).
-    var revealRowName: String?
-    let onStage: (HomeRowAction, String?) -> Void
-
-    /// Live drag offset — resets automatically when the touch ends OR is
-    /// cancelled (e.g. an incoming banner steals the touch), so a cancelled
-    /// swipe can never leave the row stuck mid-reveal.
-    @GestureState private var swipeTranslation: CGFloat = 0
-    /// Where the row rests: -openWidth while quick actions are open, else 0.
-    @State private var openX: CGFloat = 0
-
-    private let stageThreshold: CGFloat = 90
-    private let openThreshold: CGFloat = 48
-    private let quickActionWidth: CGFloat = 78
-
-    private var quickActions: [HomeRowAction] { row.quickActions }
-    private var openWidth: CGFloat { CGFloat(quickActions.count) * quickActionWidth }
-
-    /// Total visual offset: resting position plus any in-flight drag.
-    private var contentOffset: CGFloat { swipeTranslation + openX }
-
-    var body: some View {
-        ZStack {
-            revealedActions
-            HomeRowView(row: row)
-                .background(Color(.systemBackground))
-                .padding(.leading, max(0, contentOffset))
-                .padding(.trailing, max(0, -contentOffset))
-        }
-        .clipped()
-        .gesture(drag)
-        .onAppear {
-            if revealRowName == row.name { openX = -openWidth }
-        }
-    }
-
-    /// What shows behind the row while swiping or open. The two reveals are
-    /// mutually exclusive: a rightward offset shows the primary, a leftward
-    /// one shows the quick actions sized by the remaining reveal width.
-    @ViewBuilder
-    private var revealedActions: some View {
-        if contentOffset > 0 {
-            HStack(spacing: 0) {
-                if let action = row.primaryAction {
-                    SwipeActionButton(action: action, fillsHeight: true) {
-                        stage(action)
-                    }
-                    .frame(width: max(0, contentOffset - 8))
-                }
-                Spacer(minLength: 0)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if contentOffset < 0 {
-            HStack(spacing: 0) {
-                Spacer(minLength: 0)
-                HStack(spacing: 6) {
-                    ForEach(quickActions, id: \.self) { action in
-                        SwipeActionButton(action: action, fillsHeight: true) {
-                            stage(action)
-                            close()
-                        }
-                        .frame(width: quickActionWidth - 6)
-                    }
-                }
-                .frame(width: min(max(0, -contentOffset), openWidth), alignment: .trailing)
-                .clipped()
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-    }
-
-    private var drag: some Gesture {
-        DragGesture(minimumDistance: 20)
-            .updating($swipeTranslation) { value, state, _ in
-                guard abs(value.translation.width) > abs(value.translation.height) else { return }
-                let clamped = min(abs(value.translation.width), 180)
-                state = value.translation.width > 0 ? clamped : -clamped
-            }
-            .onEnded { value in
-                guard abs(value.translation.width) > abs(value.translation.height) else { return }
-                // A quick flick ends with a small final translation; judge it
-                // by where the gesture was heading, not where it stopped.
-                let travel = max(value.translation.width, value.predictedEndTranslation.width)
-                if travel > 0 {
-                    // Full swipe right: stage the primary action immediately.
-                    if travel > stageThreshold, let action = row.primaryAction {
-                        stage(action)
-                    }
-                    close()
-                } else if -travel > openThreshold {
-                    withAnimation(.spring(duration: 0.25)) { openX = -openWidth }
-                } else {
-                    close()
-                }
-            }
-    }
-
-    private func stage(_ action: HomeRowAction) {
-        onStage(action, nil)
-    }
-
-    private func close() {
-        withAnimation(.spring(duration: 0.25)) { openX = 0 }
-    }
-}
-
-/// One swipe-revealed button. Delete is the only red action — the red accent
-/// stays reserved for destructive choices (spec: severity tokens).
-private struct SwipeActionButton: View {
-    let action: HomeRowAction
-    let fillsHeight: Bool
-    let onTap: () -> Void
-
-    var body: some View {
-        Button(action: onTap) {
-            VStack(spacing: 3) {
-                Image(systemName: action.systemImage)
-                    .font(.system(size: 15, weight: .semibold))
-                Text(action.title)
-                    .font(.system(size: 11, weight: .bold))
-            }
-            .frame(maxWidth: .infinity, maxHeight: fillsHeight ? .infinity : nil)
-            .background(background)
-            .foregroundStyle(foreground)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-        }
-        .buttonStyle(.plain)
-    }
-
-    private var background: Color {
-        switch action {
-        case .delete: NilesTheme.destructive.opacity(0.14)
-        case .run, .setArmed: NilesTheme.accent.opacity(0.12)
-        case .rename: Color.primary.opacity(0.06)
-        }
-    }
-
-    private var foreground: Color {
-        switch action {
-        case .delete: NilesTheme.destructive
-        case .run, .setArmed: NilesTheme.accent
-        case .rename: .primary
-        }
-    }
-}
-
-/// One graph row: glyph tile, name + subtitle, then either the member count
-/// or the OFF tag for disabled rows (the disabled trigger grays out).
-private struct HomeRowView: View {
-    let row: HomeRow
+    /// Empty on non-actionable rows: no menu is drawn.
+    var quickActions: [HomeRowAction] = []
+    let onStage: (HomeRowAction) -> Void
 
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: row.systemImage)
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(NilesTheme.accent)
-                .frame(width: 32, height: 32)
-                .background(NilesTheme.accent.opacity(0.1), in: RoundedRectangle(cornerRadius: 9))
-            VStack(alignment: .leading, spacing: 1) {
+                .foregroundStyle(.tint)
+            VStack(alignment: .leading, spacing: 2) {
                 Text(row.name)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(row.isEnabled ? .primary : Color.primary.opacity(0.4))
+                    .font(.body)
+                    .foregroundStyle(row.isEnabled ? .primary : .secondary)
                 Text(row.subtitle)
-                    .font(.system(size: 12))
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
             Spacer()
             if !row.isEnabled {
-                Text("OFF")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1)
-                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.primary.opacity(0.15)))
+                Text("Off")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             } else if let count = row.trailingCount {
                 Text("\(count)")
-                    .font(.system(size: 12))
+                    .font(.subheadline)
                     .monospacedDigit()
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
+            }
+            if !quickActions.isEmpty {
+                Menu {
+                    ForEach(quickActions, id: \.self) { action in
+                        Button(role: action.buttonRole) {
+                            onStage(action)
+                        } label: {
+                            Label(action.title, systemImage: action.systemImage)
+                        }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .foregroundStyle(.tint)
+                }
+                .accessibilityLabel("Actions for \(row.name)")
             }
         }
-        .padding(.vertical, 10)
+        .padding(.vertical, 2)
+    }
+}
+
+/// Pushed detail for one graph row: the summary the read tools return, plus
+/// the same quick actions. Staging routes back through the screen's funnel.
+private struct HomeRowDetail: View {
+    let row: HomeRow
+    let onStage: (HomeRowAction) -> Void
+
+    var body: some View {
+        List {
+            Section("Summary") {
+                LabeledContent("Type", value: row.kind.map(kindName) ?? "—")
+                LabeledContent("Status", value: row.isEnabled ? "Enabled" : "Disabled")
+                if let count = row.trailingCount {
+                    LabeledContent(countLabel, value: count.formatted(.number.notation(.plain)))
+                }
+                LabeledContent("Detail", value: row.subtitle)
+            }
+            if !row.quickActions.isEmpty {
+                Section("Actions") {
+                    ForEach(row.quickActions, id: \.self) { action in
+                        Button(role: action.buttonRole) {
+                            onStage(action)
+                        } label: {
+                            Label(action.title, systemImage: action.systemImage)
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle(row.name)
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func kindName(_ kind: HomeRowKind) -> String {
+        switch kind {
+        case .room: return "Room"
+        case .zone: return "Zone"
+        case .scene: return "Scene"
+        case .trigger: return "Trigger"
+        }
+    }
+
+    /// What the row's trailing count counts, by kind.
+    private var countLabel: String {
+        switch row.kind {
+        case .room: return "Accessories"
+        case .zone: return "Rooms"
+        case .scene: return "Actions"
+        case .trigger: return "Count"
+        case nil: return "Count"
+        }
+    }
+}
+
+extension HomeRowAction {
+    /// Delete is the only destructive action — red comes from the role, not
+    /// a custom color (spec: severity rides iOS conventions).
+    var buttonRole: ButtonRole? {
+        self == .delete ? .destructive : nil
     }
 }
 
