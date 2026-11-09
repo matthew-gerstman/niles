@@ -19,6 +19,14 @@ final class HomeActionsUITests: XCTestCase {
 
         let queueButton = app.tabBars.buttons["Queue"]
 
+        // The queue starts empty in the demo fixture — capture that state
+        // first, then return to Home for the swipe flow.
+        queueButton.tap()
+        XCTAssertTrue(queueButton.waitForExistence(timeout: 10))
+        capture("queue-empty", in: app)
+        app.tabBars.buttons["Home"].tap()
+        XCTAssertTrue(scene.waitForExistence(timeout: 10))
+
         // Full-swipe right: stages the primary action (Run scene). Nothing
         // applies — the proposal lands in the queue. Capture before asserting
         // so a failure still leaves visual evidence of the post-swipe state.
