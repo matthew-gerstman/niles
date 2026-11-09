@@ -51,7 +51,7 @@ public struct ReadToolRegistry: Sendable {
         ),
         Tool(
             name: "get_rooms",
-            description: "List rooms across all homes with their assigned accessories and zone membership. Rooms group accessories; zones (see get_zones) group rooms.",
+            description: "List rooms across all homes with their assigned accessories and zone membership. Each accessory names its services and the characteristics each service supports (e.g. a dimmable bulb's lightbulb service lists On and Brightness) — check this before staging a characteristic write. Rooms group accessories; zones (see get_zones) group rooms.",
             inputSchema: emptyObjectSchema,
             annotations: Tool.Annotations(readOnlyHint: true)
         ),

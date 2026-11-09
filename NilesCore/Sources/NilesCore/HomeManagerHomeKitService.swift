@@ -9,6 +9,8 @@ private typealias Zone = HomeGraph.Zone
 private typealias Accessory = HomeGraph.Accessory
 private typealias Scene = HomeGraph.Scene
 private typealias SceneAction = HomeGraph.SceneAction
+private typealias AccessoryService = HomeGraph.AccessoryService
+private typealias CharacteristicRef = HomeGraph.CharacteristicRef
 private typealias ServiceGroup = HomeGraph.ServiceGroup
 private typealias ServiceRef = HomeGraph.ServiceRef
 private typealias Trigger = HomeGraph.Trigger
@@ -87,7 +89,25 @@ public actor HomeManagerHomeKitService: HomeKitService {
     private static func accessory(from accessory: HMAccessory) -> Accessory {
         Accessory(
             id: accessory.uniqueIdentifier.uuidString,
-            name: accessory.name
+            name: accessory.name,
+            services: accessory.services.map(Self.accessoryService(from:))
+        )
+    }
+
+    private static func accessoryService(from service: HMService) -> AccessoryService {
+        AccessoryService(
+            id: service.uniqueIdentifier.uuidString,
+            name: service.name,
+            serviceType: service.serviceType,
+            characteristics: service.characteristics.map(Self.characteristicRef(from:))
+        )
+    }
+
+    private static func characteristicRef(from characteristic: HMCharacteristic) -> CharacteristicRef {
+        CharacteristicRef(
+            id: characteristic.uniqueIdentifier.uuidString,
+            type: characteristic.characteristicType,
+            name: characteristic.localizedDescription
         )
     }
 

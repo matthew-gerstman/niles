@@ -13,16 +13,55 @@ extension HomeGraph {
             name: "Gerstman Home",
             rooms: [
                 Room(id: "room-1", name: "Living Room", accessories: [
-                    Accessory(id: "acc-1", name: "Living Room Lamp"),
-                    Accessory(id: "acc-2", name: "TV Backlight"),
-                    Accessory(id: "acc-3", name: "Ceiling Fan"),
+                    Accessory(id: "acc-1", name: "Living Room Lamp", services: [
+                        AccessoryService(
+                            id: "service-acc-1-light", name: "Living Room Lamp", serviceType: "Lightbulb",
+                            characteristics: [
+                                CharacteristicRef(id: "char-acc-1-on", type: "On", name: "On"),
+                                CharacteristicRef(id: "char-acc-1-brightness", type: "Brightness", name: "Brightness"),
+                            ]
+                        ),
+                    ]),
+                    Accessory(id: "acc-2", name: "TV Backlight", services: [
+                        AccessoryService(
+                            id: "service-acc-2-light", name: "TV Backlight", serviceType: "Lightbulb",
+                            characteristics: [CharacteristicRef(id: "char-acc-2-on", type: "On", name: "On")]
+                        ),
+                    ]),
+                    Accessory(id: "acc-3", name: "Ceiling Fan", services: [
+                        AccessoryService(
+                            id: "service-acc-3-fan", name: "Ceiling Fan", serviceType: "Fan",
+                            characteristics: [CharacteristicRef(id: "char-acc-3-on", type: "On", name: "On")]
+                        ),
+                    ]),
                 ]),
                 Room(id: "room-2", name: "Kitchen", accessories: [
-                    Accessory(id: "acc-4", name: "Kitchen Lights"),
-                    Accessory(id: "acc-5", name: "Coffee Maker"),
+                    Accessory(id: "acc-4", name: "Kitchen Lights", services: [
+                        AccessoryService(
+                            id: "service-acc-4-light", name: "Kitchen Lights", serviceType: "Lightbulb",
+                            characteristics: [
+                                CharacteristicRef(id: "char-acc-4-on", type: "On", name: "On"),
+                                CharacteristicRef(id: "char-acc-4-brightness", type: "Brightness", name: "Brightness"),
+                            ]
+                        ),
+                    ]),
+                    Accessory(id: "acc-5", name: "Coffee Maker", services: [
+                        AccessoryService(
+                            id: "service-acc-5-switch", name: "Coffee Maker", serviceType: "Switch",
+                            characteristics: [CharacteristicRef(id: "char-acc-5-on", type: "On", name: "On")]
+                        ),
+                    ]),
                 ]),
                 Room(id: "room-3", name: "Office", accessories: [
-                    Accessory(id: "acc-6", name: "Desk Lamp"),
+                    Accessory(id: "acc-6", name: "Desk Lamp", services: [
+                        AccessoryService(
+                            id: "service-acc-6-light", name: "Desk Lamp", serviceType: "Lightbulb",
+                            characteristics: [
+                                CharacteristicRef(id: "char-acc-6-on", type: "On", name: "On"),
+                                CharacteristicRef(id: "char-acc-6-brightness", type: "Brightness", name: "Brightness"),
+                            ]
+                        ),
+                    ]),
                 ]),
             ],
             zones: [
