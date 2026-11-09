@@ -97,6 +97,20 @@ targets:
         TEST_HOST: $(BUILT_PRODUCTS_DIR)/Niles.app/Niles
         BUNDLE_LOADER: $(TEST_HOST)
 
+  # UI tests: drive the real simulator app (demo fixture) as evidence capture —
+  # the Home swipe-to-stage flow and the consolidated Settings screen.
+  NilesUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: NilesUITests
+    dependencies:
+      - target: Niles
+    settings:
+      base:
+        TEST_TARGET_NAME: Niles
+        PRODUCT_BUNDLE_IDENTIFIER: com.gerstman.niles.uitests
+
 schemes:
   Niles:
     build:
@@ -104,7 +118,9 @@ schemes:
         Niles: all
         NilesCoreTests: [test]
         NilesTests: [test]
+        NilesUITests: [test]
     test:
       targets:
         - NilesCoreTests
         - NilesTests
+        - NilesUITests
