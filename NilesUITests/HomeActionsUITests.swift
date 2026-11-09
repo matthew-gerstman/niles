@@ -30,6 +30,7 @@ final class HomeActionsUITests: XCTestCase {
         // Full-swipe right: stages the primary action (Run scene). Nothing
         // applies — the proposal lands in the queue. Capture before asserting
         // so a failure still leaves visual evidence of the post-swipe state.
+        NSLog("SWIPE-DEBUG scene.frame=\(scene.frame) window.frame=\(app.frame)")
         let start = scene.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5))
         let end = scene.coordinate(withNormalizedOffset: CGVector(dx: 1.6, dy: 0.5))
         start.press(forDuration: 0.1, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.3)

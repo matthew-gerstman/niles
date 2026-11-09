@@ -141,7 +141,7 @@ private struct SwipeableHomeRow: View {
     private var drag: some Gesture {
         DragGesture(minimumDistance: 20)
             .onChanged { value in
-                Self.gestureLog.notice("swipe onChanged w=\(value.translation.width, format: .fixed(precision: 1), privacy: .public) h=\(value.translation.height, format: .fixed(precision: 1), privacy: .public)")
+                Self.gestureLog.notice("swipe onChanged w=\(value.translation.width, format: .fixed(precision: 1), privacy: .public) h=\(value.translation.height, format: .fixed(precision: 1), privacy: .public) at=\(value.location.x, format: .fixed(precision: 1), privacy: .public),\(value.location.y, format: .fixed(precision: 1), privacy: .public) start=\(value.startLocation.x, format: .fixed(precision: 1), privacy: .public)")
                 guard abs(value.translation.width) > abs(value.translation.height) else { return }
                 isDraggingRight = value.translation.width > 0
                 let clamped = min(abs(value.translation.width), 180)
