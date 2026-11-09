@@ -72,7 +72,7 @@ final class HomeActionsUITests: XCTestCase {
         app.launch()
 
         // The settings screen's own heading; content beyond it (endpoint,
-        // sessions, QR pairing) is captured for the PR evidence.
+        // sessions, pairing code) is captured for the PR evidence.
         XCTAssertTrue(app.staticTexts["Settings"].waitForExistence(timeout: 15))
         capture("settings-consolidated", in: app)
     }

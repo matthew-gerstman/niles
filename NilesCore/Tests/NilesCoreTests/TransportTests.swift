@@ -1,4 +1,5 @@
 import Foundation
+import Security
 import Testing
 import MCP
 
@@ -285,6 +286,68 @@ struct BearerTokenAuthMiddlewareTests {
         #expect(!BearerTokenAuthMiddleware.tokensMatch("", "a"))
         #expect(BearerTokenAuthMiddleware.tokensMatch("", ""))
     }
+
+    // MARK: Set-aware gate
+
+    @Test("Any live token in the set authenticates")
+    func anyLiveTokenAuthenticates() {
+        let store = FakeTokenStore(tokens: ["token-a", "token-b"])
+        let middleware = BearerTokenAuthMiddleware(tokenProvider: { try store.listAgents().map(\.token) })
+
+        #expect(middleware.authorize(post(initializeBody(), token: "token-a")) == nil)
+        #expect(middleware.authorize(post(initializeBody(), token: "token-b")) == nil)
+        #expect(middleware.authorize(post(initializeBody(), token: "token-c"))?.statusCode == 401)
+    }
+
+    @Test("A revoked token is rejected live; other tokens keep working")
+    func revokedTokenRejectedLive() {
+        let store = FakeTokenStore(tokens: ["token-a", "token-b"])
+        let middleware = BearerTokenAuthMiddleware(tokenProvider: { try store.listAgents().map(\.token) })
+
+        #expect(middleware.authorize(post(initializeBody(), token: "token-b")) == nil)
+        store.removeToken("token-b")
+
+        #expect(middleware.authorize(post(initializeBody(), token: "token-b"))?.statusCode == 401)
+        #expect(middleware.authorize(post(initializeBody(), token: "token-a")) == nil)
+    }
+
+    @Test("A token issued after the gate was built authenticates")
+    func issuedTokenAuthenticates() throws {
+        let store = FakeTokenStore(tokens: ["token-a"])
+        let middleware = BearerTokenAuthMiddleware(tokenProvider: { try store.listAgents().map(\.token) })
+
+        let issued = try store.issueToken(name: "Obvious")
+
+        #expect(middleware.authorize(post(initializeBody(), token: issued.token)) == nil)
+    }
+
+    @Test("A failing store fails closed with 401")
+    func storeFailureFailsClosed() {
+        struct StoreUnavailable: Error {}
+        let middleware = BearerTokenAuthMiddleware(tokenProvider: { throw StoreUnavailable() })
+
+        #expect(middleware.authorize(post(initializeBody(), token: testToken))?.statusCode == 401)
+    }
+
+    @Test("Over the real Keychain store, issued tokens authenticate and revoked tokens are rejected")
+    func gateOverRealStore() throws {
+        let service = isolatedService()
+        defer { deleteAllItems(service: service) }
+        let store = KeychainTokenStore(service: service)
+        let middleware = BearerTokenAuthMiddleware(tokenProvider: { try store.listAgents().map(\.token) })
+
+        let first = try store.issueToken(name: "a")
+        let second = try store.issueToken(name: "b")
+
+        #expect(middleware.authorize(post(initializeBody(), token: first.token)) == nil)
+        #expect(middleware.authorize(post(initializeBody(), token: second.token)) == nil)
+        #expect(middleware.authorize(post(initializeBody(), token: "unknown-token"))?.statusCode == 401)
+
+        try store.revoke(id: second.id)
+
+        #expect(middleware.authorize(post(initializeBody(), token: second.token))?.statusCode == 401)
+        #expect(middleware.authorize(post(initializeBody(), token: first.token)) == nil)
+    }
 }
 
 // MARK: - Session continuity
@@ -346,21 +409,160 @@ struct MCPGatewaySessionTests {
         let after = await gateway.handle(post(jsonRPCRequest(id: 3, method: "ping"), sessionID: sessionID))
         #expect(after.statusCode == 404)
     }
+
+    @Test("Sessions record the paired agent's token id at initialize")
+    func sessionsRecordTokenIdentity() async throws {
+        let agentID = UUID()
+        let gateway = MCPGateway(
+            validationPipeline: NilesValidationPipeline(expectedToken: testToken),
+            auth: BearerTokenAuthMiddleware(expectedToken: testToken),
+            tokenIdentity: { token in token == testToken ? agentID : nil }
+        )
+
+        let response = await gateway.handle(post(initializeBody()))
+        #expect(response.statusCode == 200)
+
+        let infos = await gateway.sessionInfos()
+        #expect(infos.count == 1)
+        #expect(infos.first?.tokenId == agentID)
+        #expect(infos.first?.clientName == "niles-tests")
+    }
+
+    @Test("closeSessions(tokenId:) retires only the bound agent's session")
+    func revocationClosesBoundSessions() async throws {
+        let agentA = UUID()
+        let agentB = UUID()
+        let tokenA = "agent-token-a"
+        let tokenB = "agent-token-b"
+        let gateway = MCPGateway(
+            validationPipeline: NilesValidationPipeline(tokens: [tokenA, tokenB]),
+            auth: BearerTokenAuthMiddleware(tokens: [tokenA, tokenB]),
+            tokenIdentity: { token in
+                token == tokenA ? agentA : token == tokenB ? agentB : nil
+            }
+        )
+
+        let responseA = await gateway.handle(post(initializeBody(), token: tokenA))
+        let responseB = await gateway.handle(post(initializeBody(), token: tokenB))
+        guard let sessionA = responseA.headers[MCP.HTTPHeaderName.sessionID],
+            let sessionB = responseB.headers[MCP.HTTPHeaderName.sessionID]
+        else {
+            Issue.record("An initialize response carried no session id")
+            return
+        }
+
+        #expect(await gateway.closeSessions(tokenId: agentA) == 1)
+        let revokedAgent = await gateway.handle(
+            post(jsonRPCRequest(id: 3, method: "ping"), token: tokenA, sessionID: sessionA)
+        )
+        #expect(revokedAgent.statusCode == 404)
+        let otherAgent = await gateway.handle(
+            post(jsonRPCRequest(id: 4, method: "ping"), token: tokenB, sessionID: sessionB)
+        )
+        #expect(otherAgent.statusCode == 200)
+    }
+
+    @Test("An unresolved token still creates a session, without an identity to revoke")
+    func unresolvedTokenYieldsNilIdentity() async throws {
+        let gateway = MCPGateway(
+            validationPipeline: NilesValidationPipeline(expectedToken: testToken),
+            auth: BearerTokenAuthMiddleware(expectedToken: testToken),
+            tokenIdentity: { _ in nil }
+        )
+
+        let response = await gateway.handle(post(initializeBody()))
+        #expect(response.statusCode == 200)
+        let infos = await gateway.sessionInfos()
+        #expect(infos.count == 1)
+        #expect(infos.first?.tokenId == nil)
+    }
 }
 
-// MARK: - Token generation
+// MARK: - Keychain token store
 
 @Suite("KeychainTokenStore")
 struct KeychainTokenStoreTests {
 
     @Test("Generated tokens are 64 hex characters and never repeat")
     func generatesHexTokens() throws {
-        let first = try KeychainTokenStore.generateToken()
-        let second = try KeychainTokenStore.generateToken()
         let hex = CharacterSet(charactersIn: "0123456789abcdef")
-        #expect(first.count == 64)
-        #expect(first.unicodeScalars.allSatisfy { hex.contains($0) })
-        #expect(first != second)
+        var seen = Set<String>()
+        for _ in 0..<16 {
+            let token = try KeychainTokenStore.generateToken()
+            #expect(token.count == 64)
+            #expect(token.unicodeScalars.allSatisfy { hex.contains($0) })
+            seen.insert(token)
+        }
+        #expect(seen.count == 16)
+    }
+
+    @Test("Issued agents list with their names and distinct tokens; revoke round-trips")
+    func issueListRevokeRoundTrip() throws {
+        let service = isolatedService()
+        defer { deleteAllItems(service: service) }
+        let store = KeychainTokenStore(service: service)
+
+        let first = try store.issueToken(name: "Obvious")
+        let second = try store.issueToken(name: nil)
+
+        let agents = try store.listAgents()
+        #expect(agents.count == 2)
+        let byID = Dictionary(uniqueKeysWithValues: agents.map { ($0.id, $0) })
+        #expect(byID[first.id]?.name == "Obvious")
+        #expect(byID[first.id]?.token == first.token)
+        #expect(byID[second.id]?.name == nil)
+        #expect(byID[second.id]?.token == second.token)
+        #expect(first.token != second.token)
+
+        try store.revoke(id: first.id)
+        #expect(try store.listAgents().map(\.id) == [second.id])
+
+        // Revoking an already-revoked id is a no-op, not an error.
+        try store.revoke(id: first.id)
+        #expect(try store.listAgents().map(\.id) == [second.id])
+    }
+
+    @Test("Legacy token migrates to a listed agent entry without being deleted or replaced")
+    func legacyMigration() throws {
+        let service = isolatedService()
+        defer { deleteAllItems(service: service) }
+        let store = KeychainTokenStore(service: service)
+
+        let legacy = try store.loadOrCreate()
+
+        let agents = try store.listAgents()
+        #expect(agents.map(\.id) == [KeychainTokenStore.legacyAgentID])
+        #expect(agents.first?.name == "Legacy token")
+        #expect(agents.first?.token == legacy)
+
+        // Re-reading is stable — migration does not mint a replacement.
+        #expect(try store.loadOrCreate() == legacy)
+
+        // An issued agent coexists with the migrated legacy entry.
+        let issued = try store.issueToken(name: "Obvious")
+        let combined = try store.listAgents()
+        #expect(combined.count == 2)
+        #expect(Set(combined.map(\.id)) == [KeychainTokenStore.legacyAgentID, issued.id])
+        #expect(combined.first(where: { $0.id == KeychainTokenStore.legacyAgentID })?.token == legacy)
+    }
+
+    @Test("Revoking the legacy entry deletes it for good; the single-token surface falls back to the oldest agent token")
+    func legacyRevocationIsPermanent() throws {
+        let service = isolatedService()
+        defer { deleteAllItems(service: service) }
+        let store = KeychainTokenStore(service: service)
+
+        _ = try store.loadOrCreate()
+        let agent = try store.issueToken(name: "Obvious")
+
+        try store.revoke(id: KeychainTokenStore.legacyAgentID)
+
+        #expect(try store.listAgents().map(\.id) == [agent.id])
+        // No resurrection: loadOrCreate returns the agent token rather than
+        // minting a fresh legacy item.
+        #expect(try store.loadOrCreate() == agent.token)
+        let afterRevoke = try store.listAgents()
+        #expect(!afterRevoke.contains { $0.id == KeychainTokenStore.legacyAgentID })
     }
 }
 
@@ -376,5 +578,47 @@ private func matches(_ outcome: HTTPParseOutcome, _ expected: HTTPParseOutcome) 
         return left == right
     default:
         return false
+    }
+}
+
+// MARK: - Token-set helpers
+
+/// Thread-safe in-memory `TokenStoring` double: mutating the set between
+/// requests proves the middleware reads live state, not a construction-time
+/// snapshot.
+private final class FakeTokenStore: TokenStoring, @unchecked Sendable {
+    private let lock = NSLock()
+    private var tokens: [String]
+
+    init(tokens: [String]) {
+        self.tokens = tokens
+    }
+
+    func loadOrCreate() throws -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        return tokens.first ?? ""
+    }
+
+    func listAgents() throws -> [PairedAgent] {
+        lock.lock()
+        defer { lock.unlock() }
+        return tokens.map { PairedAgent(id: UUID(), name: nil, token: $0, pairedAt: .distantPast) }
+    }
+
+    func issueToken(name: String?) throws -> PairedAgent {
+        let token = "issued-" + UUID().uuidString
+        lock.lock()
+        defer { lock.unlock() }
+        tokens.append(token)
+        return PairedAgent(id: UUID(), name: name, token: token, pairedAt: Date())
+    }
+
+    func revoke(id: UUID) throws {}
+
+    func removeToken(_ token: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        tokens.removeAll { $0 == token }
     }
 }

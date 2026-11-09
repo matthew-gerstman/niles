@@ -26,9 +26,10 @@ struct DeviceHomeKitService: HomeKitWriting {
 ///
 /// Every screen keeps observing the same view-model protocols from the
 /// screens PR; this class fills them from:
-/// - `ServerCoordinator` — server status, endpoint, connected MCP sessions
+/// - `ServerCoordinator` — server status, endpoint, connected MCP sessions,
+///   and the shared pairing-code lifecycle
 /// - `ProposalStore` — staged proposals, approval/denial, read-back evidence
-/// - `KeychainTokenStore` — the same 256-bit bearer token the transport gates with
+/// - `KeychainTokenStore` — the paired credentials the transport gates with
 /// - the HomeKit service's graph — the read-only home sections
 ///
 /// The proposal store is an actor with no change callbacks, so the store
@@ -77,10 +78,12 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
     // MARK: - PairingViewModel
 
     let transportName = "Streamable HTTP"
-    private(set) var token = ""
-    private(set) var tokenError: String?
-    private(set) var isTokenRevealed = false
-    private(set) var trustedAgents: [AgentConnection] = []
+    /// The live six-digit code, or `nil` between mint failures. Auto-minted
+    /// whenever refresh finds none — after expiry, a successful exchange, or
+    /// an attempt-cap burn — so the card always shows a fresh challenge.
+    private(set) var pairingCode: String?
+    private(set) var codeExpiresAt: Date?
+    private(set) var pairedAgents: [PairedAgentRow] = []
 
     var pendingProposals: [NilesProposal] {
         proposals.filter(\.isPending)
@@ -140,7 +143,6 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
                 try? await Task.sleep(for: self?.pollInterval ?? .seconds(1))
             }
         }
-        Task { await loadToken() }
     }
 
     func stop() {
@@ -468,8 +470,34 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
 
     // MARK: - PairingViewModel
 
-    func toggleTokenRevealed() {
-        isTokenRevealed.toggle()
+    /// The "New code" tap: discards the live code and mints a fresh one.
+    func mintNewCode() {
+        Task { await mintNewCodeAndWait() }
+    }
+
+    /// Awaitable mint path — what the tap task spawns; tests await it directly.
+    /// Mints unconditionally: the tap discards a still-live code, not just a
+    /// spent one.
+    func mintNewCodeAndWait() async {
+        do {
+            _ = try await coordinator.pairingCodes.mintCode()
+        } catch {
+            logger.error("Pairing code mint failed: \(String(describing: error))")
+        }
+        await refreshPairingState(sessions: await coordinator.sessionInfos())
+    }
+
+    /// Revocation: delete the credential, then close any live session the
+    /// agent's token created. A failed deletion keeps the session — no half
+    /// revocation where the credential outlives the connection it guards.
+    func revokeAgent(_ id: UUID) async {
+        do {
+            try tokenStore.revoke(id: id)
+            await coordinator.closeSessions(tokenId: id)
+        } catch {
+            logger.error("Revoke failed for \(id.uuidString, privacy: .public): \(String(describing: error))")
+        }
+        await refreshPairingState(sessions: await coordinator.sessionInfos())
     }
 
     // MARK: - HomeGraphViewModel / swipe-to-stage
@@ -498,12 +526,6 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
             // nothing was applied either way — the queue stays authoritative.
             logger.error("Staging \(request.tool, privacy: .public) for “\(row.name, privacy: .public)” failed: \(String(describing: error))")
         }
-    }
-
-    /// Awaitable token load — the polling task calls this once at start;
-    /// tests call it directly.
-    func loadTokenAndWait() async {
-        await loadToken()
     }
 
     // MARK: - Simulator QA fixtures
@@ -615,7 +637,7 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
                 isActive: Date().timeIntervalSince(session.lastAccessedAt) < 30
             )
         }
-        trustedAgents = connectedAgents
+        await refreshPairingState(sessions: sessions)
 
         guard let store = coordinator.proposalStore else { return }
         let live = await store.allProposals()
@@ -749,16 +771,64 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
         )
     }
 
-    private func loadToken() async {
+    // MARK: - Pairing state
+
+    /// The pairing card's state: a live code (auto-minted when refresh finds
+    /// none — expiry, a successful exchange, and an attempt-cap burn all land
+    /// here, so foreground-after-expiry shows a fresh one) and the paired
+    /// credentials with what the live sessions say about them.
+    private func refreshPairingState(sessions: [MCPGateway.SessionInfo]) async {
+        await mintPairingCode()
+        if let code = await coordinator.pairingCodes.activeCode() {
+            pairingCode = code.code
+            codeExpiresAt = code.expiresAt
+        }
+
         do {
-            token = try tokenStore.loadOrCreate()
-            tokenError = nil
+            pairedAgents = Self.pairedAgentRows(
+                agents: try tokenStore.listAgents(),
+                sessions: sessions,
+                now: Date()
+            )
         } catch {
-            // The Keychain is the token's only home; surfacing the failure is
-            // better than an empty QR the agent could never pair with.
-            token = ""
-            tokenError = "Could not read or create the Keychain token: \(error)"
-            logger.error("Token load failed: \(String(describing: error))")
+            // The Keychain read failing keeps the previous list on screen —
+            // logged, never silently dropped.
+            logger.error("Paired-agent read failed, keeping previous list: \(String(describing: error))")
+        }
+    }
+
+    /// Mints a code when none is live. A mint failure is logged, not thrown —
+    /// the countdown then shows the previous expiry, never a fabricated code.
+    private func mintPairingCode() async {
+        guard await coordinator.pairingCodes.activeCode() == nil else { return }
+        do {
+            _ = try await coordinator.pairingCodes.mintCode()
+        } catch {
+            logger.error("Pairing code mint failed: \(String(describing: error))")
+        }
+    }
+
+    /// The paired-agents rows from stored credentials and live sessions —
+    /// pure, so the list's rendering rules are directly testable. Unnamed
+    /// agents render as "Agent"; last seen comes from the newest session the
+    /// agent's token created.
+    static func pairedAgentRows(
+        agents: [PairedAgent],
+        sessions: [MCPGateway.SessionInfo],
+        now: Date
+    ) -> [PairedAgentRow] {
+        agents.map { agent in
+            let lastSeen = sessions
+                .filter { $0.tokenId == agent.id }
+                .map(\.lastAccessedAt)
+                .max()
+            let pairedDate = agent.pairedAt.formatted(date: .abbreviated, time: .omitted)
+            let seen = lastSeen.map { "last seen \(RelativeTime.label(for: $0, now: now))" } ?? "never connected"
+            return PairedAgentRow(
+                id: agent.id,
+                name: agent.name ?? "Agent",
+                detail: "paired \(pairedDate) · \(seen)"
+            )
         }
     }
 

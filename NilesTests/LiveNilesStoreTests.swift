@@ -9,6 +9,47 @@ import UIKit
 struct StaticTokenStore: TokenStoring {
     let token: String
     func loadOrCreate() throws -> String { token }
+    func listAgents() throws -> [PairedAgent] {
+        [PairedAgent(id: UUID(), name: nil, token: token, pairedAt: .distantPast)]
+    }
+    func issueToken(name: String?) throws -> PairedAgent {
+        PairedAgent(id: UUID(), name: name, token: token, pairedAt: Date())
+    }
+    func revoke(id: UUID) throws {}
+}
+
+/// A token store with a stable, mutable agent list — what the paired-agents
+/// list and revoke flow tests need (the Keychain stand-in stays stateless).
+final class MutableListTokenStore: TokenStoring, @unchecked Sendable {
+    private let lock = NSLock()
+    private var agents: [PairedAgent]
+    private(set) var revokedIDs: [UUID] = []
+
+    init(agents: [PairedAgent]) {
+        self.agents = agents
+    }
+
+    func loadOrCreate() throws -> String { agents.first?.token ?? "" }
+    func listAgents() throws -> [PairedAgent] { agents }
+    func issueToken(name: String?) throws -> PairedAgent {
+        let agent = PairedAgent(id: UUID(), name: name, token: "issued-token", pairedAt: Date())
+        agents.append(agent)
+        return agent
+    }
+    func revoke(id: UUID) throws {
+        lock.lock()
+        revokedIDs.append(id)
+        lock.unlock()
+        agents.removeAll { $0.id == id }
+    }
+}
+
+/// A controllable clock for `PairingCodeManager` — tests advance it to drive
+/// expiry without sleeping.
+final class MutableClock: @unchecked Sendable {
+    var date: Date
+    init(date: Date = Date()) { self.date = date }
+    func advance(by interval: TimeInterval) { date.addTimeInterval(interval) }
 }
 
 private struct Timeout: Error {}
@@ -374,13 +415,154 @@ struct LiveNilesStoreTests {
         var name: String
     }
 
+    /// The pairing card shows a live code from the shared manager; the old
+    /// token-display surface (QR/reveal) is gone from the store entirely.
     @Test
-    func pairingTokenComesFromTheTokenStore() async throws {
+    func pairingCardShowsLiveCodeFromTheSharedManager() async throws {
         let coordinator = ServerCoordinator(tokenStore: StaticTokenStore(token: "pairing-token"), homeKitService: FakeHomeKitService())
-        let store = LiveNilesStore(coordinator: coordinator, notifier: .disabled, tokenStore: StaticTokenStore(token: "pairing-token"))
-        await store.loadTokenAndWait()
-        #expect(store.token == "pairing-token")
-        #expect(store.tokenError == nil)
+        let store = LiveNilesStore(coordinator: coordinator, notifier: .disabled)
+        await store.refresh()
+        #expect(store.pairingCode != nil)
+        #expect(store.codeExpiresAt != nil)
+    }
+
+    /// The pairing card's code: minted by the shared manager at refresh,
+    /// six digits, with the expiry the countdown renders.
+    @Test
+    func pairingCardShowsLiveCodeAfterRefresh() async throws {
+        let clock = MutableClock()
+        let coordinator = ServerCoordinator(
+            tokenStore: StaticTokenStore(token: "test-token"),
+            homeKitService: FakeHomeKitService(),
+            pairingCodes: PairingCodeManager(now: { clock.date })
+        )
+        let store = LiveNilesStore(coordinator: coordinator, notifier: .disabled)
+
+        await store.refresh()
+        let code = try #require(store.pairingCode)
+        #expect(code.count == 6)
+        #expect(code.allSatisfy { $0.isWholeNumber })
+        let expiry = try #require(store.codeExpiresAt)
+        #expect(abs(expiry.timeIntervalSince(clock.date.addingTimeInterval(300))) < 1)
+    }
+
+    /// Foreground-after-expiry (and any refresh with no live code) shows a
+    /// fresh code, not the stale one.
+    @Test
+    func expiredCodeIsRemintedOnTheNextRefresh() async throws {
+        let clock = MutableClock()
+        let coordinator = ServerCoordinator(
+            tokenStore: StaticTokenStore(token: "test-token"),
+            homeKitService: FakeHomeKitService(),
+            pairingCodes: PairingCodeManager(now: { clock.date })
+        )
+        let store = LiveNilesStore(coordinator: coordinator, notifier: .disabled)
+        await store.refresh()
+        let stale = try #require(store.pairingCode)
+        let staleExpiry = try #require(store.codeExpiresAt)
+
+        clock.advance(by: 301)
+        await store.refresh()
+        let fresh = try #require(store.pairingCode)
+        #expect(fresh != stale)
+        let freshExpiry = try #require(store.codeExpiresAt)
+        #expect(freshExpiry > staleExpiry)
+    }
+
+    /// The "New code" tap discards the live code and mints a fresh one.
+    @Test
+    func mintNewCodeReplacesTheDisplayedCode() async throws {
+        let coordinator = ServerCoordinator(
+            tokenStore: StaticTokenStore(token: "test-token"),
+            homeKitService: FakeHomeKitService()
+        )
+        let store = LiveNilesStore(coordinator: coordinator, notifier: .disabled)
+        await store.refresh()
+        let before = try #require(store.pairingCode)
+        let beforeExpiry = try #require(store.codeExpiresAt)
+
+        await store.mintNewCodeAndWait()
+        #expect(store.pairingCode != before)
+        #expect(try #require(store.codeExpiresAt) > beforeExpiry)
+
+        // The old code no longer verifies on the wire — the tap invalidated it.
+        let manager = coordinator.pairingCodes
+        #expect(await manager.verify(before) != .success)
+    }
+
+    /// A successful exchange burns the code; the card's next refresh shows a
+    /// fresh one — never the spent challenge.
+    @Test
+    func successfulExchangeBurnsTheCodeAndTheCardShowsAFreshOne() async throws {
+        let coordinator = ServerCoordinator(
+            tokenStore: StaticTokenStore(token: "test-token"),
+            homeKitService: FakeHomeKitService()
+        )
+        let store = LiveNilesStore(coordinator: coordinator, notifier: .disabled)
+        await store.refresh()
+        let spent = try #require(store.pairingCode)
+
+        #expect(await coordinator.pairingCodes.verify(spent) == .success)
+        await store.refresh()
+        #expect(store.pairingCode != nil)
+        #expect(store.pairingCode != spent)
+    }
+
+    /// The paired-agents rows: stored credentials plus what the live sessions
+    /// say — named or defaulted, paired date, last-seen or never connected.
+    @Test
+    func pairedAgentsListRendersNamesDatesAndLastSeen() throws {
+        let agentID = UUID()
+        let pairedAt = Date(timeIntervalSince1970: 1_768_000_000)
+        let agents = [
+            PairedAgent(id: agentID, name: "Obvious", token: "t1", pairedAt: pairedAt),
+            PairedAgent(id: UUID(), name: nil, token: "t2", pairedAt: pairedAt),
+        ]
+        let now = Date()
+        let sessions = [
+            MCPGateway.SessionInfo(
+                id: "s1", clientName: "Obvious", tokenId: agentID,
+                startedAt: now.addingTimeInterval(-60), lastAccessedAt: now.addingTimeInterval(-30)
+            ),
+        ]
+
+        let rows = LiveNilesStore.pairedAgentRows(agents: agents, sessions: sessions, now: now)
+        #expect(rows.count == 2)
+        #expect(rows[0].id == agentID)
+        #expect(rows[0].name == "Obvious")
+        #expect(rows[0].detail == "paired \(pairedAt.formatted(date: .abbreviated, time: .omitted)) · last seen now")
+        #expect(rows[1].name == "Agent")
+        #expect(rows[1].detail.hasSuffix("never connected"))
+    }
+
+    /// Revocation: the confirm deletes the Keychain item and the list drops
+    /// the row; other agents are untouched.
+    @Test
+    func revokeFlowDeletesTheCredentialAndRefreshesTheList() async throws {
+        let kept = PairedAgent(id: UUID(), name: "Kept agent", token: "keep-token", pairedAt: Date())
+        let revoked = PairedAgent(id: UUID(), name: "Revoked agent", token: "revoke-token", pairedAt: Date())
+        let tokenStore = MutableListTokenStore(agents: [kept, revoked])
+        let coordinator = ServerCoordinator(tokenStore: tokenStore, homeKitService: FakeHomeKitService())
+        let store = LiveNilesStore(coordinator: coordinator, notifier: .disabled, tokenStore: tokenStore)
+        await store.refresh()
+        #expect(store.pairedAgents.map(\.name) == ["Kept agent", "Revoked agent"])
+
+        await store.revokeAgent(revoked.id)
+
+        #expect(store.pairedAgents.map(\.name) == ["Kept agent"])
+        #expect(tokenStore.revokedIDs == [revoked.id])
+        #expect(try tokenStore.listAgents().map(\.id) == [kept.id])
+    }
+
+    /// The countdown label under the code — pure, so the wording is pinned.
+    @Test
+    func countdownLabelRendersTimeRemainingThenExpired() throws {
+        let now = Date()
+        #expect(SettingsScreen.countdownText(expiresAt: now.addingTimeInterval(95), now: now) == "Expires in 1:35")
+        #expect(SettingsScreen.countdownText(expiresAt: now.addingTimeInterval(60), now: now) == "Expires in 1:00")
+        #expect(SettingsScreen.countdownText(expiresAt: now.addingTimeInterval(59), now: now) == "Expires in 0:59")
+        #expect(SettingsScreen.countdownText(expiresAt: now, now: now) == "Expired")
+        #expect(SettingsScreen.countdownText(expiresAt: now.addingTimeInterval(-5), now: now) == "Expired")
     }
 
     /// The screen keep-awake binding, driven through the same scene-phase
