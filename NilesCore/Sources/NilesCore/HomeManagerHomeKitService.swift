@@ -463,7 +463,12 @@ extension HomeManagerHomeKitService: HomeKitWriting {
             let home = try Self.home(homeId, in: homes)
             let zone = try Self.zone(zoneId, in: home)
             for roomId in removeRoomIds {
-                guard let room = zone.rooms.first(where: { $0.uniqueIdentifier.uuidString == roomId }) else { continue }
+                // The resolver rejects a non-member at staging and again at
+                // execution; drift must fail loudly here too — never a
+                // silent skip that read-back could false-confirm.
+                guard let room = zone.rooms.first(where: { $0.uniqueIdentifier.uuidString == roomId }) else {
+                    throw HomeKitWriteError.objectMissing("Zone “\(zone.name)” does not contain room \(roomId).")
+                }
                 try await Self.remove(room, from: zone)
             }
             for roomId in addRoomIds {

@@ -19,12 +19,18 @@ public enum ProposalEvidenceCollector {
         let ids = createdIds.count == operations.count
             ? createdIds
             : Array(repeating: nil as String?, count: operations.count)
-        return zip(operations, ids).map { op, createdId in
-            collect(operation: op, createdId: createdId, graph: graph)
+        return operations.enumerated().map { batchIndex, operation in
+            collect(
+                operation: operation, createdId: ids[batchIndex],
+                batch: operations, batchIndex: batchIndex, graph: graph
+            )
         }
     }
 
-    private static func collect(operation: HomeKitOperation, createdId: String?, graph: HomeGraph) -> ProposalEvidence {
+    private static func collect(
+        operation: HomeKitOperation, createdId: String?,
+        batch: [HomeKitOperation], batchIndex: Int, graph: HomeGraph
+    ) -> ProposalEvidence {
         switch operation {
         case .addRoom(_, let name):
             let rooms = graph.homes.flatMap(\.rooms)
@@ -58,7 +64,7 @@ public enum ProposalEvidenceCollector {
             guard let zone = graph.homes.flatMap(\.zones).first(where: { $0.id == zoneId }) else {
                 return ProposalEvidence(
                     claim: "Zone \(zoneId) membership updated",
-                    observed: "Zone \(zoneId) not found after execution",
+                    observed: Self.missingZoneObservation(zoneId: zoneId, batch: batch, batchIndex: batchIndex),
                     confirmed: false
                 )
             }
@@ -77,6 +83,13 @@ public enum ProposalEvidenceCollector {
         case .createZone(_, let name):
             let zones = graph.homes.flatMap(\.zones)
             let zone = createdId.flatMap { id in zones.first { $0.id == id } } ?? zones.first { $0.name == name }
+            if zone == nil, let createdId, Self.removedLaterInBatch(createdId, after: batchIndex, in: batch) {
+                return ProposalEvidence(
+                    claim: "Zone \(createdId) exists",
+                    observed: Self.missingZoneObservation(zoneId: createdId, batch: batch, batchIndex: batchIndex),
+                    confirmed: false
+                )
+            }
             return ProposalEvidence(
                 claim: "Zone “\(name)” exists",
                 observed: zone.map {
@@ -87,6 +100,13 @@ public enum ProposalEvidenceCollector {
 
         case .renameZone(_, let zoneId, let to):
             let zone = graph.homes.flatMap(\.zones).first { $0.id == zoneId }
+            if zone == nil, Self.removedLaterInBatch(zoneId, after: batchIndex, in: batch) {
+                return ProposalEvidence(
+                    claim: "Zone \(zoneId) is named “\(to)”",
+                    observed: Self.missingZoneObservation(zoneId: zoneId, batch: batch, batchIndex: batchIndex),
+                    confirmed: false
+                )
+            }
             return ProposalEvidence(
                 claim: "Zone \(zoneId) is named “\(to)”",
                 observed: zone.map { "Zone now named “\($0.name)”" }
@@ -434,5 +454,33 @@ public enum ProposalEvidenceCollector {
 
     private static func roomName(of roomId: String, graph: HomeGraph) -> String {
         graph.homes.flatMap(\.rooms).first(where: { $0.id == roomId })?.name ?? roomId
+    }
+
+    /// The honest "zone is gone from the read-back" observation. A later
+    /// operation in the same approval batch can delete the zone an earlier
+    /// operation just updated or created — the write executed first, but
+    /// the final graph no longer contains the zone to read back. That
+    /// ordering artifact must not read as "execution failed". (Device QA F3.)
+    private static func missingZoneObservation(
+        zoneId: String, batch: [HomeKitOperation], batchIndex: Int
+    ) -> String {
+        if removedLaterInBatch(zoneId, after: batchIndex, in: batch) {
+            return "Zone \(zoneId) was deleted by a later operation in this batch — the write executed before the delete, so the final zone no longer exists to read back"
+        }
+        return "Zone \(zoneId) not found after execution"
+    }
+
+    /// True when an operation after `index` in the same approval batch
+    /// removes the object with this id. Only deletions matter here: they
+    /// are the one later change that makes an object unreadable.
+    private static func removedLaterInBatch(
+        _ objectId: String, after index: Int, in batch: [HomeKitOperation]
+    ) -> Bool {
+        batch.dropFirst(index + 1).contains { operation in
+            switch operation {
+            case .removeZone(_, let id): id == objectId
+            default: false
+            }
+        }
     }
 }

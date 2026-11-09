@@ -157,6 +157,93 @@ struct LiveNilesStoreTests {
         #expect(store.pendingProposals.isEmpty)
     }
 
+    /// Regression for device QA F3: the full live-store path for the
+    /// zone-membership write — stage `create_zone` + `set_zone_rooms`
+    /// through the write registry the transport serves, approve through the
+    /// store the Approvals screen renders, and assert the membership via an
+    /// authenticated read tool (`get_zones`), not by construction.
+    @Test
+    func stagedZoneMembershipAppliesAndReadsBackThroughGetZones() async throws {
+        let fake = FakeHomeKitService(graph: .demoFixture)
+        let coordinator = ServerCoordinator(tokenStore: StaticTokenStore(token: "test-token"), homeKitService: fake)
+        let store = LiveNilesStore(coordinator: coordinator, notifier: .disabled)
+        await store.refresh()
+        let writes = WriteToolRegistry(store: try #require(coordinator.proposalStore))
+        let reads = ReadToolRegistry(service: fake)
+
+        // The device-QA shape: a disposable zone, then a room moved into it.
+        _ = await writes.call(
+            name: "create_zone",
+            arguments: ["homeId": .string("home-1"), "name": .string("QA Zone")]
+        )
+        await store.refresh()
+        let create = store.pendingProposals.first { $0.tool == "create_zone" }
+        try #require(create != nil)
+        await store.approveAndWait(create!.id)
+        try await waitUntil { store.proposals.first(where: { $0.id == create!.id })?.state == .executed }
+
+        // The zone's id comes from a read-back, the same surface an
+        // authenticated agent sees.
+        let zonesAfterCreate = await reads.call(name: "get_zones")
+        let createdZoneId = try Self.zoneId(named: "QA Zone", in: zonesAfterCreate)
+
+        _ = await writes.call(
+            name: "set_zone_rooms",
+            arguments: ["zoneId": .string(createdZoneId), "roomIds": .array([.string("room-3")])]
+        )
+        await store.refresh()
+        let move = store.pendingProposals.first { $0.tool == "set_zone_rooms" }
+        try #require(move != nil)
+        await store.approveAndWait(move!.id)
+        try await waitUntil { store.proposals.first(where: { $0.id == move!.id })?.state == .executed }
+
+        // Authenticated read-back: QA Zone now contains exactly Office, and
+        // the read-back evidence agrees.
+        let zonesAfterMove = await reads.call(name: "get_zones")
+        #expect(zonesAfterMove.isError != true)
+        let qaZoneRooms = try Self.roomRefs(named: "QA Zone", in: zonesAfterMove)
+        #expect(qaZoneRooms.count == 1)
+        #expect(qaZoneRooms[0].id == "room-3")
+        #expect(qaZoneRooms[0].name == "Office")
+
+        let executed = store.proposals.first { $0.id == move!.id }
+        // The app model summarizes evidence as a string; the structured
+        // confirmed/observed fields are covered by the pipeline tests above.
+        #expect(executed?.evidence.isEmpty == false)
+    }
+
+    /// Decodes a `get_zones` result and returns the id of the named zone.
+    private static func zoneId(named name: String, in result: CallTool.Result, sourceLocation: SourceLocation = #_sourceLocation) throws -> String {
+        let zones = try Self.zones(from: result, sourceLocation: sourceLocation)
+        return try #require(zones.first(where: { $0.name == name })?.id, sourceLocation: sourceLocation)
+    }
+
+    /// Decodes a `get_zones` result and returns the rooms of the named zone.
+    private static func roomRefs(named name: String, in result: CallTool.Result, sourceLocation: SourceLocation = #_sourceLocation) throws -> [RoomReadBack] {
+        let zones = try Self.zones(from: result, sourceLocation: sourceLocation)
+        return try #require(zones.first(where: { $0.name == name })?.rooms, sourceLocation: sourceLocation)
+    }
+
+    private static func zones(from result: CallTool.Result, sourceLocation: SourceLocation = #_sourceLocation) throws -> [ZoneReadBack] {
+        #expect(result.isError != true, sourceLocation: sourceLocation)
+        let value = try #require(result.structuredContent, sourceLocation: sourceLocation)
+        let data = try JSONEncoder().encode(value)
+        return try JSONDecoder().decode(ZonesReadBack.self, from: data).zones
+    }
+
+    /// Local decoding of the `get_zones` projection — the projection types
+    /// are internal to NilesCore, so the app target decodes its own shape.
+    private struct ZonesReadBack: Codable { var zones: [ZoneReadBack] }
+    private struct ZoneReadBack: Codable {
+        var id: String
+        var name: String
+        var rooms: [RoomReadBack]
+    }
+    private struct RoomReadBack: Codable {
+        var id: String
+        var name: String
+    }
+
     @Test
     func pairingTokenComesFromTheTokenStore() async throws {
         let coordinator = ServerCoordinator(tokenStore: StaticTokenStore(token: "pairing-token"), homeKitService: FakeHomeKitService())

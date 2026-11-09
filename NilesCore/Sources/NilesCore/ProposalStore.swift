@@ -42,6 +42,37 @@ public actor ProposalStore {
     /// envelope intentionally omits. Cleared once terminal.
     private var operations: [String: [HomeKitOperation]] = [:]
 
+    /// Decision serialization: one decision's HomeKit operations and its
+    /// read-back run as a unit, and the next decision (including a second
+    /// tap on another card) waits its turn. Without this, actor reentrancy
+    /// lets a later decision execute between an earlier decision's
+    /// operations and its read-back snapshot — device QA F3: approving a
+    /// zone delete while a zone-membership move was mid-execution made the
+    /// move's read-back report "Zone not found after execution" for a zone
+    /// the move had successfully joined.
+    private var isDeciding = false
+    private var decisionWaiters: [CheckedContinuation<Void, Never>] = []
+
+    /// Enters the decision critical section, waiting fairly behind any
+    /// decision already running. Ownership passes at resume: the waiter
+    /// returns with `isDeciding` still true, so no third decision can
+    /// steal the gate between handoffs.
+    private func beginDecision() async {
+        if isDeciding {
+            await withCheckedContinuation { decisionWaiters.append($0) }
+            return
+        }
+        isDeciding = true
+    }
+
+    private func endDecision() {
+        if let next = decisionWaiters.first {
+            decisionWaiters.removeFirst().resume()
+        } else {
+            isDeciding = false
+        }
+    }
+
     public init(
         homeKit: any HomeKitWriting,
         planWith: @escaping PlanFunction,
@@ -173,6 +204,8 @@ public actor ProposalStore {
         to next: ProposalState,
         execute: (Proposal, [HomeKitOperation]) async -> Proposal
     ) async throws -> Proposal {
+        await beginDecision()
+        defer { endDecision() }
         expireSweep()
         guard let index = proposals.firstIndex(where: { $0.id == id }) else {
             throw ProposalStoreError.proposalNotFound(id)
