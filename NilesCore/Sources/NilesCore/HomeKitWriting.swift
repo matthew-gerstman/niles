@@ -134,6 +134,11 @@ public enum HomeKitOperation: Sendable, Equatable, Hashable {
     case setTriggerEnabled(homeId: String, triggerId: String, enabled: Bool)
     case updateTimerTrigger(homeId: String, triggerId: String, fireDate: Date, recurrence: [String: Int])
     case removeTrigger(homeId: String, triggerId: String)
+    case renameAccessory(homeId: String, accessoryId: String, to: String)
+    case identifyAccessory(homeId: String, accessoryId: String)
+    case assignAccessoryToRoom(homeId: String, accessoryId: String, roomId: String)
+    case unblockAccessory(homeId: String, accessoryId: String)
+    case removeAccessory(homeId: String, accessoryId: String)
 }
 
 /// Read access plus the mutation vocabulary proposals execute.

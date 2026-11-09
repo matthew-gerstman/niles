@@ -29,6 +29,11 @@ public enum WriteRequest: Sendable, Equatable {
     case createEventTrigger(homeId: String, name: String, events: [TriggerEventSpec], sceneId: String?)
     case setTriggerState(triggerId: String, enabled: Bool, fireDate: Date?, recurrence: [String: Int]?)
     case deleteTrigger(triggerId: String)
+    case renameAccessory(accessoryId: String, name: String)
+    case identifyAccessory(accessoryId: String)
+    case assignAccessoryToRoom(accessoryId: String, roomId: String)
+    case unblockAccessory(accessoryId: String)
+    case removeAccessory(accessoryId: String)
 
     public static func parse(tool: String, arguments: [String: MCP.Value]?) throws -> WriteRequest {
         let args = Args(arguments)
@@ -99,6 +104,19 @@ public enum WriteRequest: Sendable, Equatable {
             )
         case "delete_trigger":
             return .deleteTrigger(triggerId: try args.string("triggerId"))
+        case "rename_accessory":
+            return .renameAccessory(accessoryId: try args.string("accessoryId"), name: try args.string("name"))
+        case "identify_accessory":
+            return .identifyAccessory(accessoryId: try args.string("accessoryId"))
+        case "assign_accessory_to_room":
+            return .assignAccessoryToRoom(
+                accessoryId: try args.string("accessoryId"),
+                roomId: try args.string("roomId")
+            )
+        case "unblock_accessory":
+            return .unblockAccessory(accessoryId: try args.string("accessoryId"))
+        case "remove_accessory":
+            return .removeAccessory(accessoryId: try args.string("accessoryId"))
         default:
             throw ProposalStoreError.unknownTool(tool)
         }

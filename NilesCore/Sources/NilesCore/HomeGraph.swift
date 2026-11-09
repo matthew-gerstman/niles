@@ -87,6 +87,10 @@ public struct HomeGraph: Codable, Sendable, Equatable {
         /// stable identity, not the localized description.
         public var category: String?
         public var firmwareVersion: String?
+        /// `HMAccessory.supportsIdentify` — whether the accessory can flash
+        /// or beep when identified. Nil when unknown (graphs captured before
+        /// the field existed decode as nil and staging stays permissive).
+        public var supportsIdentify: Bool?
         /// The services this accessory exposes, each with the characteristics
         /// it supports — the capability surface agents consult before
         /// staging writes (e.g. is Brightness supported at all?).
@@ -95,6 +99,7 @@ public struct HomeGraph: Codable, Sendable, Equatable {
         public init(
             id: String,
             name: String,
+            supportsIdentify: Bool? = nil,
             reachable: Bool = true,
             bridged: Bool = false,
             category: String? = nil,
@@ -103,6 +108,7 @@ public struct HomeGraph: Codable, Sendable, Equatable {
         ) {
             self.id = id
             self.name = name
+            self.supportsIdentify = supportsIdentify
             self.reachable = reachable
             self.bridged = bridged
             self.category = category
@@ -111,7 +117,7 @@ public struct HomeGraph: Codable, Sendable, Equatable {
         }
 
         private enum CodingKeys: String, CodingKey {
-            case id, name, reachable, bridged, category, firmwareVersion, services
+            case id, name, reachable, bridged, category, firmwareVersion, supportsIdentify, services
         }
 
         /// Graphs captured before the read-depth fields existed must still
@@ -124,6 +130,7 @@ public struct HomeGraph: Codable, Sendable, Equatable {
             bridged = try container.decodeIfPresent(Bool.self, forKey: .bridged) ?? false
             category = try container.decodeIfPresent(String.self, forKey: .category)
             firmwareVersion = try container.decodeIfPresent(String.self, forKey: .firmwareVersion)
+            supportsIdentify = try container.decodeIfPresent(Bool.self, forKey: .supportsIdentify)
             services = try container.decode([AccessoryService].self, forKey: .services)
         }
     }
@@ -387,11 +394,21 @@ public struct HomeGraph: Codable, Sendable, Equatable {
         public var type: String
         public var characteristicType: String?
         public var valueDescription: String?
+        /// The accessory the watched characteristic belongs to — how a
+        /// destructive staging card attributes trigger events to an
+        /// accessory. Nil on graphs captured before the field existed.
+        public var accessoryId: String?
 
-        public init(type: String, characteristicType: String?, valueDescription: String?) {
+        public init(
+            type: String,
+            characteristicType: String?,
+            valueDescription: String?,
+            accessoryId: String? = nil
+        ) {
             self.type = type
             self.characteristicType = characteristicType
             self.valueDescription = valueDescription
+            self.accessoryId = accessoryId
         }
     }
 }

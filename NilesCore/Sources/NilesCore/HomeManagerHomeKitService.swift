@@ -606,6 +606,35 @@ extension HomeManagerHomeKitService: HomeKitWriting {
             let home = try Self.home(homeId, in: homes)
             try await home.removeTrigger(try Self.trigger(triggerId, in: home))
             return nil
+
+        case .renameAccessory(let homeId, let accessoryId, let to):
+            let home = try Self.home(homeId, in: homes)
+            try await Self.updateName(try Self.accessory(accessoryId, in: home), to: to)
+            return nil
+
+        case .identifyAccessory(let homeId, let accessoryId):
+            let home = try Self.home(homeId, in: homes)
+            try await Self.identify(try Self.accessory(accessoryId, in: home))
+            return nil
+
+        case .assignAccessoryToRoom(let homeId, let accessoryId, let roomId):
+            let home = try Self.home(homeId, in: homes)
+            try await Self.assign(
+                try Self.accessory(accessoryId, in: home),
+                to: try Self.room(roomId, in: home),
+                in: home
+            )
+            return nil
+
+        case .unblockAccessory(let homeId, let accessoryId):
+            let home = try Self.home(homeId, in: homes)
+            try await Self.unblock(try Self.accessory(accessoryId, in: home), in: home)
+            return nil
+
+        case .removeAccessory(let homeId, let accessoryId):
+            let home = try Self.home(homeId, in: homes)
+            try await Self.remove(try Self.accessory(accessoryId, in: home), from: home)
+            return nil
         }
     }
 
@@ -765,6 +794,13 @@ extension HomeManagerHomeKitService: HomeKitWriting {
         return trigger
     }
 
+    private static func accessory(_ id: String, in home: HMHome) throws -> HMAccessory {
+        guard let accessory = home.accessories.first(where: { $0.uniqueIdentifier.uuidString == id }) else {
+            throw HomeKitWriteError.objectMissing("No accessory \(id).")
+        }
+        return accessory
+    }
+
     private static func service(_ id: String, in home: HMHome) throws -> HMService {
         for accessory in home.accessories {
             if let service = accessory.services.first(where: { $0.uniqueIdentifier.uuidString == id }) {
@@ -897,9 +933,50 @@ extension HomeManagerHomeKitService: HomeKitWriting {
         }
     }
 
+    private static func updateName(_ accessory: HMAccessory, to name: String) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            accessory.updateName(name) { error in
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            }
+        }
+    }
+
     private static func updateName(_ group: HMServiceGroup, to name: String) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             group.updateName(name) { error in
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            }
+        }
+    }
+
+    private static func identify(_ accessory: HMAccessory) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            accessory.identify { error in
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            }
+        }
+    }
+
+    // Unblocking is a home-level operation — HMAccessory has no unblock API.
+    private static func unblock(_ accessory: HMAccessory, in home: HMHome) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            home.unblockAccessory(accessory) { error in
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            }
+        }
+    }
+
+    private static func assign(_ accessory: HMAccessory, to room: HMRoom, in home: HMHome) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            home.assignAccessory(accessory, to: room) { error in
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            }
+        }
+    }
+
+    private static func remove(_ accessory: HMAccessory, from home: HMHome) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            home.removeAccessory(accessory) { error in
                 if let error { continuation.resume(throwing: error) } else { continuation.resume() }
             }
         }
