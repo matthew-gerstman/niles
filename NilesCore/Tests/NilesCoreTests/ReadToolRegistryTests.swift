@@ -8,18 +8,19 @@ import Testing
 @Suite struct ReadToolRegistryTests {
     // MARK: - Fixtures
 
+    // Well-known HomeKit type UUIDs (format 0x0000-1000-8000-0026BB765291):
+    // 0x0008 brightness characteristic, 0x0043 lightbulb service,
+    // 0x0025 switch-state characteristic (the event trigger's source),
+    // 0x0049 switch service.
+    private let brightness = "00000008-0000-1000-8000-0026BB765291"
+    private let lightbulb = "00000043-0000-1000-8000-0026BB765291"
+    private let powerEvent = "00000025-0000-1000-8000-0026BB765291"
+    private let switchService = "00000049-0000-1000-8000-0026BB765291"
+
     /// One home, three rooms, one zone spanning two of them, a scene with one
     /// action, a service group holding a service (not an accessory), and an
     /// enabled event trigger plus a disabled timer trigger.
     private func makeGraph() -> HomeGraph {
-        // Well-known HomeKit type UUIDs (format 0x0000-1000-8000-0026BB765291):
-        // 0x0008 brightness characteristic, 0x0043 lightbulb service,
-        // 0x0025 switch-state characteristic (the event trigger's source),
-        // 0x0049 switch service.
-        let brightness = "00000008-0000-1000-8000-0026BB765291"
-        let lightbulb = "00000043-0000-1000-8000-0026BB765291"
-        let powerEvent = "00000025-0000-1000-8000-0026BB765291"
-        let switchService = "00000049-0000-1000-8000-0026BB765291"
         return HomeGraph(homes: [
             HomeGraph.Home(
                 id: "home-1",
