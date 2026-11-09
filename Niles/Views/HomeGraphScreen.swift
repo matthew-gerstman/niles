@@ -8,6 +8,19 @@ import SwiftUI
 struct HomeGraphScreen: View {
     var model: any HomeGraphViewModel
 
+    /// Test hook (same family as `-UITabSelect` in ContentView):
+    /// `-UIRevealQuickActions <row name>` pre-reveals that row's quick
+    /// actions so UI tests can drive the real buttons without synthesizing
+    /// drag gestures — XCUITest's synthesized drags are unreliably delivered
+    /// (cancelled mid-path), which made gesture-driven assertions flaky.
+    private let revealRowName: String? = {
+        let args = ProcessInfo.processInfo.arguments
+        if let i = args.firstIndex(of: "-UIRevealQuickActions"), i + 1 < args.count {
+            return args[i + 1]
+        }
+        return nil
+    }()
+
     /// The rename prompt's target row; non-nil shows the alert.
     @State private var renameTarget: HomeRow?
     @State private var renameText = ""
@@ -44,7 +57,7 @@ struct HomeGraphScreen: View {
     private func sectionCard(_ section: HomeSection) -> some View {
         VStack(spacing: 0) {
             ForEach(Array(section.rows.enumerated()), id: \.element.id) { index, row in
-                SwipeableHomeRow(row: row) { action, newName in
+                SwipeableHomeRow(row: row, revealRowName: revealRowName) { action, newName in
                     stage(row, action, newName: newName)
                 }
                 if index < section.rows.count - 1 {
@@ -74,6 +87,8 @@ struct HomeGraphScreen: View {
 /// stages it and closes. Rows without identity stay inert.
 private struct SwipeableHomeRow: View {
     let row: HomeRow
+    /// Non-nil pre-reveals this row's quick actions (launch-argument hook).
+    var revealRowName: String?
     let onStage: (HomeRowAction, String?) -> Void
 
     /// Live drag offset — resets automatically when the touch ends OR is
@@ -103,6 +118,9 @@ private struct SwipeableHomeRow: View {
         }
         .clipped()
         .gesture(drag)
+        .onAppear {
+            if revealRowName == row.name { openX = -openWidth }
+        }
     }
 
     /// What shows behind the row while swiping or open. The two reveals are
