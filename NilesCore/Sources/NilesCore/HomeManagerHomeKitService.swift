@@ -324,6 +324,21 @@ extension HomeManagerHomeKitService: HomeKitWriting {
             }
             return nil
 
+        case .renameActionSet(let homeId, let sceneId, let to):
+            let home = try Self.home(homeId, in: homes)
+            try await Self.updateName(try Self.actionSet(sceneId, in: home), to: to)
+            return nil
+
+        case .removeActionSet(let homeId, let sceneId):
+            let home = try Self.home(homeId, in: homes)
+            try await home.removeActionSet(try Self.actionSet(sceneId, in: home))
+            return nil
+
+        case .executeActionSet(let homeId, let sceneId):
+            let home = try Self.home(homeId, in: homes)
+            try await Self.execute(try Self.actionSet(sceneId, in: home), in: home)
+            return nil
+
         case .addServiceGroup(let homeId, let name):
             let home = try Self.home(homeId, in: homes)
             return try await home.addServiceGroup(named: name).uniqueIdentifier.uuidString
@@ -668,6 +683,22 @@ extension HomeManagerHomeKitService: HomeKitWriting {
     private static func updateName(_ room: HMRoom, to name: String) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             room.updateName(name) { error in
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            }
+        }
+    }
+
+    private static func updateName(_ actionSet: HMActionSet, to name: String) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            actionSet.updateName(name) { error in
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            }
+        }
+    }
+
+    private static func execute(_ actionSet: HMActionSet, in home: HMHome) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            home.executeActionSet(actionSet) { error in
                 if let error { continuation.resume(throwing: error) } else { continuation.resume() }
             }
         }

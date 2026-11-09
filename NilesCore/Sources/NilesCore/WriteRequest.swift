@@ -13,6 +13,9 @@ public enum WriteRequest: Sendable, Equatable {
     case setZoneRooms(zoneId: String, roomIds: [String])
     case createScene(homeId: String, name: String, actions: [SceneActionSpec])
     case setSceneActions(sceneId: String, actions: [SceneActionSpec])
+    case renameScene(sceneId: String, name: String)
+    case deleteScene(sceneId: String, deleteLinkedTriggers: Bool)
+    case executeScene(sceneId: String)
     case createServiceGroup(homeId: String, name: String)
     case setServiceGroupMembers(groupId: String, serviceIds: [String])
     case deleteServiceGroup(groupId: String)
@@ -42,6 +45,15 @@ public enum WriteRequest: Sendable, Equatable {
             )
         case "set_scene_actions":
             return .setSceneActions(sceneId: try args.string("sceneId"), actions: try args.actionArray("actions"))
+        case "rename_scene":
+            return .renameScene(sceneId: try args.string("sceneId"), name: try args.string("name"))
+        case "delete_scene":
+            return .deleteScene(
+                sceneId: try args.string("sceneId"),
+                deleteLinkedTriggers: try args.optionalBool("deleteLinkedTriggers") ?? false
+            )
+        case "execute_scene":
+            return .executeScene(sceneId: try args.string("sceneId"))
         case "create_service_group":
             return .createServiceGroup(homeId: try args.string("homeId"), name: try args.string("name"))
         case "set_service_group_members":
@@ -122,6 +134,15 @@ private struct Args {
             throw ProposalStoreError.invalidArguments("Argument “\(name)” must be a string.")
         }
         return string.isEmpty ? nil : string
+    }
+
+    /// An optional boolean flag; absent means false.
+    func optionalBool(_ name: String) throws -> Bool? {
+        guard let value = raw?[name] else { return nil }
+        guard case .bool(let bool) = value else {
+            throw ProposalStoreError.invalidArguments("Argument “\(name)” must be a boolean.")
+        }
+        return bool
     }
 
     func bool(_ name: String) throws -> Bool {

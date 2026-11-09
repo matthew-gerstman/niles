@@ -103,6 +103,50 @@ public enum ProposalEvidenceCollector {
                 confirmed: confirmed
             )
 
+        case .renameActionSet(_, let sceneId, let to):
+            let scene = graph.homes.flatMap(\.scenes).first { $0.id == sceneId }
+            return ProposalEvidence(
+                claim: "Scene \(sceneId) is named “\(to)”",
+                observed: scene.map { "Scene now named “\($0.name)”" }
+                    ?? "Scene \(sceneId) not found after execution",
+                confirmed: scene?.name == to
+            )
+
+        case .removeActionSet(_, let sceneId):
+            let stillPresent = contains(sceneId, in: graph.homes.flatMap(\.scenes).map(\.id))
+            let danglingLinks = graph.homes.flatMap(\.triggers).filter { $0.linkedSceneIds.contains(sceneId) }
+            var observed = stillPresent
+                ? "Scene still present — delete did not take effect"
+                : "No scene with id \(sceneId) remains"
+            if !danglingLinks.isEmpty {
+                let names = danglingLinks.map(\.name).joined(separator: ", ")
+                observed += "; triggers still referencing it: \(names)"
+            }
+            return ProposalEvidence(
+                claim: "Scene \(sceneId) is deleted",
+                observed: observed,
+                confirmed: !stillPresent
+            )
+
+        case .executeActionSet(_, let sceneId):
+            // Execution has no graph-observable signature until
+            // lastExecutionDate lands (read-depth group); the honest
+            // read-back is that the scene exists and HomeKit accepted the
+            // run — not a claim the devices moved.
+            guard let scene = graph.homes.flatMap(\.scenes).first(where: { $0.id == sceneId }) else {
+                return ProposalEvidence(
+                    claim: "Scene \(sceneId) ran",
+                    observed: "Scene \(sceneId) not found after execution",
+                    confirmed: false
+                )
+            }
+            let noun = scene.actions.count == 1 ? "action" : "actions"
+            return ProposalEvidence(
+                claim: "Scene \(sceneId) ran",
+                observed: "HomeKit accepted the run — scene “\(scene.name)” is present with \(scene.actions.count) \(noun)",
+                confirmed: true
+            )
+
         case .addServiceGroup(_, let name):
             let groups = graph.homes.flatMap(\.serviceGroups)
             let group = createdId.flatMap { id in groups.first { $0.id == id } } ?? groups.first { $0.name == name }

@@ -91,6 +91,40 @@ public actor FakeHomeKitService: HomeKitWriting {
             }
             return nil
 
+        case .renameActionSet(_, let sceneId, let to):
+            let (h, s) = try indexOfScene(id: sceneId)
+            // Duplicate scene names are rejected the way HomeKit's are,
+            // across all homes — the renamed scene cannot collide with another.
+            if graph.homes.contains(where: {
+                $0.scenes.contains { $0.id != sceneId && $0.name.caseInsensitiveCompare(to) == .orderedSame }
+            }) {
+                throw HomeKitWriteError.duplicateName("Home already has a scene named “\(to)”.")
+            }
+            graph.homes[h].scenes[s].name = to
+            return nil
+
+        case .removeActionSet(_, let sceneId):
+            let (h, s) = try indexOfScene(id: sceneId)
+            graph.homes[h].scenes.remove(at: s)
+            // HomeKit detaches a removed action set from every trigger;
+            // the fake mirrors that observable behavior.
+            for t in graph.homes[h].triggers.indices {
+                graph.homes[h].triggers[t].linkedSceneIds.removeAll { $0 == sceneId }
+            }
+            return nil
+
+        case .executeActionSet(_, let sceneId):
+            let (h, s) = try indexOfScene(id: sceneId)
+            guard !graph.homes[h].scenes[s].actions.isEmpty else {
+                throw HomeKitWriteError.invalidOperation(
+                    "Scene “\(graph.homes[h].scenes[s].name)” has no actions — HomeKit refuses to execute an empty scene."
+                )
+            }
+            // Execution has no graph-observable effect yet (no
+            // lastExecutionDate in the model); the evidence read-back
+            // confirms the scene is present and accepted the run.
+            return nil
+
         case .addServiceGroup(_, let name):
             let h = try indexOfHome(havingServiceGroupNamed: name)
             let id = nextId(prefix: "group", existing: graph.homes[h].serviceGroups.map(\.id))

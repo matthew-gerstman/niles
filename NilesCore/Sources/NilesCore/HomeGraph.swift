@@ -204,8 +204,11 @@ public struct HomeGraph: Codable, Sendable, Equatable {
         public var isEnabled: Bool
         /// The scenes (action sets) registered on this trigger — what it runs
         /// when it fires. HomeKit refuses to enable a trigger with none
-        /// (it has nothing to run), so arming proposals check this.
-        public var linkedSceneIds: [String]
+        /// (it has nothing to run), so arming proposals check this. The
+        /// delete-scene card also names these triggers; HomeKit itself
+        /// detaches a removed action set, but the agent and the human should
+        /// see the link before approving.
+        public var linkedSceneIds: [String] = []
         public var detail: Detail
 
         public init(id: String, name: String, isEnabled: Bool, linkedSceneIds: [String] = [], detail: Detail) {
