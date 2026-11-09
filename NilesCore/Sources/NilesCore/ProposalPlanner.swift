@@ -165,8 +165,8 @@ public enum ProposalPlanner {
     }
 
     private static func renameRoom(roomId: String, name: String, graph: HomeGraph) throws -> Plan {
-        let trimmed = try requiredHomeKitName(name, kind: "room")
         let (home, room) = try self.room(id: roomId, in: graph)
+        let trimmed = try requiredHomeKitName(name, kind: "room", subject: "Room “\(room.name)”")
         if room.name == trimmed {
             throw PlannerError.noChange("room “\(room.name)” is already named “\(trimmed)”.")
         }
@@ -324,8 +324,8 @@ public enum ProposalPlanner {
     }
 
     private static func renameZone(zoneId: String, name: String, graph: HomeGraph) throws -> Plan {
-        let trimmed = try requiredHomeKitName(name, kind: "zone")
         let (home, zone) = try self.zone(id: zoneId, in: graph)
+        let trimmed = try requiredHomeKitName(name, kind: "zone", subject: "Zone “\(zone.name)”")
         if zone.name.caseInsensitiveCompare(trimmed) == .orderedSame {
             throw PlannerError.noChange("zone “\(zone.name)” is already named “\(trimmed)”.")
         }
@@ -477,8 +477,8 @@ public enum ProposalPlanner {
     }
 
     private static func renameScene(sceneId: String, name: String, graph: HomeGraph) throws -> Plan {
-        let trimmed = try requiredHomeKitName(name, kind: "scene")
         let (home, scene) = try self.scene(id: sceneId, in: graph)
+        let trimmed = try requiredHomeKitName(name, kind: "scene", subject: "Scene “\(scene.name)”")
         if scene.name.caseInsensitiveCompare(trimmed) == .orderedSame {
             throw PlannerError.noChange("scene “\(scene.name)” is already named “\(trimmed)”.")
         }
@@ -623,8 +623,8 @@ public enum ProposalPlanner {
     }
 
     private static func renameServiceGroup(groupId: String, name: String, graph: HomeGraph) throws -> Plan {
-        let trimmed = try requiredHomeKitName(name, kind: "service group")
         let (home, group) = try self.serviceGroup(id: groupId, in: graph)
+        let trimmed = try requiredHomeKitName(name, kind: "service group", subject: "Service group “\(group.name)”")
         if group.name.caseInsensitiveCompare(trimmed) == .orderedSame {
             throw PlannerError.noChange("service group “\(group.name)” is already named “\(trimmed)”.")
         }
@@ -1043,7 +1043,7 @@ public enum ProposalPlanner {
 
     private static func renameAccessory(accessoryId: String, name: String, graph: HomeGraph) throws -> Plan {
         let (home, accessory) = try self.accessory(id: accessoryId, in: graph)
-        let trimmed = try requiredHomeKitName(name, kind: "accessory")
+        let trimmed = try requiredHomeKitName(name, kind: "accessory", subject: "Accessory “\(accessory.name)”")
         if accessory.name.caseInsensitiveCompare(trimmed) == .orderedSame {
             throw PlannerError.noChange("accessory “\(accessory.name)” is already named “\(trimmed)”.")
         }
@@ -1379,12 +1379,17 @@ public enum ProposalPlanner {
     /// `DeviceWriteResolver.nameViolation`, the same check the executor's
     /// resolution runs. Rejecting here keeps staging and execution in
     /// agreement: nothing reaches approval that HomeKit will refuse.
-    private static func requiredHomeKitName(_ name: String, kind: String) throws -> String {
+    private static func requiredHomeKitName(
+        _ name: String, kind: String, subject: String? = nil
+    ) throws -> String {
         let trimmed = try requiredName(name, kind: kind)
         if let why = DeviceWriteResolver.nameViolation(trimmed) {
-            throw PlannerError.invalidInput(
-                "\(kind.capitalized) name “\(trimmed)” is not a valid HomeKit name: \(why)."
-            )
+            // Standing rule: errors name the object. Renames pass the
+            // object's current identity; creations let the proposed name
+            // speak for itself.
+            let what = subject.map { "\($0) cannot use “\(trimmed)” as its name" }
+                ?? "\(kind.capitalized) name “\(trimmed)” is not a valid HomeKit name"
+            throw PlannerError.invalidInput("\(what): \(why).")
         }
         return trimmed
     }
