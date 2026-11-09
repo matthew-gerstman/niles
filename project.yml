@@ -25,6 +25,10 @@ targets:
       path: Niles/Niles.entitlements
       properties:
         com.apple.developer.homekit: true
+        # Default access group. Simulator test hosts need an explicit keychain
+        # entitlement or SecItem fails with errSecMissingEntitlement (-34018).
+        keychain-access-groups:
+          - "$(AppIdentifierPrefix)com.gerstman.niles"
     info:
       path: Niles/Info.plist
       properties:
@@ -82,6 +86,10 @@ targets:
         product: MCP
     settings:
       base:
+        # Host the Core tests in the app process: the keychain entitlements
+        # that SecItem needs live on the host app, not the generated runner.
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/Niles.app/Niles
+        BUNDLE_LOADER: $(TEST_HOST)
         # Signing (even ad-hoc, as the simulator test action does) requires an
         # Info.plist; generate one so the Keychain-backed tests can run signed.
         GENERATE_INFOPLIST_FILE: YES
