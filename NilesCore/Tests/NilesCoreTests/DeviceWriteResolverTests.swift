@@ -14,17 +14,18 @@ import Testing
     /// Light A (Kitchen): Lightbulb service with `On` (bool metadata) and
     /// `Brightness` (int metadata). Lamp B (Living Room) adds a Speaker
     /// service with `Volume` (float) and `TrackName` (string metadata).
+    /// Characteristics carry names like the live mapping does.
     private func fixtureView() -> DeviceHomeView {
-        let onA = DeviceHomeView.Characteristic(id: "char-on-a", type: "On", kind: .number)
-        let brightnessA = DeviceHomeView.Characteristic(id: "char-brightness-a", type: "Brightness", kind: .number)
+        let onA = DeviceHomeView.Characteristic(id: "char-on-a", type: "On", name: "On", kind: .number)
+        let brightnessA = DeviceHomeView.Characteristic(id: "char-brightness-a", type: "Brightness", name: "Brightness", kind: .number)
         let lightbulbA = DeviceHomeView.Service(id: "svc-light-a", name: "Lightbulb", serviceType: "Lightbulb", characteristics: [onA, brightnessA])
         let lightA = DeviceHomeView.Accessory(id: "acc-light-a", name: "Light A", services: [lightbulbA])
 
-        let onB = DeviceHomeView.Characteristic(id: "char-on-b", type: "On", kind: .number)
-        let brightnessB = DeviceHomeView.Characteristic(id: "char-brightness-b", type: "Brightness", kind: .number)
+        let onB = DeviceHomeView.Characteristic(id: "char-on-b", type: "On", name: "On", kind: .number)
+        let brightnessB = DeviceHomeView.Characteristic(id: "char-brightness-b", type: "Brightness", name: "Brightness", kind: .number)
         let lightbulbB = DeviceHomeView.Service(id: "svc-light-b", name: "Lightbulb", serviceType: "Lightbulb", characteristics: [onB, brightnessB])
-        let volumeB = DeviceHomeView.Characteristic(id: "char-volume-b", type: "Volume", kind: .number)
-        let trackB = DeviceHomeView.Characteristic(id: "char-track-b", type: "TrackName", kind: .string)
+        let volumeB = DeviceHomeView.Characteristic(id: "char-volume-b", type: "Volume", name: "Volume", kind: .number)
+        let trackB = DeviceHomeView.Characteristic(id: "char-track-b", type: "TrackName", name: "Track Name", kind: .string)
         let speakerB = DeviceHomeView.Service(id: "svc-speaker-b", name: "Speaker", serviceType: "Speaker", characteristics: [volumeB, trackB])
         let lampB = DeviceHomeView.Accessory(id: "acc-lamp-b", name: "Lamp B", services: [lightbulbB, speakerB])
 
@@ -232,6 +233,65 @@ import Testing
         #expect(error {
             _ = try self.resolve(.setSceneActions(homeId: "home-1", sceneId: "scene-x", add: [], remove: []))
         } == .objectMissing("No scene scene-x."))
+    }
+
+    // MARK: Characteristic name and UUID matching
+
+    /// Built like `HomeManagerHomeKitService.homeView(from:)` fills it on
+    /// device: `type` carries the HomeKit type UUID, the friendly name lives
+    /// in `name`.
+    private func liveShapedView() -> DeviceHomeView {
+        let on = DeviceHomeView.Characteristic(
+            id: "char-on-live", type: "00000025-0000-1000-8000-0026BB765291", name: "On", kind: .number
+        )
+        let brightness = DeviceHomeView.Characteristic(
+            id: "char-brightness-live", type: "00000008-0000-1000-8000-0026BB765291", name: "Brightness", kind: .number
+        )
+        let lightbulb = DeviceHomeView.Service(
+            id: "svc-light-live", name: "Lightbulb", serviceType: "00000043-0000-1000-8000-0026BB765291",
+            characteristics: [on, brightness]
+        )
+        let light = DeviceHomeView.Accessory(id: "acc-light-live", name: "Light A", services: [lightbulb])
+        return DeviceHomeView(homes: [DeviceHomeView.Home(id: "home-live", name: "Townhouse", accessories: [light])])
+    }
+
+    @Test func addActionSetResolvesFriendlyNameAndUUIDSpellingsOnALiveShapedView() throws {
+        for spelling in ["Brightness", "brightness", "00000008-0000-1000-8000-0026BB765291"] {
+            let steps = try resolve(.addActionSet(
+                homeId: "home-live", name: "Movie Night",
+                actions: [SceneActionSpec(accessoryId: "acc-light-live", service: nil, characteristic: spelling, value: .int(30))]
+            ), view: liveShapedView())
+            guard case .createActionSet(_, _, let actions)? = steps.first, actions.count == 1 else {
+                Issue.record("Expected one createActionSet step for \(spelling), got \(steps)")
+                continue
+            }
+            #expect(actions[0].characteristicId == "char-brightness-live")
+            #expect(actions[0].characteristicType == "00000008-0000-1000-8000-0026BB765291")
+        }
+    }
+
+    @Test func addActionSetRejectsAnUnknownNameOnALiveShapedView() {
+        #expect(error {
+            _ = try self.resolve(.addActionSet(
+                homeId: "home-live", name: "Movie Night",
+                actions: [SceneActionSpec(accessoryId: "acc-light-live", service: nil, characteristic: "Hue", value: .int(240))]
+            ), view: liveShapedView())
+        } == .objectMissing("Accessory “Light A” has no service with characteristic Hue."))
+    }
+
+    @Test func addEventTriggerResolvesTheCharacteristicByFriendlyNameOnALiveShapedView() throws {
+        let steps = try resolve(.addEventTrigger(
+            homeId: "home-live", name: "Evening",
+            events: [.characteristic(accessoryId: "acc-light-live", characteristic: "Brightness", value: .int(30))],
+            sceneId: nil
+        ), view: liveShapedView())
+        #expect(steps == [.createEventTrigger(
+            homeId: "home-live", name: "Evening",
+            events: [.characteristic(
+                id: "char-brightness-live", type: "00000008-0000-1000-8000-0026BB765291", value: .number(.int(30))
+            )],
+            sceneId: nil
+        )])
     }
 
     // MARK: Service groups

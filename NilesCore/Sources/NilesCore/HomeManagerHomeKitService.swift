@@ -636,6 +636,7 @@ extension HomeManagerHomeKitService: HomeKitWriting {
                                     DeviceHomeView.Characteristic(
                                         id: characteristic.uniqueIdentifier.uuidString,
                                         type: characteristic.characteristicType,
+                                        name: characteristic.localizedDescription,
                                         kind: Self.valueKind(from: characteristic.metadata?.format)
                                     )
                                 }
