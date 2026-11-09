@@ -20,6 +20,8 @@ public enum WriteRequest: Sendable, Equatable {
         homeId: String, name: String, fireDate: Date, recurrence: [String: Int]?, sceneId: String?
     )
     case createEventTrigger(homeId: String, name: String, events: [TriggerEventSpec], sceneId: String?)
+    case setTriggerState(triggerId: String, enabled: Bool, fireDate: Date?, recurrence: [String: Int]?)
+    case deleteTrigger(triggerId: String)
 
     public static func parse(tool: String, arguments: [String: MCP.Value]?) throws -> WriteRequest {
         let args = Args(arguments)
@@ -64,6 +66,15 @@ public enum WriteRequest: Sendable, Equatable {
                 events: try args.eventArray("events"),
                 sceneId: try args.optionalString("sceneId")
             )
+        case "set_trigger_state":
+            return .setTriggerState(
+                triggerId: try args.string("triggerId"),
+                enabled: try args.bool("enabled"),
+                fireDate: try args.optionalIsoDate("fireDate"),
+                recurrence: try args.optionalRecurrence("recurrence")
+            )
+        case "delete_trigger":
+            return .deleteTrigger(triggerId: try args.string("triggerId"))
         default:
             throw ProposalStoreError.unknownTool(tool)
         }

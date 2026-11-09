@@ -140,6 +140,26 @@ public actor FakeHomeKitService: HomeKitWriting {
                 )
             )
             return id
+
+        case .setTriggerEnabled(_, let triggerId, let enabled):
+            let (h, t) = try indexOfTrigger(id: triggerId)
+            graph.homes[h].triggers[t].isEnabled = enabled
+            return nil
+
+        case .updateTimerTrigger(_, let triggerId, let fireDate, let recurrence):
+            let (h, t) = try indexOfTrigger(id: triggerId)
+            guard case .timer = graph.homes[h].triggers[t].detail else {
+                throw HomeKitWriteError.invalidOperation(
+                    "Trigger “\(graph.homes[h].triggers[t].name)” is not a timer trigger; it has no fire date."
+                )
+            }
+            graph.homes[h].triggers[t].detail = .timer(fireDate: fireDate, recurrence: recurrence)
+            return nil
+
+        case .removeTrigger(_, let triggerId):
+            let (h, t) = try indexOfTrigger(id: triggerId)
+            graph.homes[h].triggers.remove(at: t)
+            return nil
         }
     }
 
@@ -278,6 +298,15 @@ public actor FakeHomeKitService: HomeKitWriting {
             }
         }
         throw HomeKitWriteError.objectMissing("No service group \(id).")
+    }
+
+    private func indexOfTrigger(id: String) throws -> (home: Int, trigger: Int) {
+        for h in graph.homes.indices {
+            if let t = graph.homes[h].triggers.firstIndex(where: { $0.id == id }) {
+                return (h, t)
+            }
+        }
+        throw HomeKitWriteError.objectMissing("No trigger \(id).")
     }
 
     private func room(id: String, inGraph graph: HomeGraph) -> HomeGraph.Room? {

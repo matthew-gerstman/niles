@@ -1,7 +1,7 @@
 import Foundation
 import MCP
 
-/// The mutating MCP tools: eleven declarative write tools plus the
+/// The mutating MCP tools: thirteen declarative write tools plus the
 /// `get_proposal` poll. None of them touches HomeKit — a call plans the
 /// request against the current graph and stages exactly one proposal
 /// (spec: "one agent request is always exactly one approval card"); the
@@ -187,6 +187,32 @@ public struct WriteToolRegistry: Sendable {
                 required: ["homeId", "name", "events"]
             ),
             annotations: Tool.Annotations(readOnlyHint: false)
+        ),
+        Tool(
+            name: "set_trigger_state",
+            description: "Enable or disable an automation trigger — the arm/disarm step. Enabling is ALWAYS a separate proposal from creating the trigger: an agent can never silently flip an automation on. Also moves a timer trigger's fireDate/recurrence in the same approval. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            inputSchema: objectSchema(
+                [
+                    "triggerId": stringProperty("The trigger to update (from get_triggers)."),
+                    "enabled": .object(["type": .string("boolean"), "description": .string("true to arm, false to disarm.")]),
+                    "fireDate": stringProperty("Optional new first fire time, ISO-8601 (timer triggers only)."),
+                    "recurrence": .object([
+                        "type": .string("object"),
+                        "description": .string("Optional new repeat rule as date components (timer triggers only)."),
+                    ]),
+                ],
+                required: ["triggerId", "enabled"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false)
+        ),
+        Tool(
+            name: "delete_trigger",
+            description: "Delete an automation trigger — it stops firing immediately. DESTRUCTIVE. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            inputSchema: objectSchema(
+                ["triggerId": stringProperty("The trigger to delete (from get_triggers).")],
+                required: ["triggerId"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false, destructiveHint: true)
         ),
         Tool(
             name: "get_proposal",

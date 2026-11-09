@@ -80,6 +80,13 @@ public enum ProposalPlanner {
             return try createEventTrigger(
                 homeId: homeId, name: name, events: events, sceneId: sceneId, graph: graph
             )
+        case .setTriggerState(let triggerId, let enabled, let fireDate, let recurrence):
+            return try setTriggerState(
+                triggerId: triggerId, enabled: enabled, fireDate: fireDate,
+                recurrence: recurrence, graph: graph
+            )
+        case .deleteTrigger(let triggerId):
+            return try deleteTrigger(triggerId: triggerId, graph: graph)
         }
     }
 
@@ -526,6 +533,91 @@ public enum ProposalPlanner {
                 after: "disabled"
             )],
             card: card
+        )
+    }
+
+    private static func setTriggerState(
+        triggerId: String, enabled: Bool, fireDate: Date?, recurrence: [String: Int]?,
+        graph: HomeGraph
+    ) throws -> Plan {
+        let (home, trigger) = try self.trigger(id: triggerId, in: graph)
+        if trigger.isEnabled == enabled {
+            throw PlannerError.noChange("trigger “\(trigger.name)” is already \(enabled ? "enabled" : "disabled").")
+        }
+        // Schedule updates ride the timer trigger only; an event trigger has
+        // no fire date to update.
+        if fireDate != nil || recurrence != nil, case .event = trigger.detail {
+            throw PlannerError.invalidInput(
+                "Trigger “\(trigger.name)” is an event trigger; fireDate and recurrence apply to timer triggers."
+            )
+        }
+
+        let from = trigger.isEnabled ? "enabled" : "disabled"
+        let to = enabled ? "enabled" : "disabled"
+        var card: [ProposalCardLine] = [
+            ProposalCardLine(enabled ? .add : .remove, "Trigger “\(trigger.name)” · \(from) → \(to)")
+        ]
+        if let fireDate, case .timer = trigger.detail {
+            card.append(ProposalCardLine(.plain, timerLine(fireDate: fireDate, recurrence: recurrence ?? [:])))
+        }
+        if enabled {
+            // The locked rule the card must make visible: this is the arm
+            // step, always its own approval after the one that created it.
+            card.append(ProposalCardLine(
+                .note, "⚠ Arming an automation — it will run on its own once approved."
+            ))
+        }
+
+        // Arming (or disarming) is always its own operation, and a timer
+        // whose fire date moves rides the same proposal as a second op.
+        var operations: [HomeKitOperation] = [
+            .setTriggerEnabled(homeId: home.id, triggerId: trigger.id, enabled: enabled)
+        ]
+        if case .timer = trigger.detail, fireDate != nil || recurrence != nil {
+            operations.append(.updateTimerTrigger(
+                homeId: home.id, triggerId: trigger.id,
+                fireDate: fireDate ?? timerFireDate(of: trigger),
+                recurrence: recurrence ?? timerRecurrence(of: trigger)
+            ))
+        }
+
+        return Plan(
+            tool: "set_trigger_state",
+            title: "\(enabled ? "Enable" : "Disable") trigger “\(trigger.name)”",
+            summary: "\(enabled ? "Enable" : "Disable") trigger “\(trigger.name)”",
+            isDestructive: false,
+            operations: operations,
+            entries: [ProposalDiffEntry(
+                object: ProposalObjectRef(kind: .trigger, id: trigger.id, name: trigger.name),
+                op: .update,
+                before: from,
+                after: to
+            )],
+            card: card
+        )
+    }
+
+    private static func deleteTrigger(triggerId: String, graph: HomeGraph) throws -> Plan {
+        let (home, trigger) = try self.trigger(id: triggerId, in: graph)
+        return Plan(
+            tool: "delete_trigger",
+            title: "Delete trigger “\(trigger.name)”",
+            summary: "Delete trigger “\(trigger.name)”",
+            isDestructive: true,
+            operations: [.removeTrigger(homeId: home.id, triggerId: trigger.id)],
+            entries: [ProposalDiffEntry(
+                object: ProposalObjectRef(kind: .trigger, id: trigger.id, name: trigger.name),
+                op: .delete,
+                before: trigger.name,
+                after: nil
+            )],
+            card: [
+                ProposalCardLine(.remove, "Trigger “\(trigger.name)” · deleted"),
+                // Spec risk: a silently-disabled automation looks healthy
+                // until it fails to fire. Deletion is louder, but the card
+                // still says what stops existing.
+                ProposalCardLine(.plain, "The automation stops firing immediately — visible to the Home app and Siri."),
+            ]
         )
     }
 

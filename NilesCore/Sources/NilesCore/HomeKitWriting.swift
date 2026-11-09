@@ -124,6 +124,9 @@ public enum HomeKitOperation: Sendable, Equatable, Hashable {
         homeId: String, name: String, fireDate: Date, recurrence: [String: Int], sceneId: String?
     )
     case addEventTrigger(homeId: String, name: String, events: [TriggerEventSpec], sceneId: String?)
+    case setTriggerEnabled(homeId: String, triggerId: String, enabled: Bool)
+    case updateTimerTrigger(homeId: String, triggerId: String, fireDate: Date, recurrence: [String: Int])
+    case removeTrigger(homeId: String, triggerId: String)
 }
 
 /// Read access plus the mutation vocabulary proposals execute.
