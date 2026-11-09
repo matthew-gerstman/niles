@@ -68,6 +68,12 @@ public enum ProposalPlanner {
             return try deleteRoom(roomId: roomId, graph: graph)
         case .setZoneRooms(let zoneId, let roomIds):
             return try setZoneRooms(zoneId: zoneId, roomIds: roomIds, graph: graph)
+        case .createZone(let homeId, let name):
+            return try createZone(homeId: homeId, name: name, graph: graph)
+        case .renameZone(let zoneId, let name):
+            return try renameZone(zoneId: zoneId, name: name, graph: graph)
+        case .deleteZone(let zoneId):
+            return try deleteZone(zoneId: zoneId, graph: graph)
         case .createScene(let homeId, let name, let actions):
             return try createScene(homeId: homeId, name: name, actions: actions, graph: graph)
         case .setSceneActions(let sceneId, let actions):
@@ -80,6 +86,8 @@ public enum ProposalPlanner {
             return try executeScene(sceneId: sceneId, graph: graph)
         case .createServiceGroup(let homeId, let name):
             return try createServiceGroup(homeId: homeId, name: name, graph: graph)
+        case .renameServiceGroup(let groupId, let name):
+            return try renameServiceGroup(groupId: groupId, name: name, graph: graph)
         case .setServiceGroupMembers(let groupId, let serviceIds):
             return try setServiceGroupMembers(groupId: groupId, serviceIds: serviceIds, graph: graph)
         case .deleteServiceGroup(let groupId):
@@ -270,6 +278,90 @@ public enum ProposalPlanner {
             return "Remove room “\(roomName(id: removals[0], home: home))” from zone “\(zoneName)”"
         }
         return "Update zone “\(zoneName)” membership (\(additions.count) added, \(removals.count) removed)"
+    }
+
+    private static func createZone(homeId: String, name: String, graph: HomeGraph) throws -> Plan {
+        let trimmed = try requiredName(name, kind: "zone")
+        let home = try self.home(id: homeId, in: graph)
+        try rejectDuplicate(kind: "zone", name: trimmed, in: home.zones.map(\.name), homeName: home.name)
+        return Plan(
+            tool: "create_zone",
+            title: "Create zone “\(trimmed)”",
+            summary: "Create zone “\(trimmed)” in “\(home.name)”",
+            isDestructive: false,
+            operations: [.createZone(homeId: home.id, name: trimmed)],
+            entries: [ProposalDiffEntry(
+                object: ProposalObjectRef(kind: .zone, id: "", name: trimmed),
+                op: .create,
+                before: nil,
+                after: trimmed
+            )],
+            card: [ProposalCardLine(.add, "Zone “\(trimmed)” · created (empty — add rooms with set_zone_rooms)")]
+        )
+    }
+
+    private static func renameZone(zoneId: String, name: String, graph: HomeGraph) throws -> Plan {
+        let trimmed = try requiredName(name, kind: "zone")
+        let (home, zone) = try self.zone(id: zoneId, in: graph)
+        if zone.name.caseInsensitiveCompare(trimmed) == .orderedSame {
+            throw PlannerError.noChange("zone “\(zone.name)” is already named “\(trimmed)”.")
+        }
+        // Zone names are unique within a home; the new name cannot collide
+        // with another zone — this one included.
+        let otherZones = home.zones.filter { $0.id != zone.id }
+        try rejectDuplicate(kind: "zone", name: trimmed, in: otherZones.map(\.name), homeName: home.name)
+        return Plan(
+            tool: "rename_zone",
+            title: "Rename zone “\(zone.name)”",
+            summary: "Rename zone “\(zone.name)” to “\(trimmed)”",
+            isDestructive: false,
+            operations: [.renameZone(homeId: home.id, zoneId: zone.id, to: trimmed)],
+            entries: [ProposalDiffEntry(
+                object: ProposalObjectRef(kind: .zone, id: zone.id, name: zone.name),
+                op: .rename,
+                before: zone.name,
+                after: trimmed
+            )],
+            card: [ProposalCardLine(.plain, "Zone “\(zone.name)” → “\(trimmed)”")]
+        )
+    }
+
+    /// Spec (destructive severity): the card shows how many rooms the zone
+    /// grouped, and states plainly that the rooms survive — removing a zone
+    /// dissolves only the grouping, never the rooms.
+    private static func deleteZone(zoneId: String, graph: HomeGraph) throws -> Plan {
+        let (home, zone) = try self.zone(id: zoneId, in: graph)
+        let memberNames = zone.roomIds.compactMap { room(id: $0, in: home)?.name }
+
+        var card: [ProposalCardLine] = [ProposalCardLine(.remove, "Zone “\(zone.name)” · deleted")]
+        if memberNames.isEmpty {
+            card.append(ProposalCardLine(.plain, "The zone has no rooms."))
+        } else {
+            let roomNoun = memberNames.count == 1 ? "room" : "rooms"
+            card.append(ProposalCardLine(
+                .plain,
+                "It grouped \(memberNames.count) \(roomNoun): \(memberNames.joined(separator: ", "))."
+            ))
+        }
+        card.append(ProposalCardLine(
+            .plain,
+            "The rooms survive untouched — deleting a zone removes only the grouping."
+        ))
+
+        return Plan(
+            tool: "delete_zone",
+            title: "Delete zone “\(zone.name)”",
+            summary: "Delete zone “\(zone.name)”",
+            isDestructive: true,
+            operations: [.removeZone(homeId: home.id, zoneId: zone.id)],
+            entries: [ProposalDiffEntry(
+                object: ProposalObjectRef(kind: .zone, id: zone.id, name: zone.name),
+                op: .delete,
+                before: zone.name,
+                after: nil
+            )],
+            card: card
+        )
     }
 
     // MARK: - Scenes
@@ -504,6 +596,32 @@ public enum ProposalPlanner {
                 after: trimmed
             )],
             card: [ProposalCardLine(.add, "Service group “\(trimmed)” · created")]
+        )
+    }
+
+    private static func renameServiceGroup(groupId: String, name: String, graph: HomeGraph) throws -> Plan {
+        let trimmed = try requiredName(name, kind: "service group")
+        let (home, group) = try self.serviceGroup(id: groupId, in: graph)
+        if group.name.caseInsensitiveCompare(trimmed) == .orderedSame {
+            throw PlannerError.noChange("service group “\(group.name)” is already named “\(trimmed)”.")
+        }
+        // Group names are unique within a home; the new name cannot collide
+        // with another group — this one included.
+        let otherGroups = home.serviceGroups.filter { $0.id != group.id }
+        try rejectDuplicate(kind: "service group", name: trimmed, in: otherGroups.map(\.name), homeName: home.name)
+        return Plan(
+            tool: "rename_service_group",
+            title: "Rename service group “\(group.name)”",
+            summary: "Rename service group “\(group.name)” to “\(trimmed)”",
+            isDestructive: false,
+            operations: [.renameServiceGroup(homeId: home.id, groupId: group.id, to: trimmed)],
+            entries: [ProposalDiffEntry(
+                object: ProposalObjectRef(kind: .serviceGroup, id: group.id, name: group.name),
+                op: .rename,
+                before: group.name,
+                after: trimmed
+            )],
+            card: [ProposalCardLine(.plain, "Service group “\(group.name)” → “\(trimmed)”")]
         )
     }
 

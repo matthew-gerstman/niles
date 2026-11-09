@@ -75,6 +75,32 @@ public actor FakeHomeKitService: HomeKitWriting {
             }
             return nil
 
+        case .createZone(let homeId, let name):
+            let h = try indexOfHome(id: homeId)
+            guard !graph.homes[h].zones.contains(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) else {
+                throw HomeKitWriteError.duplicateName("Home already has a zone named “\(name)”.")
+            }
+            let id = nextId(prefix: "zone", existing: graph.homes[h].zones.map(\.id))
+            graph.homes[h].zones.append(HomeGraph.Zone(id: id, name: name))
+            return id
+
+        case .renameZone(_, let zoneId, let to):
+            let (h, z) = try indexOfZone(id: zoneId)
+            // Zone names are unique within a home; the new name cannot
+            // collide with another zone — this one included.
+            if graph.homes[h].zones.contains(where: { $0.id != zoneId && $0.name.caseInsensitiveCompare(to) == .orderedSame }) {
+                throw HomeKitWriteError.duplicateName("Home already has a zone named “\(to)”.")
+            }
+            graph.homes[h].zones[z].name = to
+            return nil
+
+        case .removeZone(_, let zoneId):
+            let (h, z) = try indexOfZone(id: zoneId)
+            // HomeKit's observable behavior: rooms survive untouched — a
+            // zone is only a grouping over them.
+            graph.homes[h].zones.remove(at: z)
+            return nil
+
         case .addActionSet(_, let name, let actions):
             let h = try indexOfHome(havingSceneNamed: name)
             let id = nextId(prefix: "scene", existing: graph.homes[h].scenes.map(\.id))
@@ -148,6 +174,16 @@ public actor FakeHomeKitService: HomeKitWriting {
                 guard !graph.homes[h].serviceGroups[g].services.contains(where: { $0.id == serviceId }) else { continue }
                 graph.homes[h].serviceGroups[g].services.append(ref)
             }
+            return nil
+
+        case .renameServiceGroup(_, let groupId, let to):
+            let (h, g) = try indexOfServiceGroup(id: groupId)
+            // Group names are unique within a home; the new name cannot
+            // collide with another group — this one included.
+            if graph.homes[h].serviceGroups.contains(where: { $0.id != groupId && $0.name.caseInsensitiveCompare(to) == .orderedSame }) {
+                throw HomeKitWriteError.duplicateName("Home already has a service group named “\(to)”.")
+            }
+            graph.homes[h].serviceGroups[g].name = to
             return nil
 
         case .removeServiceGroup(_, let groupId):

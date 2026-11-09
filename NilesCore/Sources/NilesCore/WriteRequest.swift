@@ -11,12 +11,16 @@ public enum WriteRequest: Sendable, Equatable {
     case renameRoom(roomId: String, name: String)
     case deleteRoom(roomId: String)
     case setZoneRooms(zoneId: String, roomIds: [String])
+    case createZone(homeId: String, name: String)
+    case renameZone(zoneId: String, name: String)
+    case deleteZone(zoneId: String)
     case createScene(homeId: String, name: String, actions: [SceneActionSpec])
     case setSceneActions(sceneId: String, actions: [SceneActionSpec])
     case renameScene(sceneId: String, name: String)
     case deleteScene(sceneId: String, deleteLinkedTriggers: Bool)
     case executeScene(sceneId: String)
     case createServiceGroup(homeId: String, name: String)
+    case renameServiceGroup(groupId: String, name: String)
     case setServiceGroupMembers(groupId: String, serviceIds: [String])
     case deleteServiceGroup(groupId: String)
     case createTimerTrigger(
@@ -37,6 +41,12 @@ public enum WriteRequest: Sendable, Equatable {
             return .deleteRoom(roomId: try args.string("roomId"))
         case "set_zone_rooms":
             return .setZoneRooms(zoneId: try args.string("zoneId"), roomIds: try args.stringArray("roomIds"))
+        case "create_zone":
+            return .createZone(homeId: try args.string("homeId"), name: try args.string("name"))
+        case "rename_zone":
+            return .renameZone(zoneId: try args.string("zoneId"), name: try args.string("name"))
+        case "delete_zone":
+            return .deleteZone(zoneId: try args.string("zoneId"))
         case "create_scene":
             return .createScene(
                 homeId: try args.string("homeId"),
@@ -56,6 +66,8 @@ public enum WriteRequest: Sendable, Equatable {
             return .executeScene(sceneId: try args.string("sceneId"))
         case "create_service_group":
             return .createServiceGroup(homeId: try args.string("homeId"), name: try args.string("name"))
+        case "rename_service_group":
+            return .renameServiceGroup(groupId: try args.string("groupId"), name: try args.string("name"))
         case "set_service_group_members":
             return .setServiceGroupMembers(
                 groupId: try args.string("groupId"),

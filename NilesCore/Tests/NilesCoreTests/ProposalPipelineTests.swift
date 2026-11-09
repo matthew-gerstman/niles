@@ -127,6 +127,100 @@ import Testing
         #expect(approved.evidence.first?.confirmed == true)
     }
 
+    @Test func approvedZoneCreationAndDeletionPreservesRooms() async throws {
+        let (fake, store, registry, _) = makeContext()
+
+        let created = try proposal(from: await registry.call(
+            name: "create_zone",
+            arguments: ["homeId": .string("home-1"), "name": .string("Downstairs")]
+        ))
+        let createdApproved = try await store.approve(id: created.id)
+        #expect(createdApproved.state == .executed)
+        #expect(createdApproved.evidence.first?.confirmed == true)
+
+        let zoneId = await fake.graph.homes.first!.zones.first(where: { $0.name == "Downstairs" })!.id
+
+        // Destructive severity: the card shows the member-room count and
+        // states that rooms survive untouched.
+        let deleted = try proposal(from: await registry.call(
+            name: "delete_zone", arguments: ["zoneId": .string(zoneId)]
+        ))
+        #expect(deleted.isDestructive == true)
+        #expect(deleted.card.contains { $0.text.contains("rooms survive untouched") })
+
+        let deletedApproved = try await store.approve(id: deleted.id)
+        #expect(deletedApproved.state == .executed)
+        #expect(deletedApproved.evidence.first?.confirmed == true)
+
+        let graph = await fake.graph
+        #expect(!graph.homes.first!.zones.contains { $0.id == zoneId })
+        // The zone is gone; its rooms are not.
+        #expect(graph.homes.first!.rooms.map(\.name).sorted() == ["Kitchen", "Living Room", "Office"])
+    }
+
+    @Test func approvedZoneRenameAppliesAndConfirms() async throws {
+        let (fake, store, registry, _) = makeContext()
+
+        let staged = try proposal(from: await registry.call(
+            name: "rename_zone",
+            arguments: ["zoneId": .string("zone-upstairs"), "name": .string("Top Floor")]
+        ))
+        #expect(staged.title == "Rename zone “Upstairs”")
+
+        let approved = try await store.approve(id: staged.id)
+        #expect(approved.state == .executed)
+        #expect(approved.evidence.first?.confirmed == true)
+
+        let graph = await fake.graph
+        #expect(graph.homes.first!.zones.first!.name == "Top Floor")
+    }
+
+    @Test func duplicateZoneNameIsRejectedBeforeAnyProposalExists() async throws {
+        let (_, _, registry, _) = makeContext()
+        let result = await registry.call(
+            name: "create_zone",
+            arguments: ["homeId": .string("home-1"), "name": .string("upstairs")]
+        )
+        #expect(result.isError == true)
+        #expect(errorText(of: result)?.contains("already exists") == true)
+    }
+
+    @Test func zoneDeletionDenialAppliesNothing() async throws {
+        let (fake, store, registry, _) = makeContext()
+
+        let staged = try proposal(from: await registry.call(
+            name: "delete_zone", arguments: ["zoneId": .string("zone-upstairs")]
+        ))
+        let denied = try await store.deny(id: staged.id)
+        #expect(denied.state == .denied)
+        #expect(denied.evidence.isEmpty)
+
+        let graph = await fake.graph
+        #expect(graph == fixtureGraph())
+    }
+
+    @Test func approvedServiceGroupRenameAppliesAndConfirms() async throws {
+        let (fake, store, registry, _) = makeContext()
+
+        let created = try proposal(from: await registry.call(
+            name: "create_service_group",
+            arguments: ["homeId": .string("home-1"), "name": .string("Desk Lamps")]
+        ))
+        #expect(try await store.approve(id: created.id).state == .executed)
+        let groupId = await fake.graph.homes.first!.serviceGroups.first!.id
+
+        let renamed = try proposal(from: await registry.call(
+            name: "rename_service_group",
+            arguments: ["groupId": .string(groupId), "name": .string("Floor Lamps")]
+        ))
+        let renamedApproved = try await store.approve(id: renamed.id)
+        #expect(renamedApproved.state == .executed)
+        #expect(renamedApproved.evidence.first?.confirmed == true)
+
+        let graph = await fake.graph
+        #expect(graph.homes.first!.serviceGroups.first!.name == "Floor Lamps")
+    }
+
     @Test func sceneCreationStagesAndExecutesWithoutExecutingScene() async throws {
         let (fake, store, registry, _) = makeContext()
 
@@ -677,17 +771,17 @@ import Testing
         #expect(text.contains("get_proposal"))
     }
 
-    @Test func toolSurfaceIsSixReadsAndSeventeenWrites() async throws {
+    @Test func toolSurfaceIsSixReadsAndTwentyOneWrites() async throws {
         let (_, store, _, _) = makeContext()
         let reads = ReadToolRegistry(service: await store.homeKit)
         let writes = WriteToolRegistry(store: store)
 
         #expect(reads.tools.count == 6)
-        #expect(writes.tools.count == 17)
+        #expect(writes.tools.count == 21)
         #expect(reads.toolNames.isDisjoint(with: writes.toolNames))
-        // Destructive hints land on exactly the four delete tools.
+        // Destructive hints land on exactly the five delete tools.
         let destructive = writes.tools.filter { $0.annotations.destructiveHint == true }
-        #expect(Set(destructive.map(\.name)) == ["delete_room", "delete_service_group", "delete_trigger", "delete_scene"])
+        #expect(Set(destructive.map(\.name)) == ["delete_room", "delete_service_group", "delete_trigger", "delete_scene", "delete_zone"])
     }
 
     // MARK: - Trigger arm path
