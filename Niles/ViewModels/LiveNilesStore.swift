@@ -303,6 +303,34 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
         isTokenRevealed.toggle()
     }
 
+    // MARK: - HomeGraphViewModel / swipe-to-stage
+
+    /// Stages a Home row's swipe action through the same public store path
+    /// the agent write tools use, so the swipe produces a normal proposal in
+    /// the queue and nothing touches HomeKit until it is approved.
+    func stage(row: HomeRow, action: HomeRowAction, newName: String? = nil) async {
+        guard let request = row.stageRequest(for: action, newName: newName) else {
+            logger.error("No write tool maps to \(String(describing: action), privacy: .public) on “\(row.name, privacy: .public)”")
+            return
+        }
+        guard let store = coordinator.proposalStore else {
+            logger.error("Cannot stage \(request.tool, privacy: .public): no proposal store")
+            return
+        }
+        do {
+            let proposal = try await store.stage(tool: request.tool, arguments: request.arguments)
+            // A swipe is a human action, not an agent's — attribute it as such
+            // before the next refresh fills unknown ids with a client name.
+            agentNamesByProposal[proposal.id] = "You"
+            await refresh()
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+        } catch {
+            // Staging rejections (validation, HomeKit state) surface here;
+            // nothing was applied either way — the queue stays authoritative.
+            logger.error("Staging \(request.tool, privacy: .public) for “\(row.name, privacy: .public)” failed: \(String(describing: error))")
+        }
+    }
+
     /// Awaitable token load — the polling task calls this once at start;
     /// tests call it directly.
     func loadTokenAndWait() async {
@@ -517,7 +545,9 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
                     name: room.name,
                     subtitle: zoneByRoom[room.id] ?? "No zone",
                     systemImage: "table.furniture",
-                    trailingCount: room.accessories.count
+                    trailingCount: room.accessories.count,
+                    kind: .room,
+                    entityId: room.id
                 )
             }),
             HomeSection(title: "Zones", rows: (home?.zones ?? []).map { zone in
@@ -528,7 +558,9 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
                     name: zone.name,
                     subtitle: names.isEmpty ? "No rooms" : names.joined(separator: ", "),
                     systemImage: "house",
-                    trailingCount: names.count
+                    trailingCount: names.count,
+                    kind: .zone,
+                    entityId: zone.id
                 )
             }),
             HomeSection(title: "Scenes", rows: (home?.scenes ?? []).map { scene in
@@ -537,7 +569,9 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
                     name: scene.name,
                     subtitle: "\(scene.actions.count) actions · \(accessories) accessories",
                     systemImage: "film",
-                    trailingCount: scene.actions.count
+                    trailingCount: scene.actions.count,
+                    kind: .scene,
+                    entityId: scene.id
                 )
             }),
             HomeSection(title: "Triggers", rows: (home?.triggers ?? []).map { trigger in
@@ -545,7 +579,9 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
                     name: trigger.name,
                     subtitle: Self.subtitle(for: trigger.detail),
                     systemImage: "clock",
-                    isEnabled: trigger.isEnabled
+                    isEnabled: trigger.isEnabled,
+                    kind: .trigger,
+                    entityId: trigger.id
                 )
             }),
         ]

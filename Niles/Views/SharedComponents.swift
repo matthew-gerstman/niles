@@ -188,6 +188,20 @@ struct DiffLineList: View {
     }
 }
 
+/// Plain empty-state card shared by screens with nothing to list yet.
+struct EmptyStateCard: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 13))
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 18)
+            .card()
+    }
+}
+
 // MARK: - Rows
 
 /// Avatar + name + detail + Active/Idle pill, shared by agent lists.
