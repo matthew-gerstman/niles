@@ -9,6 +9,13 @@ import UIKit
 struct StaticTokenStore: TokenStoring {
     let token: String
     func loadOrCreate() throws -> String { token }
+    func listAgents() throws -> [PairedAgent] {
+        [PairedAgent(id: UUID(), name: nil, token: token, pairedAt: .distantPast)]
+    }
+    func issueToken(name: String?) throws -> PairedAgent {
+        PairedAgent(id: UUID(), name: name, token: token, pairedAt: Date())
+    }
+    func revoke(id: UUID) throws {}
 }
 
 private struct Timeout: Error {}

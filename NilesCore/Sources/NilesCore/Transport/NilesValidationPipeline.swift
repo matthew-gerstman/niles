@@ -12,8 +12,16 @@ public struct NilesValidationPipeline: MCP.HTTPRequestValidationPipeline {
     private let standard: MCP.StandardValidationPipeline
 
     public init(expectedToken: String) {
+        self.init(tokens: [expectedToken])
+    }
+
+    public init(tokens: [String]) {
+        self.init(tokenProvider: { tokens })
+    }
+
+    public init(tokenProvider: @escaping @Sendable () throws -> [String]) {
         standard = MCP.StandardValidationPipeline(validators: [
-            BearerTokenAuthMiddleware(expectedToken: expectedToken),
+            BearerTokenAuthMiddleware(tokenProvider: tokenProvider),
             MCP.AcceptHeaderValidator(mode: .sseRequired),
             MCP.ContentTypeValidator(),
             MCP.ProtocolVersionValidator(),
