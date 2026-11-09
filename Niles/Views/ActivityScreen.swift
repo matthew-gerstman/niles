@@ -1,200 +1,198 @@
 import SwiftUI
 import NilesCore
 
-/// The Activity timeline: the persistent event log grouped by recency,
-/// entries tappable into detail cards. Recent executed cards offer Undo when
-/// a conflict-free paired revert exists; undone entries stay marked UNDONE.
+/// The Activity timeline: the persistent event log as native list rows,
+/// sectioned per calendar day, tappable into a detail sheet with the event's
+/// structured read-back evidence. Recent executed rows offer Undo as a swipe
+/// action; undone entries stay marked Undone.
 struct ActivityScreen: View {
     var model: any ActivityViewModel
 
     @State private var openDetail: ActivityTimeline.Row?
     /// Screenshot hook: `-UIActivityOpenDetail` presents the newest entry's
-    /// detail card on launch, so per-card captures need no UI automation.
+    /// detail sheet on launch, so per-entry captures need no UI automation.
     @State private var autoOpenedDetail = false
 
     var body: some View {
-        ScreenScaffold(title: "Activity", subtitle: "Everything that happened, in order") {
-            let rows = ActivityTimeline.rows(events: model.activityEvents, proposals: model.proposals)
-            if rows.isEmpty {
-                EmptyStateCard(
-                    text: "Proposals will appear here as they are staged, decided, and executed."
-                )
-            } else {
-                ForEach(ActivityTimeline.sections(rows: rows)) { section in
-                    SectionHeader(title: section.title)
-                    ForEach(section.rows) { row in
-                        ActivityCard(
-                            row: row,
-                            failure: model.undoFailures[row.event.proposalId],
-                            onOpenDetail: { openDetail = row },
-                            onUndo: { model.undo(row.event.proposalId) },
-                            onDismissFailure: { model.clearUndoFailure(row.event.proposalId) }
-                        )
+        NavigationStack {
+            List {
+                let rows = ActivityTimeline.rows(events: model.activityEvents, proposals: model.proposals)
+                if rows.isEmpty {
+                    ContentUnavailableView(
+                        "No activity yet",
+                        systemImage: "clock.arrow.circlepath",
+                        description: Text("Proposals will appear here as they are staged, decided, and executed.")
+                    )
+                } else {
+                    ForEach(ActivityDaySections(rows: rows)) { section in
+                        Section(section.title) {
+                            ForEach(section.rows) { row in
+                                rowView(row)
+                            }
+                        }
                     }
                 }
             }
-        }
-        .sheet(item: $openDetail) { row in
-            // Rebuild the row from the model so the card reflects undo taps
-            // and refreshed evidence, like the approvals sheet does.
-            if let fresh = ActivityTimeline.rows(
-                events: model.activityEvents, proposals: model.proposals
-            ).first(where: { $0.event.id == row.event.id }) {
-                ActivityDetailCard(
-                    row: fresh,
-                    failure: model.undoFailures[fresh.event.proposalId],
-                    onUndo: { model.undo(fresh.event.proposalId) },
-                    onDismissFailure: { model.clearUndoFailure(fresh.event.proposalId) }
-                )
+            .navigationTitle("Activity")
+            .sheet(item: $openDetail) { row in
+                // Rebuild the row from the model so the sheet reflects undo
+                // taps and refreshed evidence, like the approvals sheet does.
+                if let fresh = ActivityTimeline.rows(
+                    events: model.activityEvents, proposals: model.proposals
+                ).first(where: { $0.event.id == row.event.id }) {
+                    ActivityDetailView(
+                        row: fresh,
+                        failure: model.undoFailures[fresh.event.proposalId],
+                        onUndo: { model.undo(fresh.event.proposalId) },
+                        onDismissFailure: { model.clearUndoFailure(fresh.event.proposalId) }
+                    )
+                }
             }
-        }
-        .task {
-            if !autoOpenedDetail,
-               ProcessInfo.processInfo.arguments.contains("-UIActivityOpenDetail"),
-               let newest = ActivityTimeline.rows(
-                   events: model.activityEvents, proposals: model.proposals
-               ).first {
-                openDetail = newest
-                autoOpenedDetail = true
+            .task {
+                if !autoOpenedDetail,
+                   ProcessInfo.processInfo.arguments.contains("-UIActivityOpenDetail"),
+                   let newest = ActivityTimeline.rows(
+                       events: model.activityEvents, proposals: model.proposals
+                   ).first {
+                    openDetail = newest
+                    autoOpenedDetail = true
+                }
             }
         }
     }
-}
 
-/// One timeline entry: verdict chip, title, tool line, outcome detail, and —
-/// on recent executed cards — the Undo button. A conflict from the last Undo
-/// tap renders inline until dismissed or retried.
-struct ActivityCard: View {
-    let row: ActivityTimeline.Row
-    var failure: ActivityUndoFailure?
-    var onOpenDetail: () -> Void = {}
-    var onUndo: () -> Void = {}
-    var onDismissFailure: () -> Void = {}
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline) {
-                VerdictChip(verdict: row.verdict)
-                Spacer()
-                Text(RelativeTime.label(for: row.event.at))
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
-            }
-            Text(row.event.proposalTitle)
-                .font(.system(size: 15, weight: .bold))
-            ToolChip(text: row.toolLine)
-            if let agent = row.event.agentName {
-                Text("by \(agent)")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-            }
-            if let detail = row.event.detail {
-                Text(detail)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-            }
-            if let failure {
-                UndoFailureBlock(failure: failure, onDismiss: onDismissFailure)
-            }
-            if row.verdict == .undone, !row.revertEvidence.isEmpty {
-                let confirmed = row.revertEvidence.filter(\.confirmed).count
-                Text("Revert confirmed: \(confirmed) of \(row.revertEvidence.count) checks")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(NilesTheme.good)
-            }
-            if row.undoAvailable {
-                ActionButton(title: "Undo", style: .ghost, action: onUndo)
-                    .padding(.top, 2)
-            }
-        }
-        .card(accent: row.verdict == .failed ? NilesTheme.destructive : NilesTheme.accent)
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onOpenDetail)
-    }
-}
-
-/// The verdict chip: EXECUTED / DENIED / STAGED / EXPIRED / UNDONE / FAILED /
-/// APPROVED, colored per the token rules (red reserved for denial and failure).
-struct VerdictChip: View {
-    let verdict: ActivityTimeline.Verdict
-
-    var body: some View {
-        Text(label)
-            .font(.system(size: 11, weight: .bold))
-            .tracking(0.5)
-            .foregroundStyle(color)
-            .padding(.horizontal, 9)
-            .padding(.vertical, 3)
-            .background(color.opacity(0.12))
-            .clipShape(Capsule())
-    }
-
-    private var label: String {
-        switch verdict {
-        case .staged: "STAGED"
-        case .approved: "APPROVED"
-        case .denied: "DENIED"
-        case .executed: "EXECUTED"
-        case .failed: "FAILED"
-        case .expired: "EXPIRED"
-        case .undone: "UNDONE"
-        }
-    }
-
-    private var color: Color {
-        switch verdict {
-        case .staged: NilesTheme.accent
-        case .approved: NilesTheme.good
-        case .denied: NilesTheme.destructive
-        case .executed: NilesTheme.good
-        case .failed: NilesTheme.destructive
-        case .expired: Color.primary.opacity(0.45)
-        case .undone: Color.primary.opacity(0.45)
-        }
-    }
-}
-
-/// The inline undo-conflict block: the typed reason nothing was applied, plus
-/// the store's structured divergences (what moved in the home, per check).
-struct UndoFailureBlock: View {
-    let failure: ActivityUndoFailure
-    var onDismiss: () -> Void = {}
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .top) {
-                Text(failure.message)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(NilesTheme.destructive)
-                Spacer()
-                Button {
-                    onDismiss()
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 10, weight: .bold))
+    private func rowView(_ row: ActivityTimeline.Row) -> some View {
+        Button {
+            openDetail = row
+        } label: {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline) {
+                    Image(systemName: row.verdict.symbol)
+                        .foregroundStyle(row.verdict.tint)
+                    Text(row.event.proposalTitle)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                    Spacer()
+                    Text(RelativeTime.label(for: row.event.at))
+                        .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.plain)
-            }
-            ForEach(Array(failure.divergences.enumerated()), id: \.offset) { _, item in
-                HStack(alignment: .top, spacing: 6) {
-                    Text("✗")
-                        .foregroundStyle(NilesTheme.destructive)
-                    Text("\(item.claim) — \(item.observed)")
+                if let detail = row.event.detail {
+                    Text(detail)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
                 }
-                .font(.system(size: 12))
+                Text(row.verdict.label)
+                    .font(.caption)
+                    .foregroundStyle(row.verdict.tint)
             }
         }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(NilesTheme.destructive.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        .swipeActions(edge: .trailing) {
+            if row.undoAvailable {
+                Button {
+                    model.undo(row.event.proposalId)
+                } label: {
+                    Label("Undo", systemImage: "arrow.uturn.backward")
+                }
+            }
+        }
     }
 }
 
-/// The detail card behind a tapped entry: verdict chip, tool line, the event's
-/// outcome, structured read-back evidence — and for undone entries, the
-/// revert's own evidence linked to the original proposal.
-struct ActivityDetailCard: View {
+// MARK: - Verdict presentation
+
+extension ActivityTimeline.Verdict {
+    /// The SF Symbol standing in for the old verdict chip. Status is never
+    /// color alone — every verdict carries its symbol and label too.
+    var symbol: String {
+        switch self {
+        case .staged: "doc.text"
+        case .approved: "checkmark.circle"
+        case .denied: "xmark.circle"
+        case .executed: "checkmark.seal"
+        case .failed: "xmark.octagon"
+        case .expired: "clock.badge.xmark"
+        case .undone: "arrow.uturn.backward.circle"
+        }
+    }
+
+    /// System status colors by meaning: red reserved for denial and failure,
+    /// gray for the terminal-but-neutral expired and undone states.
+    var tint: Color {
+        switch self {
+        case .staged: .orange
+        case .approved, .executed: .green
+        case .denied, .failed: .red
+        case .expired, .undone: .secondary
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .staged: "Staged"
+        case .approved: "Approved"
+        case .denied: "Denied"
+        case .executed: "Executed"
+        case .failed: "Failed"
+        case .expired: "Expired"
+        case .undone: "Undone"
+        }
+    }
+}
+
+// MARK: - Day sections
+
+/// One calendar day of timeline entries, newest first. The view-layer
+/// grouping behind the native list headers — the model's recency buckets
+/// (Today / Yesterday / This Week / Earlier) stay untouched in the
+/// view-model layer this screen's tests pin.
+struct ActivityDaySection: Identifiable {
+    let title: String
+    let rows: [ActivityTimeline.Row]
+    var id: String { title }
+}
+
+/// Groups timeline rows by calendar day, newest day first, with friendly
+/// headers for today and yesterday and abbreviated dates beyond.
+struct ActivityDaySections: RandomAccessCollection {
+    let sections: [ActivityDaySection]
+
+    init(rows: [ActivityTimeline.Row], calendar: Calendar = .current, now: Date = Date()) {
+        var buckets: [(date: Date, rows: [ActivityTimeline.Row])] = []
+        for row in rows {
+            let day = calendar.startOfDay(for: row.event.at)
+            if let index = buckets.firstIndex(where: { $0.date == day }) {
+                buckets[index].rows.append(row)
+            } else {
+                buckets.append((day, [row]))
+            }
+        }
+        sections = buckets.map { bucket in
+            ActivityDaySection(title: Self.title(for: bucket.date, calendar: calendar, now: now), rows: bucket.rows)
+        }
+    }
+
+    private static func title(for day: Date, calendar: Calendar, now: Date) -> String {
+        if calendar.isDate(day, inSameDayAs: now) { return "Today" }
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: now),
+           calendar.isDate(day, inSameDayAs: yesterday) {
+            return "Yesterday"
+        }
+        return day.formatted(date: .abbreviated, time: .omitted)
+    }
+
+    var startIndex: Int { sections.startIndex }
+    var endIndex: Int { sections.endIndex }
+    subscript(position: Int) -> ActivityDaySection { sections[position] }
+}
+
+// MARK: - Detail sheet
+
+/// The detail sheet behind a tapped entry: the event's facts, structured
+/// read-back evidence as a plain native list, the undo's own evidence for
+/// undone entries, and any blocked-undo conflict — nothing hand-drawn.
+struct ActivityDetailView: View {
     let row: ActivityTimeline.Row
     var failure: ActivityUndoFailure?
     var onUndo: () -> Void = {}
@@ -203,79 +201,92 @@ struct ActivityDetailCard: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(row.event.proposalTitle)
-                    .font(.system(size: 18, weight: .bold))
-                Spacer()
-                VerdictChip(verdict: row.verdict)
-            }
-            ToolChip(text: "\(row.toolLine) · \(row.event.agentName ?? "unknown agent")")
-            Text(row.event.at.formatted(date: .abbreviated, time: .standard))
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-            if let detail = row.event.detail {
-                Text(detail)
-                    .font(.system(size: 13))
-            }
-            if row.verdict == .undone {
-                // The revert's own read-back, linked to the original: the
-                // undo's evidence lives on the revert, not the undone event.
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Reverted by \(row.revertTitle ?? "a paired revert").")
-                        .font(.system(size: 12, weight: .semibold))
-                    if row.revertEvidence.isEmpty {
-                        Text("The revert's read-back is available while its proposal is in memory.")
-                            .font(.system(size: 12))
+        NavigationStack {
+            List {
+                Section("Event") {
+                    LabeledContent("Status") {
+                        HStack(spacing: 4) {
+                            Image(systemName: row.verdict.symbol)
+                                .foregroundStyle(row.verdict.tint)
+                            Text(row.verdict.label)
+                        }
+                    }
+                    LabeledContent("When", value: row.event.at.formatted(date: .abbreviated, time: .standard))
+                    LabeledContent("Tool") {
+                        Text(row.toolLine)
+                            .font(.callout.monospaced())
                             .foregroundStyle(.secondary)
-                    } else {
-                        EvidenceRows(evidence: row.revertEvidence)
+                    }
+                    if let agent = row.event.agentName {
+                        LabeledContent("Agent", value: agent)
+                    }
+                    if let detail = row.event.detail {
+                        Text(detail)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
                     }
                 }
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
-            }
-            if !row.event.evidence.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    let confirmed = row.event.evidence.filter(\.confirmed).count
-                    Text("Read-back evidence: \(confirmed) of \(row.event.evidence.count) checks confirmed against the live home.")
-                        .font(.system(size: 12, weight: .semibold))
-                    EvidenceRows(evidence: row.event.evidence)
+                if row.verdict == .undone {
+                    // The revert's own read-back, linked to the original: the
+                    // undo's evidence lives on the revert, not the undone event.
+                    Section("Reverted by \(row.revertTitle ?? "a paired revert")") {
+                        if row.revertEvidence.isEmpty {
+                            Text("The revert's read-back is available while its proposal is in memory.")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            evidenceRows(row.revertEvidence)
+                        }
+                    }
                 }
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
-            }
-            if let failure {
-                UndoFailureBlock(failure: failure, onDismiss: onDismissFailure)
-            }
-            HStack(spacing: 8) {
-                if row.undoAvailable {
-                    ActionButton(title: "Undo", style: .primary, action: onUndo)
+                if !row.event.evidence.isEmpty {
+                    Section("Read-back evidence") {
+                        let confirmed = row.event.evidence.filter(\.confirmed).count
+                        LabeledContent("Confirmed", value: "\(confirmed) of \(row.event.evidence.count) checks")
+                        evidenceRows(row.event.evidence)
+                    }
                 }
-                ActionButton(title: "Close", style: .ghost) { dismiss() }
+                if let failure {
+                    Section("Undo blocked") {
+                        Text(failure.message)
+                            .font(.callout)
+                            .foregroundStyle(.red)
+                        ForEach(Array(failure.divergences.enumerated()), id: \.offset) { _, item in
+                            Label("\(item.claim) — \(item.observed)", systemImage: "xmark.circle")
+                                .foregroundStyle(.red)
+                        }
+                        Button("Dismiss") {
+                            onDismissFailure()
+                            dismiss()
+                        }
+                    }
+                }
             }
-            .padding(.top, 4)
-            Spacer()
+            .navigationTitle(row.event.proposalTitle)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    if row.undoAvailable {
+                        Button("Undo", systemImage: "arrow.uturn.backward") {
+                            onUndo()
+                        }
+                    } else {
+                        Button("Done") { dismiss() }
+                    }
+                }
+            }
         }
-        .padding(20)
         .presentationDetents([.medium, .large])
     }
-}
 
-/// The ✓/✗ claim-observed rows every evidence block shares.
-private struct EvidenceRows: View {
-    let evidence: [ProposalEvidence]
-
-    var body: some View {
+    @ViewBuilder
+    private func evidenceRows(_ evidence: [ProposalEvidence]) -> some View {
         ForEach(Array(evidence.enumerated()), id: \.offset) { _, item in
-            HStack(alignment: .top, spacing: 6) {
-                Text(item.confirmed ? "✓" : "✗")
-                    .foregroundStyle(item.confirmed ? NilesTheme.good : NilesTheme.destructive)
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: item.confirmed ? "checkmark.circle" : "xmark.circle")
+                    .foregroundStyle(item.confirmed ? Color.green : Color.red)
                 Text("\(item.claim) — \(item.observed)")
             }
-            .font(.system(size: 12))
         }
     }
 }
