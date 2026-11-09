@@ -1,67 +1,166 @@
 import SwiftUI
+import NilesCore
 
-/// Detail sheet for one proposal: full diff including context lines, evidence
-/// note, and the verdict buttons. Destructive proposals show Approve here too
-/// — they approve with a standard tap everywhere (user decision Nov 9), with
-/// a danger-styled Deny; severity is carried by the copy and the evidence.
+/// Detail sheet for one proposal: the full diff including context lines, the
+/// structured read-back evidence, and the verdict buttons. Destructive
+/// proposals show Approve here too — they approve with a standard tap
+/// everywhere (user decision Nov 9); severity is carried by the warning
+/// glyph and the evidence copy. Executed proposals that still offer Undo
+/// carry the Undo action, and a conflicted undo renders its divergences as a
+/// native error list — nothing was changed.
 struct ProposalDetailSheet: View {
     let proposal: NilesProposal
+    var undoState: UndoState?
     var onApprove: () -> Void = {}
     var onDeny: () -> Void = {}
+    var onUndo: () -> Void = {}
 
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(proposal.title)
-                .font(.system(size: 18, weight: .bold))
-            ToolChip(text: "\(proposal.tool) · proposal \(proposal.id) · \(proposal.agentName)")
-            DiffLineList(lines: proposal.diff + proposal.context)
-            // Read-back evidence: structured, one row per check. Pending
-            // proposals carry none yet — say what will appear instead of
-            // rendering an empty block.
-            if proposal.evidence.isEmpty {
-                Text(Self.pendingEvidenceNote)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .padding(10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
-            } else {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Read-back evidence: \(proposal.evidence.filter(\.confirmed).count) of \(proposal.evidence.count) checks confirmed against the live home.")
-                        .font(.system(size: 12, weight: .semibold))
-                    ForEach(Array(proposal.evidence.enumerated()), id: \.offset) { _, item in
-                        HStack(alignment: .top, spacing: 6) {
-                            Text(item.confirmed ? "✓" : "✗")
-                                .foregroundStyle(item.confirmed ? NilesTheme.good : NilesTheme.destructive)
-                            Text("\(item.claim) — \(item.observed)")
-                        }
-                        .font(.system(size: 12))
+        NavigationStack {
+            List {
+                Section("Summary") {
+                    LabeledContent("Tool", value: proposal.tool)
+                    LabeledContent("Proposal", value: proposal.id)
+                    LabeledContent("Agent", value: proposal.agentName)
+                }
+                if !proposal.diff.isEmpty || !proposal.context.isEmpty {
+                    Section("Changes") {
+                        DiffLineList(lines: proposal.diff + proposal.context)
+                            .listRowInsets(EdgeInsets())
+                            .listRowBackground(Color.clear)
                     }
                 }
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
+                evidenceSection
+                undoSection
             }
-            HStack(spacing: 8) {
-                ActionButton(title: "Approve", style: .primary) {
-                    onApprove()
-                    dismiss()
-                }
-                .disabled(!proposal.isPending)
-                ActionButton(title: "Deny", style: proposal.isDestructive ? .danger : .ghost) {
-                    onDeny()
-                    dismiss()
-                }
-                .disabled(!proposal.isPending)
-                ActionButton(title: "Close", style: .ghost) { dismiss() }
+            .navigationTitle("Proposal")
+            .navigationBarTitleDisplayMode(.inline)
+            .safeAreaInset(edge: .bottom) {
+                verdictButtons
             }
-            .padding(.top, 4)
-            Spacer()
         }
-        .padding(20)
         .presentationDetents([.medium, .large])
+    }
+
+    // MARK: - Sections
+
+    /// Read-back evidence as a plain list — what each change claimed, what
+    /// the home actually showed, and whether they agree. Pending proposals
+    /// carry none yet — say what will appear instead of an empty block.
+    @ViewBuilder
+    private var evidenceSection: some View {
+        Section {
+            if proposal.evidence.isEmpty {
+                Text(Self.pendingEvidenceNote)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(Array(proposal.evidence.enumerated()), id: \.offset) { _, item in
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: item.confirmed ? "checkmark.circle.fill" : "xmark.circle.fill")
+                            .foregroundStyle(item.confirmed ? Color.green : Color.red)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(item.claim)
+                                .font(.subheadline)
+                            Text(item.observed)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+        } header: {
+            Text("Read-back evidence")
+        } footer: {
+            if !proposal.evidence.isEmpty {
+                Text("\(proposal.evidence.filter(\.confirmed).count) of \(proposal.evidence.count) checks confirmed against the live home.")
+            }
+        }
+    }
+
+    /// Undo — offered only when the store says this executed proposal can
+    /// still revert. A conflicted undo renders its divergences inline as a
+    /// native error list: what execution produced, what the home shows now.
+    @ViewBuilder
+    private var undoSection: some View {
+        if let undoState {
+            Section {
+                Button {
+                    onUndo()
+                } label: {
+                    HStack {
+                        Label("Undo this change", systemImage: "arrow.uturn.backward")
+                        if undoState == .inFlight {
+                            Spacer()
+                            ProgressView()
+                        }
+                    }
+                }
+                .disabled(undoState == .inFlight)
+
+                if case .conflict(let divergences) = undoState {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(Color.red)
+                        Text("Can't undo — the home changed since this ran. Nothing was changed.")
+                            .font(.callout)
+                            .foregroundStyle(Color.red)
+                    }
+                    ForEach(Array(divergences.enumerated()), id: \.offset) { _, divergence in
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(Color.red)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(divergence.claim)
+                                    .font(.subheadline)
+                                Text(divergence.observed)
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+                if undoState == .notRevertable {
+                    Text("No revert is available for this change.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Undo")
+            }
+        }
+    }
+
+    // MARK: - Verdicts
+
+    /// Deny (destructive role) and Approve (prominent) as standard bordered
+    /// buttons over a bar material; disabled once the proposal is past
+    /// staging. Dismissal itself is the sheet's native drag gesture.
+    private var verdictButtons: some View {
+        HStack(spacing: 12) {
+            Button(role: .destructive) {
+                onDeny()
+                dismiss()
+            } label: {
+                Text("Deny")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            Button {
+                onApprove()
+                dismiss()
+            } label: {
+                Text("Approve")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .disabled(!proposal.isPending)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+        .background(.bar)
     }
 
     /// Shown in place of the evidence block while nothing has executed —
@@ -80,4 +179,17 @@ struct ProposalDetailSheet: View {
 
 #Preview("Detail — destructive delete") {
     ProposalDetailSheet(proposal: InMemoryNilesStore().proposals[2])
+}
+
+#Preview("Detail — conflicted undo") {
+    ProposalDetailSheet(
+        proposal: InMemoryNilesStore().proposals[2],
+        undoState: .conflict([
+            ProposalEvidence(
+                claim: "Room “Studio” exists",
+                observed: "No room named “Studio” exists — it was deleted after execution",
+                confirmed: false
+            ),
+        ])
+    )
 }
