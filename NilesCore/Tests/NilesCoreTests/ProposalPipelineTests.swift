@@ -190,17 +190,16 @@ import Testing
 
         /// True once a `setZoneRooms` perform is suspended in the gate.
         var gateHit: Bool {
-            lock.lock()
-            defer { lock.unlock() }
-            return hit
+            lock.withLock { hit }
         }
 
         func perform(_ operation: HomeKitOperation) async throws -> String? {
             if case .setZoneRooms = operation {
-                lock.lock()
-                let shouldWait = armed
-                if shouldWait { armed = false; hit = true }
-                lock.unlock()
+                let shouldWait = lock.withLock { () -> Bool in
+                    let shouldWait = armed
+                    if shouldWait { armed = false; hit = true }
+                    return shouldWait
+                }
                 if shouldWait {
                     await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
                         lock.lock()
