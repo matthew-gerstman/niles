@@ -375,17 +375,17 @@ import Testing
         #expect(text.contains("get_proposal"))
     }
 
-    @Test func toolSurfaceIsSixReadsAndTenWrites() async throws {
+    @Test func toolSurfaceIsSixReadsAndFourteenWrites() async throws {
         let (_, store, _, _) = makeContext()
         let reads = ReadToolRegistry(service: await store.homeKit)
         let writes = WriteToolRegistry(store: store)
 
         #expect(reads.tools.count == 6)
-        #expect(writes.tools.count == 10)
+        #expect(writes.tools.count == 14)
         #expect(reads.toolNames.isDisjoint(with: writes.toolNames))
-        // Destructive hints land on exactly the two delete tools.
+        // Destructive hints land on exactly the three delete tools.
         let destructive = writes.tools.filter { $0.annotations.destructiveHint == true }
-        #expect(Set(destructive.map(\.name)) == ["delete_room", "delete_service_group"])
+        #expect(Set(destructive.map(\.name)) == ["delete_room", "delete_service_group", "delete_trigger"])
     }
 
     @MainActor
