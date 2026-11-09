@@ -14,7 +14,8 @@ public struct ActivityEvent: Codable, Sendable, Equatable, Identifiable {
         case executed
         /// The proposal expired without a decision; nothing ran.
         case expired
-        /// A decision was undone inside its grace window; nothing applied.
+        /// A paired-revert undo executed: the original change had applied and
+        /// the revert restored the prior state (`revertsProposalId` links to it).
         case undone
     }
 
@@ -82,7 +83,9 @@ public actor ActivityLog {
         events = Self.read(from: fileURL, decoder: decoder)
     }
 
-    public var fileURL: URL {
+    /// Pure over immutable state (`directory` is a let), so callable from
+    /// anywhere — including the nonisolated init, which reads it to reload.
+    public nonisolated var fileURL: URL {
         directory.appendingPathComponent(Self.fileName)
     }
 
