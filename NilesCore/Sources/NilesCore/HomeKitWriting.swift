@@ -80,11 +80,34 @@ public struct SceneActionKey: Hashable, Sendable {
     }
 }
 
+/// One event an agent proposes for an event trigger (the spec's `HMEvent`
+/// model). A trigger is one kind of event per member, never both.
+public enum TriggerEventSpec: Codable, Sendable, Equatable, Hashable {
+    /// A characteristic reaching a target value. `value` nil means the event
+    /// fires on any change of the characteristic.
+    case characteristic(accessoryId: String, characteristic: String, value: HomeKitValue?)
+    /// Presence evaluated by HomeKit itself (`HMPresenceEvent`): someone is
+    /// at home, or everyone is away. Never asks the app for location access.
+    case presence(atHome: Bool)
+
+    /// Whether this event fires when users arrive (vs. leave).
+    public var presenceAtHome: Bool? {
+        switch self {
+        case .characteristic: nil
+        case .presence(let atHome): atHome
+        }
+    }
+}
+
 /// One executable HomeKit mutation — the whole vocabulary an approval can
 /// run. Declarative tools stage minimal operations; the executor (the fake in
 /// tests, `HomeManagerHomeKitService` on device) applies them. Membership
 /// operations carry the already-diffed add/remove lists so approval never
 /// re-derives intent from a stale graph.
+///
+/// Trigger operations enforce the spec's locked rule: creation always adds a
+/// DISABLED trigger, and arming one is its own `setTriggerEnabled` operation
+/// — a separate proposal the human approves separately.
 public enum HomeKitOperation: Sendable, Equatable, Hashable {
     case addRoom(homeId: String, name: String)
     case renameRoom(homeId: String, roomId: String, to: String)
@@ -97,6 +120,13 @@ public enum HomeKitOperation: Sendable, Equatable, Hashable {
         homeId: String, groupId: String, addServiceIds: [String], removeServiceIds: [String]
     )
     case removeServiceGroup(homeId: String, groupId: String)
+    case addTimerTrigger(
+        homeId: String, name: String, fireDate: Date, recurrence: [String: Int], sceneId: String?
+    )
+    case addEventTrigger(homeId: String, name: String, events: [TriggerEventSpec], sceneId: String?)
+    case setTriggerEnabled(homeId: String, triggerId: String, enabled: Bool)
+    case updateTimerTrigger(homeId: String, triggerId: String, fireDate: Date, recurrence: [String: Int])
+    case removeTrigger(homeId: String, triggerId: String)
 }
 
 /// Read access plus the mutation vocabulary proposals execute.

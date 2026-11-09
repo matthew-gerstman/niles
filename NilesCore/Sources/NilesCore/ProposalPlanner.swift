@@ -12,6 +12,7 @@ public enum ProposalPlanner {
         case unknownZone(String)
         case unknownScene(String)
         case unknownServiceGroup(String)
+        case unknownTrigger(String)
         case unknownAccessory(id: String, home: String)
         case unknownService(String)
         case duplicateName(kind: String, name: String, home: String)
@@ -32,6 +33,8 @@ public enum ProposalPlanner {
                 "No scene with id \(id). Call get_scenes first."
             case .unknownServiceGroup(let id):
                 "No service group with id \(id). Call get_service_groups first."
+            case .unknownTrigger(let id):
+                "No trigger with id \(id). Call get_triggers first."
             case .unknownAccessory(let id, let home):
                 "No accessory with id \(id) in home “\(home)”."
             case .unknownService(let id):
@@ -68,6 +71,22 @@ public enum ProposalPlanner {
             return try setServiceGroupMembers(groupId: groupId, serviceIds: serviceIds, graph: graph)
         case .deleteServiceGroup(let groupId):
             return try deleteServiceGroup(groupId: groupId, graph: graph)
+        case .createTimerTrigger(let homeId, let name, let fireDate, let recurrence, let sceneId):
+            return try createTimerTrigger(
+                homeId: homeId, name: name, fireDate: fireDate, recurrence: recurrence ?? [:],
+                sceneId: sceneId, graph: graph
+            )
+        case .createEventTrigger(let homeId, let name, let events, let sceneId):
+            return try createEventTrigger(
+                homeId: homeId, name: name, events: events, sceneId: sceneId, graph: graph
+            )
+        case .setTriggerState(let triggerId, let enabled, let fireDate, let recurrence):
+            return try setTriggerState(
+                triggerId: triggerId, enabled: enabled, fireDate: fireDate,
+                recurrence: recurrence, graph: graph
+            )
+        case .deleteTrigger(let triggerId):
+            return try deleteTrigger(triggerId: triggerId, graph: graph)
         }
     }
 
@@ -440,6 +459,168 @@ public enum ProposalPlanner {
         )
     }
 
+    // MARK: - Triggers
+
+    /// Spec locked decision: creation NEVER arms. Every trigger this tool
+    /// adds lands disabled; enabling is `set_trigger_state`, which stages
+    /// its own separately-approved proposal. An agent can therefore never
+    /// silently flip an automation on.
+
+    private static func createTimerTrigger(
+        homeId: String, name: String, fireDate: Date, recurrence: [String: Int],
+        sceneId: String?, graph: HomeGraph
+    ) throws -> Plan {
+        let trimmed = try requiredName(name, kind: "trigger")
+        let home = try self.home(id: homeId, in: graph)
+        let scene = try sceneReference(sceneId, in: home)
+
+        var card: [ProposalCardLine] = [
+            ProposalCardLine(.add, "Timer trigger “\(trimmed)” · created DISABLED"),
+            ProposalCardLine(.plain, timerLine(fireDate: fireDate, recurrence: recurrence)),
+        ]
+        if let scene { card.append(ProposalCardLine(.plain, "Runs scene “\(scene.name)” when it fires.")) }
+        card.append(ProposalCardLine(
+            .note, "⚠ Created disabled — arming it takes a separate set_trigger_state approval."
+        ))
+
+        return Plan(
+            tool: "create_timer_trigger",
+            title: "Create timer trigger “\(trimmed)”",
+            summary: "Create timer trigger “\(trimmed)” (disabled)",
+            isDestructive: false,
+            operations: [.addTimerTrigger(
+                homeId: home.id, name: trimmed, fireDate: fireDate, recurrence: recurrence, sceneId: scene?.id
+            )],
+            entries: [ProposalDiffEntry(
+                object: ProposalObjectRef(kind: .trigger, id: "", name: trimmed),
+                op: .create,
+                before: nil,
+                after: "disabled"
+            )],
+            card: card
+        )
+    }
+
+    private static func createEventTrigger(
+        homeId: String, name: String, events: [TriggerEventSpec], sceneId: String?, graph: HomeGraph
+    ) throws -> Plan {
+        let trimmed = try requiredName(name, kind: "trigger")
+        let home = try self.home(id: homeId, in: graph)
+        let scene = try sceneReference(sceneId, in: home)
+        try validate(events: events, home: home)
+
+        var card: [ProposalCardLine] = [
+            ProposalCardLine(.add, "Event trigger “\(trimmed)” · created DISABLED"),
+        ]
+        card += events.map { ProposalCardLine(.plain, "Fires \($0.description(in: home))") }
+        if let scene { card.append(ProposalCardLine(.plain, "Runs scene “\(scene.name)” when it fires.")) }
+        card.append(ProposalCardLine(
+            .note, "⚠ Created disabled — arming it takes a separate set_trigger_state approval."
+        ))
+
+        return Plan(
+            tool: "create_event_trigger",
+            title: "Create event trigger “\(trimmed)”",
+            summary: "Create event trigger “\(trimmed)” (disabled)",
+            isDestructive: false,
+            operations: [.addEventTrigger(
+                homeId: home.id, name: trimmed, events: events, sceneId: scene?.id
+            )],
+            entries: [ProposalDiffEntry(
+                object: ProposalObjectRef(kind: .trigger, id: "", name: trimmed),
+                op: .create,
+                before: nil,
+                after: "disabled"
+            )],
+            card: card
+        )
+    }
+
+    private static func setTriggerState(
+        triggerId: String, enabled: Bool, fireDate: Date?, recurrence: [String: Int]?,
+        graph: HomeGraph
+    ) throws -> Plan {
+        let (home, trigger) = try self.trigger(id: triggerId, in: graph)
+        if trigger.isEnabled == enabled {
+            throw PlannerError.noChange("trigger “\(trigger.name)” is already \(enabled ? "enabled" : "disabled").")
+        }
+        // Schedule updates ride the timer trigger only; an event trigger has
+        // no fire date to update.
+        if fireDate != nil || recurrence != nil, case .event = trigger.detail {
+            throw PlannerError.invalidInput(
+                "Trigger “\(trigger.name)” is an event trigger; fireDate and recurrence apply to timer triggers."
+            )
+        }
+
+        let from = trigger.isEnabled ? "enabled" : "disabled"
+        let to = enabled ? "enabled" : "disabled"
+        var card: [ProposalCardLine] = [
+            ProposalCardLine(enabled ? .add : .remove, "Trigger “\(trigger.name)” · \(from) → \(to)")
+        ]
+        if let fireDate, case .timer = trigger.detail {
+            card.append(ProposalCardLine(.plain, timerLine(fireDate: fireDate, recurrence: recurrence ?? [:])))
+        }
+        if enabled {
+            // The locked rule the card must make visible: this is the arm
+            // step, always its own approval after the one that created it.
+            card.append(ProposalCardLine(
+                .note, "⚠ Arming an automation — it will run on its own once approved."
+            ))
+        }
+
+        // Arming (or disarming) is always its own operation, and a timer
+        // whose fire date moves rides the same proposal as a second op.
+        var operations: [HomeKitOperation] = [
+            .setTriggerEnabled(homeId: home.id, triggerId: trigger.id, enabled: enabled)
+        ]
+        if case .timer = trigger.detail, fireDate != nil || recurrence != nil {
+            operations.append(.updateTimerTrigger(
+                homeId: home.id, triggerId: trigger.id,
+                fireDate: fireDate ?? timerFireDate(of: trigger),
+                recurrence: recurrence ?? timerRecurrence(of: trigger)
+            ))
+        }
+
+        return Plan(
+            tool: "set_trigger_state",
+            title: "\(enabled ? "Enable" : "Disable") trigger “\(trigger.name)”",
+            summary: "\(enabled ? "Enable" : "Disable") trigger “\(trigger.name)”",
+            isDestructive: false,
+            operations: operations,
+            entries: [ProposalDiffEntry(
+                object: ProposalObjectRef(kind: .trigger, id: trigger.id, name: trigger.name),
+                op: .update,
+                before: from,
+                after: to
+            )],
+            card: card
+        )
+    }
+
+    private static func deleteTrigger(triggerId: String, graph: HomeGraph) throws -> Plan {
+        let (home, trigger) = try self.trigger(id: triggerId, in: graph)
+        return Plan(
+            tool: "delete_trigger",
+            title: "Delete trigger “\(trigger.name)”",
+            summary: "Delete trigger “\(trigger.name)”",
+            isDestructive: true,
+            operations: [.removeTrigger(homeId: home.id, triggerId: trigger.id)],
+            entries: [ProposalDiffEntry(
+                object: ProposalObjectRef(kind: .trigger, id: trigger.id, name: trigger.name),
+                op: .delete,
+                before: trigger.name,
+                after: nil
+            )],
+            card: [
+                ProposalCardLine(.remove, "Trigger “\(trigger.name)” · deleted"),
+                // Spec risk: a silently-disabled automation looks healthy
+                // until it fails to fire. Deletion is louder, but the card
+                // still says what stops existing.
+                ProposalCardLine(.plain, "The automation stops firing immediately — visible to the Home app and Siri."),
+            ]
+        )
+    }
+
     // MARK: - Shared helpers
 
     private static func home(id: String, in graph: HomeGraph) throws -> HomeGraph.Home {
@@ -481,6 +662,24 @@ public enum ProposalPlanner {
         throw PlannerError.unknownServiceGroup(id)
     }
 
+    private static func trigger(id: String, in graph: HomeGraph) throws -> (HomeGraph.Home, HomeGraph.Trigger) {
+        for home in graph.homes {
+            if let trigger = home.triggers.first(where: { $0.id == id }) { return (home, trigger) }
+        }
+        throw PlannerError.unknownTrigger(id)
+    }
+
+    /// A trigger runs an existing scene (HomeKit binds an action set to a
+    /// trigger); referencing one that does not exist in the same home is an
+    /// eager-validation failure, never a staged surprise.
+    private static func sceneReference(_ sceneId: String?, in home: HomeGraph.Home) throws -> HomeGraph.Scene? {
+        guard let sceneId, !sceneId.isEmpty else { return nil }
+        guard let scene = home.scenes.first(where: { $0.id == sceneId }) else {
+            throw PlannerError.unknownScene(sceneId)
+        }
+        return scene
+    }
+
     private static func roomName(id: String, home: HomeGraph.Home) -> String {
         room(id: id, in: home)?.name ?? id
     }
@@ -497,6 +696,51 @@ public enum ProposalPlanner {
         if names.contains(where: { $0.caseInsensitiveCompare(name) == .orderedSame }) {
             throw PlannerError.duplicateName(kind: kind, name: name, home: homeName)
         }
+    }
+
+    /// Eager per-event validation (spec): every proposed characteristic event
+    /// must reference an accessory that exists in the home today. All
+    /// failures are collected, so the agent fixes everything in one retry.
+    private static func validate(events: [TriggerEventSpec], home: HomeGraph.Home) throws {
+        let known = Set(home.rooms.flatMap { $0.accessories.map(\.id) })
+        var failures: [String] = []
+        for (index, event) in events.enumerated() {
+            guard case .characteristic(let accessoryId, _, _) = event else { continue }
+            if !known.contains(accessoryId) {
+                let error = PlannerError.unknownAccessory(id: accessoryId, home: home.name)
+                failures.append("Event \(index + 1): \(error.message)")
+            }
+        }
+        if !failures.isEmpty {
+            throw PlannerError.validationFailed(failures)
+        }
+    }
+
+    /// "fires 2026-11-09T07:30:00Z, repeating {hour: 7, minute: 30}".
+    private static func timerLine(fireDate: Date, recurrence: [String: Int]) -> String {
+        var line = "Fires \(ISOTimestamps.render(fireDate))"
+        if !recurrence.isEmpty {
+            line += ", repeating \(Self.recurrenceDescription(recurrence))"
+        }
+        return line
+    }
+
+    private static func recurrenceDescription(_ recurrence: [String: Int]) -> String {
+        let order = ["year", "month", "weekday", "day", "hour", "minute", "second"]
+        let parts = order
+            .compactMap { key -> String? in recurrence[key].map { "\(key): \($0)" } }
+            .joined(separator: ", ")
+        return "{\(parts)}"
+    }
+
+    private static func timerFireDate(of trigger: HomeGraph.Trigger) -> Date {
+        if case .timer(let fireDate, _) = trigger.detail { return fireDate }
+        return Date()
+    }
+
+    private static func timerRecurrence(of trigger: HomeGraph.Trigger) -> [String: Int] {
+        if case .timer(_, let recurrence) = trigger.detail { return recurrence }
+        return [:]
     }
 
     /// Eager per-action validation (spec): every proposed scene action must
@@ -547,6 +791,25 @@ public enum ProposalPlanner {
             }
         }
         return type
+    }
+}
+
+/// Display names for proposed events, rendered against the current graph.
+extension TriggerEventSpec {
+    /// Human line for a review card: "Lamp B Brightness reaches 0",
+    /// "someone arrives home".
+    func description(in home: HomeGraph.Home) -> String {
+        switch self {
+        case .characteristic(let accessoryId, let characteristic, let value):
+            let accessory = home.rooms.flatMap { $0.accessories }
+                .first { $0.id == accessoryId }?.name ?? accessoryId
+            if let value {
+                return "\(accessory) \(characteristic) reaches \(value.rendered)"
+            }
+            return "\(accessory) \(characteristic) changes"
+        case .presence(let atHome):
+            return atHome ? "someone arrives home" : "everyone is away"
+        }
     }
 }
 

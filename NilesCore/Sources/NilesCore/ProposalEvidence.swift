@@ -128,7 +128,97 @@ public enum ProposalEvidenceCollector {
                 observed: stillPresent ? "Group still present — delete did not take effect" : "No service group with id \(groupId) remains",
                 confirmed: !stillPresent
             )
+
+        case .addTimerTrigger(_, let name, let fireDate, let recurrence, let sceneId):
+            return triggerCreatedEvidence(
+                claim: "Timer trigger “\(name)” exists (disabled)",
+                name: name, sceneId: sceneId, graph: graph
+            )
+
+        case .addEventTrigger(_, let name, _, let sceneId):
+            return triggerCreatedEvidence(
+                claim: "Event trigger “\(name)” exists (disabled)",
+                name: name, sceneId: sceneId, graph: graph
+            )
+
+        case .setTriggerEnabled(_, let triggerId, let enabled):
+            return triggerStateEvidence(triggerId: triggerId, expected: enabled, graph: graph)
+
+        case .updateTimerTrigger(_, let triggerId, let fireDate, let recurrence):
+            guard let trigger = graph.homes.flatMap(\.triggers).first(where: { $0.id == triggerId }) else {
+                return ProposalEvidence(
+                    claim: "Timer trigger \(triggerId) schedule updated",
+                    observed: "Trigger \(triggerId) not found after execution",
+                    confirmed: false
+                )
+            }
+            guard case .timer(let observedDate, let observedRecurrence) = trigger.detail else {
+                return ProposalEvidence(
+                    claim: "Timer trigger \(triggerId) schedule updated",
+                    observed: "Trigger “\(trigger.name)” is no longer a timer trigger",
+                    confirmed: false
+                )
+            }
+            let confirmed = observedDate == fireDate && observedRecurrence == recurrence
+            return ProposalEvidence(
+                claim: "Timer trigger \(triggerId) schedule updated",
+                observed: confirmed
+                    ? "Trigger “\(trigger.name)” now fires \(ISOTimestamps.render(observedDate))"
+                    : "Trigger “\(trigger.name)” shows a different schedule after execution",
+                confirmed: confirmed
+            )
+
+        case .removeTrigger(_, let triggerId):
+            let stillPresent = contains(triggerId, in: graph.homes.flatMap(\.triggers).map(\.id))
+            return ProposalEvidence(
+                claim: "Trigger \(triggerId) is deleted",
+                observed: stillPresent ? "Trigger still present — delete did not take effect" : "No trigger with id \(triggerId) remains",
+                confirmed: !stillPresent
+            )
         }
+    }
+
+    /// Read-back for a created trigger: it must exist, still be disabled
+    /// (the locked rule — creation never arms), and any referenced scene
+    /// must exist in the same graph.
+    private static func triggerCreatedEvidence(
+        claim: String, name: String, sceneId: String?, graph: HomeGraph
+    ) -> ProposalEvidence {
+        let trigger = graph.homes.flatMap(\.triggers).first { $0.name == name }
+        let scenePresent = sceneId.map { id in
+            graph.homes.flatMap(\.scenes).contains { $0.id == id }
+        } ?? true
+        let confirmed = trigger != nil && trigger?.isEnabled == false && scenePresent
+        var observed: String
+        if let trigger {
+            observed = trigger.isEnabled
+                ? "Trigger “\(trigger.name)” exists but is ENABLED — creation must never arm"
+                : "Trigger “\(trigger.name)” exists and is disabled"
+        } else {
+            observed = "Trigger “\(name)” not found after execution"
+        }
+        if trigger != nil, let sceneId, !scenePresent {
+            observed += "; scene \(sceneId) not found"
+        }
+        return ProposalEvidence(claim: claim, observed: observed, confirmed: confirmed)
+    }
+
+    private static func triggerStateEvidence(
+        triggerId: String, expected: Bool, graph: HomeGraph
+    ) -> ProposalEvidence {
+        guard let trigger = graph.homes.flatMap(\.triggers).first(where: { $0.id == triggerId }) else {
+            return ProposalEvidence(
+                claim: "Trigger \(triggerId) is \(expected ? "enabled" : "disabled")",
+                observed: "Trigger \(triggerId) not found after execution",
+                confirmed: false
+            )
+        }
+        let confirmed = trigger.isEnabled == expected
+        return ProposalEvidence(
+            claim: "Trigger \(triggerId) is \(expected ? "enabled" : "disabled")",
+            observed: "Trigger “\(trigger.name)” is now \(trigger.isEnabled ? "enabled" : "disabled")",
+            confirmed: confirmed
+        )
     }
 
     /// Ids are globally unique across homes, so a flat membership check is exact.

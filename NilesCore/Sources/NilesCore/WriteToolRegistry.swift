@@ -1,7 +1,7 @@
 import Foundation
 import MCP
 
-/// The mutating MCP tools: nine declarative write tools plus the
+/// The mutating MCP tools: thirteen declarative write tools plus the
 /// `get_proposal` poll. None of them touches HomeKit — a call plans the
 /// request against the current graph and stages exactly one proposal
 /// (spec: "one agent request is always exactly one approval card"); the
@@ -157,6 +157,64 @@ public struct WriteToolRegistry: Sendable {
             annotations: Tool.Annotations(readOnlyHint: false, destructiveHint: true)
         ),
         Tool(
+            name: "create_timer_trigger",
+            description: "Create a timer automation (HomeKit HMTimerTrigger) with a fire date and optional recurrence. Created DISABLED — arming it requires a separate set_trigger_state approval, so an automation can never silently start running. Optionally runs an existing scene (sceneId from get_scenes). STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            inputSchema: objectSchema(
+                [
+                    "homeId": stringProperty("The home to create the trigger in (from get_homes)."),
+                    "name": stringProperty("The new trigger's name."),
+                    "fireDate": stringProperty("First fire time, ISO-8601, e.g. 2026-11-09T07:30:00Z."),
+                    "recurrence": .object([
+                        "type": .string("object"),
+                        "description": .string("Optional repeat rule as date components, e.g. {\"weekday\": 1, \"hour\": 7, \"minute\": 30}. Omit for a one-shot trigger."),
+                    ]),
+                    "sceneId": stringProperty("Optional scene the trigger runs when it fires (from get_scenes)."),
+                ],
+                required: ["homeId", "name", "fireDate"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false)
+        ),
+        Tool(
+            name: "create_event_trigger",
+            description: "Create an event automation (HomeKit HMEventTrigger): characteristic events and/or presence events (atHome/away — presence is evaluated by HomeKit itself, no location access). Created DISABLED — arming it requires a separate set_trigger_state approval. Optionally runs an existing scene (sceneId from get_scenes). STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            inputSchema: objectSchema(
+                [
+                    "homeId": stringProperty("The home to create the trigger in (from get_homes)."),
+                    "name": stringProperty("The new trigger's name."),
+                    "events": triggerEventsProperty,
+                    "sceneId": stringProperty("Optional scene the trigger runs when it fires (from get_scenes)."),
+                ],
+                required: ["homeId", "name", "events"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false)
+        ),
+        Tool(
+            name: "set_trigger_state",
+            description: "Enable or disable an automation trigger — the arm/disarm step. Enabling is ALWAYS a separate proposal from creating the trigger: an agent can never silently flip an automation on. Also moves a timer trigger's fireDate/recurrence in the same approval. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            inputSchema: objectSchema(
+                [
+                    "triggerId": stringProperty("The trigger to update (from get_triggers)."),
+                    "enabled": .object(["type": .string("boolean"), "description": .string("true to arm, false to disarm.")]),
+                    "fireDate": stringProperty("Optional new first fire time, ISO-8601 (timer triggers only)."),
+                    "recurrence": .object([
+                        "type": .string("object"),
+                        "description": .string("Optional new repeat rule as date components (timer triggers only)."),
+                    ]),
+                ],
+                required: ["triggerId", "enabled"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false)
+        ),
+        Tool(
+            name: "delete_trigger",
+            description: "Delete an automation trigger — it stops firing immediately. DESTRUCTIVE. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            inputSchema: objectSchema(
+                ["triggerId": stringProperty("The trigger to delete (from get_triggers).")],
+                required: ["triggerId"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false, destructiveHint: true)
+        ),
+        Tool(
             name: "get_proposal",
             description: "Read one proposal's current state: staged/approved/executed/denied/expired/failed, its diff, the recorded evidence after execution, or the error if execution failed. Call this after staging any write to learn the outcome.",
             inputSchema: objectSchema(
@@ -191,6 +249,34 @@ public struct WriteToolRegistry: Sendable {
             "required": .array([.string("accessoryId"), .string("characteristic"), .string("value")]),
         ]),
         "description": .string("Every characteristic write the scene should perform."),
+    ])
+
+    private static let triggerEventsProperty: Value = .object([
+        "type": .string("array"),
+        "items": .object([
+            "type": .string("object"),
+            "description": .string(
+                "Either a characteristic event {accessoryId, characteristic, value?} — value omitted means the event fires on any change — or a presence event {presence: \"atHome\" | \"away\"}."
+            ),
+            "properties": .object([
+                "accessoryId": .object([
+                    "type": .string("string"),
+                    "description": .string("The accessory whose characteristic is watched (from get_rooms)."),
+                ]),
+                "characteristic": .object([
+                    "type": .string("string"),
+                    "description": .string("The characteristic type to watch, e.g. On or MotionDetected."),
+                ]),
+                "value": .object([
+                    "description": .string("Optional threshold value: number, string, or boolean."),
+                ]),
+                "presence": .object([
+                    "type": .string("string"),
+                    "description": .string("\"atHome\" or \"away\" — HomeKit evaluates presence itself; Niles never requests location access."),
+                ]),
+            ]),
+        ]),
+        "description": .string("Every event that can activate the trigger."),
     ])
 
     private static func objectSchema(_ properties: [String: Value], required: [String]) -> Value {
