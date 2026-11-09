@@ -108,6 +108,9 @@ public struct Proposal: Identifiable, Codable, Sendable, Equatable {
     public internal(set) var state: ProposalState
     public internal(set) var evidence: [ProposalEvidence]
     public internal(set) var error: String?
+    /// Set on a revert proposal: the id of the executed proposal this
+    /// proposal's operations undo. Nil for every normally staged proposal.
+    public internal(set) var revertsProposalId: String? = nil
 
     public init(
         id: String,

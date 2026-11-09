@@ -556,6 +556,11 @@ public struct WriteToolRegistry: Sendable {
                 "Proposal \(id) is \(state.rawValue), not pending."
             case .homeReadFailed(let detail):
                 "Failed to read the home graph: \(detail)"
+            case .notRevertable(let id):
+                "Proposal \(id) cannot be undone — it has no paired revert (scene execution has no inverse, it never executed, or it was already undone)."
+            case .undoConflict(let id, let divergences):
+                "Proposal \(id) cannot be undone — the home has changed since it was applied, so the revert would not be safe. Nothing was changed. Divergences: "
+                    + divergences.map { "\($0.claim): \($0.observed)" }.joined(separator: "; ")
             }
         case let plannerError as ProposalPlanner.PlannerError:
             "Nothing was staged: \(plannerError.message)"
