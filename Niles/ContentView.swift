@@ -15,7 +15,14 @@ struct ContentView: View {
         var id: String { rawValue }
     }
 
-    @State private var selectedTab: NilesTab = .queue
+    @State private var selectedTab: NilesTab = {
+    // Test/screenshot hook: `simctl launch ... -UITabSelect activity` opens a
+    // given tab so per-tab captures don't need UI automation.
+    if let arg = ProcessInfo.processInfo.arguments.firstMatch(of: /-UITabSelect (\w+)/) {
+        return NilesTab(rawValue: String(arg.1)) ?? .queue
+    }
+    return .queue
+}()
 
     init(store: LiveNilesStore) {
         _store = State(initialValue: store)
