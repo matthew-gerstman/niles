@@ -358,20 +358,36 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, HomeGraphViewMod
     /// destructive included. Undo afterwards is per-item, each with its
     /// own conflict check.
     func approveAll() {
-        Task { await approveAllAndWait() }
+        guard let store = coordinator.proposalStore else {
+            logger.error("Cannot approve all: no proposal store")
+            return
+        }
+        let stagedIds = beginApproveAllBatch()
+        guard !stagedIds.isEmpty else { return }
+        Task { await approveAllBatch(on: store, clearing: stagedIds) }
     }
 
+    /// Awaitable batch path — what the tap task spawns; tests await it
+    /// directly.
     func approveAllAndWait() async {
         guard let store = coordinator.proposalStore else {
             logger.error("Cannot approve all: no proposal store")
             return
         }
-        // Optimistic batch feedback, same contract as the single tap: every
-        // staged row shows its in-progress chip on the next frame, one
-        // success haptic fires for the whole batch, and the button cannot
-        // re-enter while the batch runs.
-        let stagedIds = proposals.filter(\.isPending).map(\.id)
+        let stagedIds = beginApproveAllBatch()
         guard !stagedIds.isEmpty else { return }
+        await approveAllBatch(on: store, clearing: stagedIds)
+    }
+
+    /// Optimistic batch feedback, applied synchronously before the pipeline
+    /// task is even spawned — same contract as the single tap: every staged
+    /// row shows its in-progress chip on the next frame, one success haptic
+    /// fires for the whole batch, and the button cannot re-enter while the
+    /// batch runs. Returns the staged ids whose chips must settle.
+    @discardableResult
+    private func beginApproveAllBatch() -> [String] {
+        let stagedIds = proposals.filter(\.isPending).map(\.id)
+        guard !stagedIds.isEmpty else { return stagedIds }
         for id in stagedIds {
             decisionsInFlight[id] = .approving
         }
@@ -379,6 +395,10 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, HomeGraphViewMod
         let haptic = UINotificationFeedbackGenerator()
         haptic.prepare()
         haptic.notificationOccurred(.success)
+        return stagedIds
+    }
+
+    private func approveAllBatch(on store: ProposalStore, clearing stagedIds: [String]) async {
         defer { isApprovingAll = false }
         do {
             let executed = try await store.approveAll()
