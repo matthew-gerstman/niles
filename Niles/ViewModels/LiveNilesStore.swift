@@ -36,7 +36,7 @@ struct DeviceHomeKitService: HomeKitWriting {
 /// polls on a short interval; every read is in-memory and cheap.
 @MainActor
 @Observable
-final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphViewModel, PairingViewModel {
+final class LiveNilesStore: DashboardViewModel, QueueViewModel, HomeGraphViewModel, PairingViewModel {
 
     // MARK: - DashboardViewModel
 
@@ -179,7 +179,7 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
         }
     }
 
-    // MARK: - ApprovalsViewModel
+    // MARK: - QueueViewModel
 
     /// Approves and executes the staged operations; the result (state,
     /// evidence, error) appears on the card at the next refresh.

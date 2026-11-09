@@ -1,4 +1,5 @@
 import SwiftUI
+import NilesCore
 
 /// Queue: the vertical proposal list, newest first — one row per proposal
 /// with its severity chip and one-line diff, inline Deny/Approve on staged
