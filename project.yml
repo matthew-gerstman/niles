@@ -49,6 +49,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.gerstman.niles
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # Team scoped to the app target: frameworks and tests stay unsigned, and
         # other contributors can override their own team without editing this file.
         DEVELOPMENT_TEAM: DVM2MJ6Z3Q
