@@ -10,7 +10,7 @@ final class NilesThemeTests: XCTestCase {
         for name in ["accent", "destructive", "good", "warn"] {
             for trait in [UITraitCollection(userInterfaceStyle: .light),
                           UITraitCollection(userInterfaceStyle: .dark)] {
-                let color = XCTUnwrap(
+                let color = try XCTUnwrap(
                     UIColor(named: name, in: .main, compatibleWith: trait),
                     "\(name) must resolve (\(trait.userInterfaceStyle) appearance)"
                 )
