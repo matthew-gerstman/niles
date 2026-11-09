@@ -141,7 +141,7 @@ private struct SwipeableHomeRow: View {
     private var drag: some Gesture {
         DragGesture(minimumDistance: 20)
             .onChanged { value in
-                Self.gestureLog.notice("swipe onChanged w=\(value.translation.width, format: .fixed(precision: 1), privacy: .public) h=\(value.translation.height, format: .fixed(precision: 1), privacy: .public)", privacy: .public)
+                Self.gestureLog.notice("swipe onChanged w=\(value.translation.width, format: .fixed(precision: 1), privacy: .public) h=\(value.translation.height, format: .fixed(precision: 1), privacy: .public)")
                 guard abs(value.translation.width) > abs(value.translation.height) else { return }
                 isDraggingRight = value.translation.width > 0
                 let clamped = min(abs(value.translation.width), 180)
@@ -149,7 +149,7 @@ private struct SwipeableHomeRow: View {
             }
             .onEnded { value in
                 defer { isDraggingRight = false }
-                Self.gestureLog.notice("swipe onEnded w=\(value.translation.width, format: .fixed(precision: 1), privacy: .public) h=\(value.translation.height, format: .fixed(precision: 1), privacy: .public) predicted=\(value.predictedEndTranslation.width, format: .fixed(precision: 1), privacy: .public)", privacy: .public)
+                Self.gestureLog.notice("swipe onEnded w=\(value.translation.width, format: .fixed(precision: 1), privacy: .public) h=\(value.translation.height, format: .fixed(precision: 1), privacy: .public) predicted=\(value.predictedEndTranslation.width, format: .fixed(precision: 1), privacy: .public)")
                 guard abs(value.translation.width) > abs(value.translation.height) else {
                     Self.gestureLog.error("swipe onEnded rejected: vertical drift", privacy: .public)
                     return
@@ -160,7 +160,7 @@ private struct SwipeableHomeRow: View {
                 if travel > 0 {
                     // Full swipe right: stage the primary action immediately.
                     if travel > stageThreshold, let action = row.primaryAction {
-                        Self.gestureLog.notice("swipe staging primary \(action.title, privacy: .public)", privacy: .public)
+                        Self.gestureLog.notice("swipe staging primary \(action.title, privacy: .public)")
                         stage(action)
                     }
                     close()
