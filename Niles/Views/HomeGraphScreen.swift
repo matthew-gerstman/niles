@@ -40,9 +40,9 @@ private struct HomeRowView: View {
         HStack(spacing: 12) {
             Image(systemName: row.systemImage)
                 .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(NilesTheme.brand)
+                .foregroundStyle(NilesTheme.accent)
                 .frame(width: 32, height: 32)
-                .background(NilesTheme.brand.opacity(0.1), in: RoundedRectangle(cornerRadius: 9))
+                .background(NilesTheme.accent.opacity(0.1), in: RoundedRectangle(cornerRadius: 9))
             VStack(alignment: .leading, spacing: 1) {
                 Text(row.name)
                     .font(.system(size: 15, weight: .semibold))

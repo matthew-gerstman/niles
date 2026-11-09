@@ -72,7 +72,7 @@ struct ProposalCard: View {
                     .foregroundStyle(chip.color)
             }
         }
-        .card(accent: proposal.isDestructive ? NilesTheme.bad : NilesTheme.brand)
+        .card(accent: proposal.isDestructive ? NilesTheme.destructive : NilesTheme.accent)
         .contentShape(Rectangle())
         .onTapGesture(perform: onOpenDetail)
     }
@@ -80,16 +80,16 @@ struct ProposalCard: View {
     private var statusChip: (text: String, color: Color)? {
         if let decision {
             switch decision {
-            case .approving: return ("Approving…", NilesTheme.brand)
-            case .denying: return ("Denying…", NilesTheme.bad)
+            case .approving: return ("Approving…", NilesTheme.accent)
+            case .denying: return ("Denying…", NilesTheme.destructive)
             }
         }
         switch proposal.state {
         case .staged, .approved: return nil
         case .executed: return ("Executed", NilesTheme.good)
-        case .denied: return ("Denied", NilesTheme.bad)
+        case .denied: return ("Denied", NilesTheme.destructive)
         case .expired: return ("Expired", NilesTheme.warn)
-        case .failed: return ("Failed", NilesTheme.bad)
+        case .failed: return ("Failed", NilesTheme.destructive)
         }
     }
 }

@@ -35,7 +35,7 @@ struct DashboardScreen: View {
                     set: { model.setServerRunning($0) }
                 ))
                 .labelsHidden()
-                .tint(NilesTheme.brand)
+                .tint(NilesTheme.accent)
             }
             .padding(.bottom, 10)
             KeyValueList(rows: [
@@ -63,7 +63,7 @@ struct DashboardScreen: View {
                 }
                 DiffLineList(lines: model.pendingProposals.flatMap(\.diff))
             }
-            .card(accent: NilesTheme.brand)
+            .card(accent: NilesTheme.accent)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
