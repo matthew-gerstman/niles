@@ -21,16 +21,19 @@ public actor MCPGateway {
 
     /// A connected MCP session, as the dashboard and pairing screens render it.
     /// Identity is the agent's own `clientInfo.name` from `initialize` when it
-    /// supplied one.
+    /// supplied one. `tokenId` is the paired agent whose bearer token created
+    /// the session — what revocation keys off.
     public struct SessionInfo: Sendable, Equatable {
         public let id: String
         public let clientName: String?
+        public let tokenId: UUID?
         public let startedAt: Date
         public let lastAccessedAt: Date
 
-        public init(id: String, clientName: String?, startedAt: Date, lastAccessedAt: Date) {
+        public init(id: String, clientName: String?, tokenId: UUID? = nil, startedAt: Date, lastAccessedAt: Date) {
             self.id = id
             self.clientName = clientName
+            self.tokenId = tokenId
             self.startedAt = startedAt
             self.lastAccessedAt = lastAccessedAt
         }
@@ -62,26 +65,35 @@ public actor MCPGateway {
         let transport: MCP.StatefulHTTPServerTransport
         let server: MCP.Server
         let clientName: String?
+        let tokenId: UUID?
         let startedAt: Date
         var lastAccessedAt: Date
     }
+
+    /// Resolves a bearer token to its paired-agent id, so a session records
+    /// which credential created it (revoke closes the session). `nil` when
+    /// unresolved — the session then simply has no revocable identity.
+    public typealias TokenIdentity = @Sendable (String) -> UUID?
 
     private let endpointPath: String
     private let serverFactory: ServerFactory
     private let validationPipeline: any MCP.HTTPRequestValidationPipeline
     private let auth: (any AuthChecking)?
+    private let tokenIdentity: TokenIdentity?
     private var sessions: [String: Session] = [:]
 
     public init(
         endpointPath: String = "/mcp",
         serverFactory: @escaping ServerFactory = MCPGateway.defaultServerFactory,
         validationPipeline: (any MCP.HTTPRequestValidationPipeline)? = MCPGateway.defaultValidationPipeline,
-        auth: (any AuthChecking)? = nil
+        auth: (any AuthChecking)? = nil,
+        tokenIdentity: TokenIdentity? = nil
     ) {
         self.endpointPath = endpointPath
         self.serverFactory = serverFactory
         self.validationPipeline = validationPipeline ?? MCPGateway.defaultValidationPipeline
         self.auth = auth
+        self.tokenIdentity = tokenIdentity
     }
 
     /// Routes one request: auth gate, path check, session routing, then MCP handling.
@@ -131,11 +143,28 @@ public actor MCPGateway {
                 SessionInfo(
                     id: id,
                     clientName: session.clientName,
+                    tokenId: session.tokenId,
                     startedAt: session.startedAt,
                     lastAccessedAt: session.lastAccessedAt
                 )
             }
             .sorted { $0.startedAt < $1.startedAt }
+    }
+
+    /// Disconnects every session bound to one paired agent's token — the
+    /// transport half of revocation. Returns how many live sessions closed.
+    /// Sessions leave the dictionary before the awaits so a reentrant request
+    /// never routes to a session that is being torn down.
+    @discardableResult
+    public func closeSessions(tokenId: UUID) async -> Int {
+        let bound = sessions.filter { $0.value.tokenId == tokenId }
+        for sessionID in bound.keys {
+            sessions.removeValue(forKey: sessionID)
+        }
+        for (_, session) in bound {
+            await session.transport.disconnect()
+        }
+        return bound.count
     }
 
     /// Disconnects every session's transport. The LAN server calls this when serving stops.
@@ -170,6 +199,7 @@ public actor MCPGateway {
                 transport: transport,
                 server: server,
                 clientName: Self.clientName(in: request.body),
+                tokenId: Self.bearerToken(in: request).flatMap { tokenIdentity?($0) },
                 startedAt: Date(),
                 lastAccessedAt: Date()
             )
@@ -191,12 +221,23 @@ public actor MCPGateway {
     /// The agent's name, from the `initialize` body's `clientInfo.name` —
     /// display only (review cards and the connected-agents list); unknown
     /// when the client omits it.
-    static func clientName(in body: Data?) -> String? {
         guard let json = try? JSONSerialization.jsonObject(with: body ?? Data()) as? [String: Any],
             let params = json["params"] as? [String: Any],
             let clientInfo = params["clientInfo"] as? [String: Any]
         else { return nil }
         return clientInfo["name"] as? String
+    }
+
+    /// The bearer credential an initialize request authenticated with — the
+    /// same `Authorization` shape the auth middleware accepts. `nil` when the
+    /// header is absent or not a Bearer credential.
+    static func bearerToken(in request: MCP.HTTPRequest) -> String? {
+        let header = request.header(MCP.HTTPHeaderName.authorization) ?? ""
+        let parts = header.split(maxSplits: 1, whereSeparator: \.isWhitespace).map(String.init)
+        guard parts.count == 2,
+            parts[0].caseInsensitiveCompare("Bearer") == .orderedSame
+        else { return nil }
+        return parts[1].trimmingCharacters(in: .whitespaces)
     }
 
     /// True when the POST body is an `initialize` request — the session-creation trigger.

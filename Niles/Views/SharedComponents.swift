@@ -204,45 +204,6 @@ struct EmptyStateCard: View {
 
 // MARK: - Rows
 
-/// Avatar + name + detail + Active/Idle pill, shared by agent lists.
-struct AgentRow: View {
-    let agent: AgentConnection
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Text(String(agent.name.first ?? "?"))
-                .font(.system(size: 15, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: 36, height: 36)
-                .background(Circle().fill(NilesTheme.accent))
-            VStack(alignment: .leading, spacing: 1) {
-                Text(agent.name)
-                    .font(.system(size: 15, weight: .semibold))
-                Text(agent.detail)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            StatusPill(isActive: agent.isActive)
-        }
-        .padding(.vertical, 10)
-    }
-}
-
-private struct StatusPill: View {
-    let isActive: Bool
-
-    var body: some View {
-        Text(isActive ? "Active" : "Idle")
-            .font(.system(size: 11, weight: .bold))
-            .foregroundStyle(isActive ? NilesTheme.good : Color.primary.opacity(0.45))
-            .padding(.horizontal, 9)
-            .padding(.vertical, 3)
-            .background(isActive ? NilesTheme.good.opacity(0.12) : Color.primary.opacity(0.06))
-            .clipShape(Capsule())
-    }
-}
-
 /// `key … value` lines with hairline dividers, like the mockup's `.kv` rows.
 struct KeyValueList: View {
     let rows: [KeyValueRow]

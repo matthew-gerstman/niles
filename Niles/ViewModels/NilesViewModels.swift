@@ -71,14 +71,31 @@ protocol HomeGraphViewModel: Observable {
     func stage(row: HomeRow, action: HomeRowAction, newName: String?) async
 }
 
+/// One row of the paired-agents list: a stored credential plus what the live
+/// sessions say about it. The token itself never reaches this layer — rows
+/// carry display-only fields.
+struct PairedAgentRow: Identifiable, Equatable {
+    let id: UUID
+    let name: String
+    /// Composed display line: paired date and last-seen session.
+    let detail: String
+}
+
 @MainActor
 protocol PairingViewModel: Observable {
     var endpoint: String { get }
     var transportName: String { get }
-    var token: String { get }
-    var isTokenRevealed: Bool { get }
-    var trustedAgents: [AgentConnection] { get }
-    func toggleTokenRevealed()
+    /// The live six-digit code, when one is minted and unexpired. A challenge,
+    /// not a secret — the bearer token it exchanges for never renders here.
+    var pairingCode: String? { get }
+    /// When the live code expires — the countdown's input.
+    var codeExpiresAt: Date? { get }
+    /// Every paired credential, named and dated, each revocable.
+    var pairedAgents: [PairedAgentRow] { get }
+    /// Discards the live code and mints a fresh one.
+    func mintNewCode()
+    /// Revokes one agent: deletes its credential and closes its live session.
+    func revokeAgent(_ id: UUID) async
 }
 
 /// Preview-ready in-memory store with the mockup's fixture data. Presentational
@@ -105,9 +122,9 @@ final class InMemoryNilesStore: DashboardViewModel, QueueViewModel, HomeGraphVie
     private(set) var sections: [HomeSection] = []
 
     let transportName = "Streamable HTTP"
-    let token = "nb_7Kq2-mRr4-Tx91-Plo5"
-    private(set) var isTokenRevealed = false
-    private(set) var trustedAgents: [AgentConnection] = []
+    private(set) var pairingCode: String?
+    private(set) var codeExpiresAt: Date?
+    private(set) var pairedAgents: [PairedAgentRow] = []
 
     var pendingProposals: [NilesProposal] {
         proposals.filter(\.isPending)
@@ -115,6 +132,12 @@ final class InMemoryNilesStore: DashboardViewModel, QueueViewModel, HomeGraphVie
 
     init(now: Date = Date()) {
         let minute: TimeInterval = 60
+        pairingCode = "483920"
+        codeExpiresAt = now.addingTimeInterval(5 * minute)
+        pairedAgents = [
+            PairedAgentRow(id: UUID(), name: "Obvious Agent", detail: "paired Nov 8 · last seen now"),
+            PairedAgentRow(id: UUID(), name: "Claude Code", detail: "paired Nov 2 · never connected"),
+        ]
         connectedAgents = [
             AgentConnection(name: "Claude Code", detail: "studio-mac · via Bonjour", isActive: true),
             AgentConnection(name: "Obvious Agent", detail: "obvious sandbox · idle 12 min", isActive: false),
@@ -206,11 +229,6 @@ final class InMemoryNilesStore: DashboardViewModel, QueueViewModel, HomeGraphVie
                 HomeRow(name: "Old porch light", subtitle: "Timer · disabled", systemImage: "lightbulb", isEnabled: false, kind: .trigger, entityId: "trigger-3"),
             ]),
         ]
-
-        trustedAgents = [
-            AgentConnection(name: "Claude Code", detail: "studio-mac · paired Oct 30", isActive: true),
-            AgentConnection(name: "Obvious Agent", detail: "obvious sandbox · paired Nov 2", isActive: false),
-        ]
     }
 
     func setServerRunning(_ running: Bool) {
@@ -241,8 +259,15 @@ final class InMemoryNilesStore: DashboardViewModel, QueueViewModel, HomeGraphVie
         proposals[index].state = next
     }
 
-    func toggleTokenRevealed() {
-        isTokenRevealed.toggle()
+    /// Presentational: mints a fresh countdown so previews react.
+    func mintNewCode() {
+        pairingCode = String(format: "%06d", Int.random(in: 0..<1_000_000))
+        codeExpiresAt = Date().addingTimeInterval(5 * 60)
+    }
+
+    /// Presentational: the row disappears; nothing is stored.
+    func revokeAgent(_ id: UUID) async {
+        pairedAgents.removeAll { $0.id == id }
     }
 
     func stage(row: HomeRow, action: HomeRowAction, newName: String?) async {

@@ -409,6 +409,73 @@ struct MCPGatewaySessionTests {
         let after = await gateway.handle(post(jsonRPCRequest(id: 3, method: "ping"), sessionID: sessionID))
         #expect(after.statusCode == 404)
     }
+
+    @Test("Sessions record the paired agent's token id at initialize")
+    func sessionsRecordTokenIdentity() async throws {
+        let agentID = UUID()
+        let gateway = MCPGateway(
+            validationPipeline: NilesValidationPipeline(expectedToken: testToken),
+            auth: BearerTokenAuthMiddleware(expectedToken: testToken),
+            tokenIdentity: { token in token == testToken ? agentID : nil }
+        )
+
+        let response = await gateway.handle(post(initializeBody()))
+        #expect(response.statusCode == 200)
+
+        let infos = await gateway.sessionInfos()
+        #expect(infos.count == 1)
+        #expect(infos.first?.tokenId == agentID)
+        #expect(infos.first?.clientName == "niles-tests")
+    }
+
+    @Test("closeSessions(tokenId:) retires only the bound agent's session")
+    func revocationClosesBoundSessions() async throws {
+        let agentA = UUID()
+        let agentB = UUID()
+        let tokenA = "agent-token-a"
+        let tokenB = "agent-token-b"
+        let gateway = MCPGateway(
+            validationPipeline: NilesValidationPipeline(tokens: [tokenA, tokenB]),
+            auth: BearerTokenAuthMiddleware(tokens: [tokenA, tokenB]),
+            tokenIdentity: { token in
+                token == tokenA ? agentA : token == tokenB ? agentB : nil
+            }
+        )
+
+        let responseA = await gateway.handle(post(initializeBody(), token: tokenA))
+        let responseB = await gateway.handle(post(initializeBody(), token: tokenB))
+        guard let sessionA = responseA.headers[MCP.HTTPHeaderName.sessionID],
+            let sessionB = responseB.headers[MCP.HTTPHeaderName.sessionID]
+        else {
+            Issue.record("An initialize response carried no session id")
+            return
+        }
+
+        #expect(await gateway.closeSessions(tokenId: agentA) == 1)
+        let revokedAgent = await gateway.handle(
+            post(jsonRPCRequest(id: 3, method: "ping"), sessionID: sessionA)
+        )
+        #expect(revokedAgent.statusCode == 404)
+        let otherAgent = await gateway.handle(
+            post(jsonRPCRequest(id: 4, method: "ping"), sessionID: sessionB)
+        )
+        #expect(otherAgent.statusCode == 200)
+    }
+
+    @Test("An unresolved token still creates a session, without an identity to revoke")
+    func unresolvedTokenYieldsNilIdentity() async throws {
+        let gateway = MCPGateway(
+            validationPipeline: NilesValidationPipeline(expectedToken: testToken),
+            auth: BearerTokenAuthMiddleware(expectedToken: testToken),
+            tokenIdentity: { _ in nil }
+        )
+
+        let response = await gateway.handle(post(initializeBody()))
+        #expect(response.statusCode == 200)
+        let infos = await gateway.sessionInfos()
+        #expect(infos.count == 1)
+        #expect(infos.first?.tokenId == nil)
+    }
 }
 
 // MARK: - Keychain token store
