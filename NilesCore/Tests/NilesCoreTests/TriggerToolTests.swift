@@ -196,6 +196,7 @@ import Testing
                 "homeId": .string("home-1"),
                 "name": .string("Wake Up"),
                 "fireDate": .string("2026-11-09T07:30:00Z"),
+                "sceneId": .string("scene-morning"),
             ]
         ))
         #expect(created.tool == "create_timer_trigger")
@@ -236,6 +237,7 @@ import Testing
                 "homeId": .string("home-1"),
                 "name": .string("Wake Up"),
                 "fireDate": .string("2026-11-09T07:30:00Z"),
+                "sceneId": .string("scene-morning"),
             ]
         ))
         _ = try await store.approve(id: created.id)
@@ -264,6 +266,7 @@ import Testing
                 "homeId": .string("home-1"),
                 "name": .string("Wake Up"),
                 "fireDate": .string("2026-11-09T07:30:00Z"),
+                "sceneId": .string("scene-morning"),
             ]
         ))
         _ = try await store.approve(id: created.id)
@@ -296,6 +299,7 @@ import Testing
                 "homeId": .string("home-1"),
                 "name": .string("Wake Up"),
                 "fireDate": .string("2026-11-09T07:30:00Z"),
+                "sceneId": .string("scene-morning"),
             ]
         ))
         let created = await store.allProposals().first!

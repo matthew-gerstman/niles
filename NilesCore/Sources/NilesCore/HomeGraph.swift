@@ -202,13 +202,32 @@ public struct HomeGraph: Codable, Sendable, Equatable {
         public var id: String
         public var name: String
         public var isEnabled: Bool
+        /// The scenes (action sets) registered on this trigger — what it runs
+        /// when it fires. HomeKit refuses to enable a trigger with none
+        /// (it has nothing to run), so arming proposals check this.
+        public var linkedSceneIds: [String]
         public var detail: Detail
 
-        public init(id: String, name: String, isEnabled: Bool, detail: Detail) {
+        public init(id: String, name: String, isEnabled: Bool, linkedSceneIds: [String] = [], detail: Detail) {
             self.id = id
             self.name = name
             self.isEnabled = isEnabled
+            self.linkedSceneIds = linkedSceneIds
             self.detail = detail
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case id, name, isEnabled, linkedSceneIds, detail
+        }
+
+        /// Graphs captured before `linkedSceneIds` existed must still decode.
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decode(String.self, forKey: .id)
+            name = try container.decode(String.self, forKey: .name)
+            isEnabled = try container.decode(Bool.self, forKey: .isEnabled)
+            linkedSceneIds = try container.decodeIfPresent([String].self, forKey: .linkedSceneIds) ?? []
+            detail = try container.decode(Detail.self, forKey: .detail)
         }
 
         /// Timer and event triggers are a discriminated union: a trigger is
