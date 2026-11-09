@@ -274,6 +274,62 @@ public enum ProposalEvidenceCollector {
                 observed: stillPresent ? "Trigger still present — delete did not take effect" : "No trigger with id \(triggerId) remains",
                 confirmed: !stillPresent
             )
+
+        case .renameAccessory(_, let accessoryId, let to):
+            let accessory = graph.homes.flatMap(\.rooms).flatMap(\.accessories).first { $0.id == accessoryId }
+            return ProposalEvidence(
+                claim: "Accessory \(accessoryId) is named “\(to)”",
+                observed: accessory.map { "Accessory now named “\($0.name)”" }
+                    ?? "Accessory \(accessoryId) not found after execution",
+                confirmed: accessory?.name == to
+            )
+
+        case .identifyAccessory(_, let accessoryId):
+            let stillPresent = contains(
+                accessoryId, in: graph.homes.flatMap(\.rooms).flatMap(\.accessories).map(\.id)
+            )
+            return ProposalEvidence(
+                claim: "Accessory \(accessoryId) was identified",
+                observed: stillPresent
+                    ? "Accessory still present — identify (flash/beep) has no graph-observable effect"
+                    : "Accessory \(accessoryId) not found after execution",
+                confirmed: stillPresent
+            )
+
+        case .assignAccessoryToRoom(_, let accessoryId, let roomId):
+            let accessory = graph.homes.flatMap(\.rooms).flatMap(\.accessories).first { $0.id == accessoryId }
+            let room = graph.homes.flatMap(\.rooms).first { $0.accessories.contains { $0.id == accessoryId } }
+            let confirmed = room?.id == roomId
+            return ProposalEvidence(
+                claim: "Accessory \(accessoryId) is in room \(roomId)",
+                observed: confirmed
+                    ? "Accessory “\(accessory?.name ?? accessoryId)” now sits in room “\(room?.name ?? roomId)”"
+                    : room.map { "Accessory “\(accessory?.name ?? accessoryId)” sits in room “\($0.name)”, not \(roomId)" }
+                        ?? "Accessory \(accessoryId) not found after execution",
+                confirmed: confirmed
+            )
+
+        case .unblockAccessory(_, let accessoryId):
+            let stillPresent = contains(
+                accessoryId, in: graph.homes.flatMap(\.rooms).flatMap(\.accessories).map(\.id)
+            )
+            return ProposalEvidence(
+                claim: "Accessory \(accessoryId) was unblocked",
+                observed: stillPresent
+                    ? "Accessory still present — blocked state is not graph-observable"
+                    : "Accessory \(accessoryId) not found after execution",
+                confirmed: stillPresent
+            )
+
+        case .removeAccessory(_, let accessoryId):
+            let stillPresent = contains(
+                accessoryId, in: graph.homes.flatMap(\.rooms).flatMap(\.accessories).map(\.id)
+            )
+            return ProposalEvidence(
+                claim: "Accessory \(accessoryId) is deleted",
+                observed: stillPresent ? "Accessory still present — delete did not take effect" : "No accessory with id \(accessoryId) remains",
+                confirmed: !stillPresent
+            )
         }
     }
 

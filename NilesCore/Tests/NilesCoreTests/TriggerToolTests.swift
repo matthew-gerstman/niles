@@ -143,7 +143,7 @@ import Testing
             return
         }
         #expect(events == [
-            HomeGraph.EventRef(type: "characteristic", characteristicType: "MotionDetected", valueDescription: "1"),
+            HomeGraph.EventRef(type: "characteristic", characteristicType: "MotionDetected", valueDescription: "1", accessoryId: "acc-light-a"),
             HomeGraph.EventRef(type: "presence", characteristicType: nil, valueDescription: "atHome"),
         ])
         #expect(predicate?.contains("MotionDetected") == true)

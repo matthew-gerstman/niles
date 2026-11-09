@@ -709,6 +709,52 @@ import Testing
         #expect(error { _ = try self.resolve(.removeTrigger(homeId: "home-1", triggerId: "trigger-x")) }
             == .objectMissing("No trigger trigger-x."))
     }
+
+    // MARK: - Accessory lifecycle
+
+    /// The five accessory operations resolve against the fixture view —
+    /// steps echo the resolved ids, and missing objects reject with the
+    /// typed error naming the accessory.
+    @Test func accessoryOpsResolveToSteps() throws {
+        #expect(try resolve(.renameAccessory(homeId: "home-1", accessoryId: "acc-light-a", to: "Kitchen Lamp"))
+            == [.renameAccessory(homeId: "home-1", accessoryId: "acc-light-a", to: "Kitchen Lamp")])
+        #expect(try resolve(.assignAccessoryToRoom(homeId: "home-1", accessoryId: "acc-light-a", roomId: "room-office"))
+            == [.assignAccessoryToRoom(homeId: "home-1", accessoryId: "acc-light-a", roomId: "room-office")])
+        #expect(try resolve(.unblockAccessory(homeId: "home-1", accessoryId: "acc-light-a"))
+            == [.unblockAccessory(homeId: "home-1", accessoryId: "acc-light-a")])
+        #expect(try resolve(.removeAccessory(homeId: "home-1", accessoryId: "acc-light-a"))
+            == [.removeAccessory(homeId: "home-1", accessoryId: "acc-light-a")])
+        #expect(try resolve(.identifyAccessory(homeId: "home-1", accessoryId: "acc-light-a"))
+            == [.identifyAccessory(homeId: "home-1", accessoryId: "acc-light-a")])
+        #expect(error {
+            _ = try self.resolve(.renameAccessory(homeId: "home-1", accessoryId: "acc-nowhere", to: "Ghost"))
+        } == .objectMissing("No accessory acc-nowhere in home “Townhouse”."))
+        #expect(error {
+            _ = try self.resolve(.assignAccessoryToRoom(homeId: "home-1", accessoryId: "acc-light-a", roomId: "room-nowhere"))
+        }?.isInvalidOperation == false) // the room lookup fails, not a constraint check
+        #expect(error {
+            _ = try self.resolve(.assignAccessoryToRoom(homeId: "home-1", accessoryId: "acc-light-a", roomId: "room-nowhere"))
+        }?.message.contains("No room room-nowhere") == true)
+    }
+
+    /// Device law: identifying means flashing the Identify characteristic;
+    /// an accessory known not to support it rejects at resolution with the
+    /// typed reason, while unknown capability data stays permissive.
+    @Test func identifyRejectsKnownUnsupportedAccessory() throws {
+        var view = fixtureView()
+        view.homes[0].accessories[
+            view.homes[0].accessories.firstIndex { $0.id == "acc-light-a" }!
+        ].supportsIdentify = false
+        #expect(error {
+            _ = try self.resolve(.identifyAccessory(homeId: "home-1", accessoryId: "acc-light-a"), view: view)
+        }?.isInvalidOperation == true)
+
+        view.homes[0].accessories[
+            view.homes[0].accessories.firstIndex { $0.id == "acc-light-a" }!
+        ].supportsIdentify = true
+        #expect(try resolve(.identifyAccessory(homeId: "home-1", accessoryId: "acc-light-a"), view: view)
+            == [.identifyAccessory(homeId: "home-1", accessoryId: "acc-light-a")])
+    }
 }
 
 extension HomeKitWriteError {

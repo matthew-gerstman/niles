@@ -244,6 +244,60 @@ public actor FakeHomeKitService: HomeKitWriting {
             let (h, t) = try indexOfTrigger(id: triggerId)
             graph.homes[h].triggers.remove(at: t)
             return nil
+
+        case .renameAccessory(_, let accessoryId, let to):
+            let (h, r, a) = try indexOfAccessory(id: accessoryId)
+            graph.homes[h].rooms[r].accessories[a].name = to
+            return nil
+
+        case .identifyAccessory(_, let accessoryId):
+            let (h, r, a) = try indexOfAccessory(id: accessoryId)
+            // Mirror the live adapter: an accessory without an Identify
+            // characteristic cannot be identified (HMError).
+            if graph.homes[h].rooms[r].accessories[a].supportsIdentify == false {
+                throw HomeKitWriteError.invalidOperation(
+                    "Accessory “\(graph.homes[h].rooms[r].accessories[a].name)” does not support identify."
+                )
+            }
+            // Identify flashes or beeps the physical device — nothing in the
+            // graph changes; the evidence read-back confirms presence.
+            return nil
+
+        case .assignAccessoryToRoom(_, let accessoryId, let roomId):
+            let (h, r, a) = try indexOfAccessory(id: accessoryId)
+            guard graph.homes[h].rooms.contains(where: { $0.id == roomId }), roomId != graph.homes[h].rooms[r].id else {
+                throw HomeKitWriteError.objectMissing("No room \(roomId).")
+            }
+            let accessory = graph.homes[h].rooms[r].accessories.remove(at: a)
+            let target = graph.homes[h].rooms.firstIndex(where: { $0.id == roomId })!
+            graph.homes[h].rooms[target].accessories.append(accessory)
+            return nil
+
+        case .unblockAccessory(_, let accessoryId):
+            // Blocked state is not modeled in the graph; existence is the
+            // only observable check, matching the resolver.
+            _ = try indexOfAccessory(id: accessoryId)
+            return nil
+
+        case .removeAccessory(_, let accessoryId):
+            let (h, r, a) = try indexOfAccessory(id: accessoryId)
+            _ = graph.homes[h].rooms[r].accessories.remove(at: a)
+            // HomeKit detaches everything the accessory participated in;
+            // the fake mirrors that observable behavior. ServiceRefs carry
+            // the accessory id, so detach by attribution like scenes/events.
+            for g in graph.homes[h].serviceGroups.indices {
+                graph.homes[h].serviceGroups[g].services.removeAll { $0.accessoryId == accessoryId }
+            }
+            for s in graph.homes[h].scenes.indices {
+                graph.homes[h].scenes[s].actions.removeAll { $0.accessoryId == accessoryId }
+            }
+            for t in graph.homes[h].triggers.indices {
+                if case .event(let events, let predicate) = graph.homes[h].triggers[t].detail {
+                    let remaining = events.filter { $0.accessoryId != accessoryId }
+                    graph.homes[h].triggers[t].detail = .event(events: remaining, predicate: predicate)
+                }
+            }
+            return nil
         }
     }
 
@@ -262,11 +316,12 @@ public actor FakeHomeKitService: HomeKitWriting {
     /// read shape (HMCharacteristicEvent / HMPresenceEvent).
     private static func eventRef(from spec: TriggerEventSpec) -> HomeGraph.EventRef {
         switch spec {
-        case .characteristic(_, let characteristic, let value):
+        case .characteristic(let accessoryId, let characteristic, let value):
             return HomeGraph.EventRef(
                 type: "characteristic",
                 characteristicType: characteristic,
-                valueDescription: value?.rendered
+                valueDescription: value?.rendered,
+                accessoryId: accessoryId
             )
         case .presence(let atHome):
             return HomeGraph.EventRef(
@@ -391,6 +446,17 @@ public actor FakeHomeKitService: HomeKitWriting {
             }
         }
         throw HomeKitWriteError.objectMissing("No trigger \(id).")
+    }
+
+    private func indexOfAccessory(id: String) throws -> (home: Int, room: Int, accessory: Int) {
+        for h in graph.homes.indices {
+            for r in graph.homes[h].rooms.indices {
+                if let a = graph.homes[h].rooms[r].accessories.firstIndex(where: { $0.id == id }) {
+                    return (h, r, a)
+                }
+            }
+        }
+        throw HomeKitWriteError.objectMissing("No accessory \(id).")
     }
 
     private func room(id: String, inGraph graph: HomeGraph) -> HomeGraph.Room? {

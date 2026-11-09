@@ -65,6 +65,11 @@ struct DeviceHomeView: Equatable, Sendable {
     struct Accessory: Equatable, Sendable {
         var id: String
         var name: String
+        /// `HMAccessory.supportsIdentify` — false means the accessory has no
+        /// Identify characteristic and cannot flash or beep. Nil in fixtures
+        /// that predate the field; nil stays permissive like other
+        /// capability data.
+        var supportsIdentify: Bool?
         var services: [Service] = []
     }
 
@@ -135,6 +140,11 @@ enum DeviceWriteStep: Equatable, Sendable {
         wasEnabled: Bool, linkedSceneIds: [String]
     )
     case removeTrigger(homeId: String, triggerId: String)
+    case renameAccessory(homeId: String, accessoryId: String, to: String)
+    case identifyAccessory(homeId: String, accessoryId: String)
+    case assignAccessoryToRoom(homeId: String, accessoryId: String, roomId: String)
+    case unblockAccessory(homeId: String, accessoryId: String)
+    case removeAccessory(homeId: String, accessoryId: String)
 }
 
 /// A scene action with its characteristic resolved and its value's rendering
@@ -285,6 +295,38 @@ enum DeviceWriteResolver {
             return [try resolveReplaceTimerTrigger(homeId: homeId, triggerId: triggerId, fireDate: fireDate, recurrence: recurrence, in: view)]
         case .removeTrigger(let homeId, let triggerId):
             return [.removeTrigger(homeId: try home(id: homeId, in: view).id, triggerId: try trigger(id: triggerId, in: view).id)]
+        case .renameAccessory(let homeId, let accessoryId, let to):
+            let resolvedHome = try home(id: homeId, in: view)
+            let resolvedAccessory = try accessory(id: accessoryId, in: resolvedHome)
+            return [.renameAccessory(homeId: resolvedHome.id, accessoryId: resolvedAccessory.id, to: to)]
+        case .identifyAccessory(let homeId, let accessoryId):
+            let resolvedHome = try home(id: homeId, in: view)
+            let resolvedAccessory = try accessory(id: accessoryId, in: resolvedHome)
+            // Device law: identifying means flashing the Identify
+            // characteristic; accessories without one reject the call. Say
+            // so at resolution where the typed error reaches the agent.
+            if resolvedAccessory.supportsIdentify == false {
+                throw HomeKitWriteError.invalidOperation(
+                    "Accessory “\(resolvedAccessory.name)” does not support identify — it has no Identify characteristic."
+                )
+            }
+            return [.identifyAccessory(homeId: resolvedHome.id, accessoryId: resolvedAccessory.id)]
+        case .assignAccessoryToRoom(let homeId, let accessoryId, let roomId):
+            let resolvedHome = try home(id: homeId, in: view)
+            let resolvedAccessory = try accessory(id: accessoryId, in: resolvedHome)
+            let resolvedRoom = try resolvedRoom(id: roomId, in: resolvedHome)
+            return [.assignAccessoryToRoom(homeId: resolvedHome.id, accessoryId: resolvedAccessory.id, roomId: resolvedRoom.id)]
+        case .unblockAccessory(let homeId, let accessoryId):
+            let resolvedHome = try home(id: homeId, in: view)
+            let resolvedAccessory = try accessory(id: accessoryId, in: resolvedHome)
+            // Blocked state is not tracked in the view (the read flags are
+            // the read-depth group's); unblocking an unblocked accessory is
+            // a harmless no-op in HomeKit, so only existence is checked.
+            return [.unblockAccessory(homeId: resolvedHome.id, accessoryId: resolvedAccessory.id)]
+        case .removeAccessory(let homeId, let accessoryId):
+            let resolvedHome = try home(id: homeId, in: view)
+            let resolvedAccessory = try accessory(id: accessoryId, in: resolvedHome)
+            return [.removeAccessory(homeId: resolvedHome.id, accessoryId: resolvedAccessory.id)]
         }
     }
 
@@ -398,9 +440,7 @@ enum DeviceWriteResolver {
     /// carrying the characteristic) -> characteristic (by type or name), with
     /// the value rendering kind picked from metadata.
     private static func resolveAction(_ spec: SceneActionSpec, in home: DeviceHomeView.Home) throws -> ResolvedAction {
-        guard let accessory = accessory(id: spec.accessoryId, in: home) else {
-            throw HomeKitWriteError.objectMissing("No accessory \(spec.accessoryId) in home “\(home.name)”.")
-        }
+        let accessory = try accessory(id: spec.accessoryId, in: home)
         let characteristic: DeviceHomeView.Characteristic
         let service: DeviceHomeView.Service
         if let wanted = spec.service {
@@ -451,9 +491,7 @@ enum DeviceWriteResolver {
         return try events.map { event in
             switch event {
             case .characteristic(let accessoryId, let characteristicType, let value):
-                guard let accessory = accessory(id: accessoryId, in: home) else {
-                    throw HomeKitWriteError.objectMissing("No accessory \(accessoryId) in home “\(home.name)”.")
-                }
+                let accessory = try accessory(id: accessoryId, in: home)
                 guard let characteristic = accessory.services.flatMap(\.characteristics)
                     .first(where: { characteristicMatches($0, characteristicType) }) else {
                     throw HomeKitWriteError.objectMissing(
@@ -626,8 +664,11 @@ enum DeviceWriteResolver {
         return trigger
     }
 
-    private static func accessory(id: String, in home: DeviceHomeView.Home) -> DeviceHomeView.Accessory? {
-        home.accessories.first { $0.id == id }
+    private static func accessory(id: String, in home: DeviceHomeView.Home) throws -> DeviceHomeView.Accessory {
+        guard let accessory = home.accessories.first(where: { $0.id == id }) else {
+            throw HomeKitWriteError.objectMissing("No accessory \(id) in home “\(home.name)”.")
+        }
+        return accessory
     }
 
     private static func service(id: String, in home: DeviceHomeView.Home) -> DeviceHomeView.Service? {

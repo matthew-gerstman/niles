@@ -1,7 +1,7 @@
 import Foundation
 import MCP
 
-/// The mutating MCP tools: twenty declarative write tools plus the
+/// The mutating MCP tools: twenty-five declarative write tools plus the
 /// `get_proposal` poll. None of them touches HomeKit — a call plans the
 /// request against the current graph and stages exactly one proposal
 /// (spec: "one agent request is always exactly one approval card"); the
@@ -19,7 +19,7 @@ public struct WriteToolRegistry: Sendable {
     /// The write tools, in listing order.
     public var tools: [Tool] { Self.toolDefinitions }
 
-    /// The names `call` answers: the nine write tools plus `get_proposal`.
+    /// The names `call` answers: the write tools plus `get_proposal`.
     public var toolNames: Set<String> { Set(Self.toolDefinitions.map(\.name)) }
 
     /// Answers one `tools/call` for a write tool or `get_proposal`. Every
@@ -292,6 +292,57 @@ public struct WriteToolRegistry: Sendable {
             inputSchema: objectSchema(
                 ["triggerId": stringProperty("The trigger to delete (from get_triggers).")],
                 required: ["triggerId"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false, destructiveHint: true)
+        ),
+        Tool(
+            name: "rename_accessory",
+            description: "Rename an accessory (e.g. a lamp) as it appears across HomeKit. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            inputSchema: objectSchema(
+                [
+                    "accessoryId": stringProperty("The accessory to rename (from get_rooms)."),
+                    "name": stringProperty("The new accessory name."),
+                ],
+                required: ["accessoryId", "name"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false)
+        ),
+        Tool(
+            name: "identify_accessory",
+            description: "Identify an accessory: it flashes its light or beeps so a human can spot it. Harmless but physical. Rejected at staging when the accessory has no Identify capability. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            inputSchema: objectSchema(
+                ["accessoryId": stringProperty("The accessory to identify (from get_rooms).")],
+                required: ["accessoryId"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false)
+        ),
+        Tool(
+            name: "assign_accessory_to_room",
+            description: "Move an accessory to a different room. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            inputSchema: objectSchema(
+                [
+                    "accessoryId": stringProperty("The accessory to move (from get_rooms)."),
+                    "roomId": stringProperty("The destination room (from get_rooms)."),
+                ],
+                required: ["accessoryId", "roomId"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false)
+        ),
+        Tool(
+            name: "unblock_accessory",
+            description: "Unblock an accessory HomeKit has blocked (e.g. a paused or misbehaving bridge device) so it runs again. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            inputSchema: objectSchema(
+                ["accessoryId": stringProperty("The accessory to unblock (from get_rooms).")],
+                required: ["accessoryId"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false)
+        ),
+        Tool(
+            name: "remove_accessory",
+            description: "Remove an accessory from the home — its services leave their service groups, its scene actions die, and triggers watching its characteristics stop working. The review card lists every affected scene, group, and trigger. DESTRUCTIVE. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            inputSchema: objectSchema(
+                ["accessoryId": stringProperty("The accessory to remove (from get_rooms).")],
+                required: ["accessoryId"]
             ),
             annotations: Tool.Annotations(readOnlyHint: false, destructiveHint: true)
         ),

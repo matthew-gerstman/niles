@@ -777,11 +777,11 @@ import Testing
         let writes = WriteToolRegistry(store: store)
 
         #expect(reads.tools.count == 6)
-        #expect(writes.tools.count == 21)
+        #expect(writes.tools.count == 26)
         #expect(reads.toolNames.isDisjoint(with: writes.toolNames))
-        // Destructive hints land on exactly the five delete tools.
+        // Destructive hints land on exactly the six delete tools.
         let destructive = writes.tools.filter { $0.annotations.destructiveHint == true }
-        #expect(Set(destructive.map(\.name)) == ["delete_room", "delete_service_group", "delete_trigger", "delete_scene", "delete_zone"])
+        #expect(Set(destructive.map(\.name)) == ["delete_room", "delete_service_group", "delete_trigger", "delete_scene", "delete_zone", "remove_accessory"])
     }
 
     // MARK: - Trigger arm path
