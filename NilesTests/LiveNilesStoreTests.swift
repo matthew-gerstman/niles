@@ -68,11 +68,59 @@ struct LiveNilesStoreTests {
         let after = try await fake.snapshot()
         #expect(after.homes[0].rooms.contains { $0.name == "Studio" })
 
-        // Evidence rendered on the proposal, and the Home tab reflects the graph.
+        // Evidence rides on the proposal in its structured form — per-check
+        // claim/observed/confirmed, no longer glued into context strings.
         let executed = store.proposals.first { $0.id == pending.id }
-        #expect(executed?.context.contains { $0.text.contains("✓") } == true)
+        #expect(executed?.evidence.isEmpty == false)
+        #expect(executed?.evidence.first?.confirmed == true)
+        #expect(executed?.context.contains { $0.text.contains("✓") } == false)
         #expect(store.sections.first { $0.title == "Rooms" }?.rows.contains { $0.name == "Studio" } == true)
         #expect(store.approvedTodayCount == 1)
+    }
+
+    /// The activity timeline records a proposal's life — staged, decided,
+    /// executed — with agent attribution and structured evidence on the
+    /// executed event, and it survives a store re-init over the same
+    /// directory (the persistence contract).
+    @Test
+    func activityEventsRecordStagingDecisionsAndExecution() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("niles-activity-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let fake = FakeHomeKitService(graph: .demoFixture)
+        let coordinator = ServerCoordinator(tokenStore: StaticTokenStore(token: "test-token"), homeKitService: fake)
+        let store = LiveNilesStore(
+            coordinator: coordinator,
+            notifier: .disabled,
+            activityLog: ActivityLog(directory: directory)
+        )
+        await store.refresh()
+        let registry = WriteToolRegistry(store: try #require(coordinator.proposalStore))
+        _ = await registry.call(
+            name: "create_room",
+            arguments: ["homeId": .string("home-1"), "name": .string("Studio")]
+        )
+        await store.refresh() // the staged event
+        let pending = try #require(store.pendingProposals.first)
+        await store.approveAndWait(pending.id) // the decided event
+
+        let kinds = store.activityEvents.filter { $0.proposalId == pending.id }.map(\.kind)
+        #expect(kinds == [.staged, .decided, .executed])
+        let executedEvent = try #require(
+            store.activityEvents.last { $0.proposalId == pending.id && $0.kind == .executed }
+        )
+        #expect(executedEvent.evidence.isEmpty == false)
+        #expect(executedEvent.decision == nil)
+
+        // The log round-trips: a fresh store over the same directory reloads it.
+        let reloaded = LiveNilesStore(
+            coordinator: coordinator,
+            notifier: .disabled,
+            activityLog: ActivityLog(directory: directory)
+        )
+        await reloaded.refresh()
+        #expect(reloaded.activityEvents == store.activityEvents)
     }
 
     /// Regression for the device-QA latency finding: the tap path must give

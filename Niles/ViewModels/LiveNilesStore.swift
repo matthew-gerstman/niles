@@ -54,6 +54,8 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
     /// round-trip is still running. Set synchronously in the tap handler,
     /// cleared when the pipeline settles (or the decision fails).
     private(set) var decisionsInFlight: [String: ProposalDecision] = [:]
+    /// The activity timeline as of the last refresh, oldest first.
+    private(set) var activityEvents: [ActivityEvent] = []
 
     // MARK: - HomeGraphViewModel
 
@@ -81,6 +83,12 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
     /// Proposal id -> the agent that staged it, attributed from the newest
     /// session at detection time. In-memory only, like the proposal store.
     private var agentNamesByProposal: [String: String] = [:]
+    /// Last-seen proposal state per id — the poll diff that turns state
+    /// changes into activity events (the store is a snapshot, not a stream).
+    private var recordedStates: [String: ProposalState] = [:]
+    /// The persistent activity timeline, reloaded from disk at init and
+    /// appended to as decisions and state changes happen (see ActivityLog).
+    private let activityLog: ActivityLog
     /// The first refresh seeds every proposal already in the store (e.g. ones
     /// staged before a background/foreground cycle) without notifying — only
     /// arrivals after launch get banners.
@@ -96,12 +104,14 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
         coordinator: ServerCoordinator,
         notifier: ProposalNotifier,
         tokenStore: any TokenStoring = KeychainTokenStore(),
-        pollInterval: Duration = .seconds(1)
+        pollInterval: Duration = .seconds(1),
+        activityLog: ActivityLog? = nil
     ) {
         self.coordinator = coordinator
         self.notifier = notifier
         self.tokenStore = tokenStore
         self.pollInterval = pollInterval
+        self.activityLog = activityLog ?? ActivityLog()
         let host = LANAddress.primaryIPv4 ?? "127.0.0.1"
         endpoint = "http://\(host):\(LANServer.defaultPort)/mcp"
     }
@@ -208,6 +218,13 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
             } else {
                 _ = try await store.deny(id: id)
             }
+            await appendActivity(
+                .decided,
+                proposalId: id,
+                title: proposals.first { $0.id == id }?.title ?? id,
+                agentName: agentNamesByProposal[id],
+                decision: approve ? "approved" : "denied"
+            )
         } catch {
             // Terminal-state violations and unknown ids are the expected
             // failures here; the card keeps its staged state either way.
@@ -258,13 +275,53 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
         let live = await store.allProposals()
 
         if !hasSeededExistingProposals {
-            for proposal in live { agentNamesByProposal[proposal.id] = newestClientName(from: sessions) }
+            for proposal in live {
+                agentNamesByProposal[proposal.id] = newestClientName(from: sessions)
+                // Seed the poll-diff baseline without recording history the
+                // log already holds (or that predates this launch).
+                recordedStates[proposal.id] = proposal.state
+            }
             hasSeededExistingProposals = true
         } else {
             for proposal in live where agentNamesByProposal[proposal.id] == nil {
                 agentNamesByProposal[proposal.id] = newestClientName(from: sessions) ?? "MCP agent"
                 if proposal.state == .staged {
                     notifier.proposalArrived(title: proposal.title, summary: proposal.summary)
+                    await appendActivity(
+                        .staged,
+                        proposalId: proposal.id,
+                        title: proposal.title,
+                        agentName: agentNamesByProposal[proposal.id]
+                    )
+                }
+            }
+            // The poll diff: state changes become activity events. Decisions
+            // and undos are recorded by their verbs; execution and expiry
+            // happen inside the store, so only the next poll can see them.
+            for proposal in live {
+                let previous = recordedStates[proposal.id]
+                recordedStates[proposal.id] = proposal.state
+                guard previous != proposal.state else { continue }
+                switch proposal.state {
+                case .executed, .failed:
+                    await appendActivity(
+                        .executed,
+                        proposalId: proposal.id,
+                        title: proposal.title,
+                        agentName: agentNamesByProposal[proposal.id],
+                        detail: Self.executionOutcome(of: proposal),
+                        evidence: proposal.evidence
+                    )
+                case .expired:
+                    await appendActivity(
+                        .expired,
+                        proposalId: proposal.id,
+                        title: proposal.title,
+                        agentName: agentNamesByProposal[proposal.id],
+                        detail: "Expired after 24 hours — never executed"
+                    )
+                case .staged, .approved, .denied:
+                    break
                 }
             }
         }
@@ -278,6 +335,7 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
         approvedTodayCount = live.filter {
             $0.state == .executed && Calendar.current.isDateInToday($0.createdAt)
         }.count
+        activityEvents = await activityLog.allEvents()
 
         do {
             let graph = try await store.homeKit.snapshot()
@@ -292,6 +350,39 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
 
     private func newestClientName(from sessions: [MCPGateway.SessionInfo]) -> String? {
         sessions.max { $0.startedAt < $1.startedAt }?.clientName
+    }
+
+    /// Appends one event to the persistent activity log and mirrors it into
+    /// `activityEvents`. Append failures are logged by the log itself, never
+    /// thrown — the timeline must not take a decision down with it.
+    private func appendActivity(
+        _ kind: ActivityEvent.Kind,
+        proposalId: String,
+        title: String,
+        agentName: String?,
+        decision: String? = nil,
+        detail: String? = nil,
+        evidence: [ProposalEvidence] = []
+    ) async {
+        await activityLog.append(ActivityEvent(
+            at: Date(),
+            kind: kind,
+            proposalId: proposalId,
+            proposalTitle: title,
+            agentName: agentName,
+            decision: decision,
+            detail: detail,
+            evidence: evidence
+        ))
+        activityEvents = await activityLog.allEvents()
+    }
+
+    /// The `.executed` event's outcome line: the read-back tally when the
+    /// operations ran, the recorded HomeKit error when they failed mid-list.
+    private static func executionOutcome(of proposal: Proposal) -> String? {
+        if let error = proposal.error { return "Failed — \(error)" }
+        let confirmed = proposal.evidence.filter(\.confirmed).count
+        return "\(confirmed) of \(proposal.evidence.count) checks confirmed"
     }
 
     /// Serving keeps the screen awake (a locked phone suspends the LAN
@@ -319,25 +410,14 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
     // MARK: - Live -> UI mapping
 
     private static func uiProposal(for proposal: Proposal, agentName: String) -> NilesProposal {
+        // Context lines are the card's own notes; read-back evidence rides
+        // on NilesProposal.evidence in its structured form — no more "✓ …"
+        // strings glued into prose.
         var context: [ProposalDiffLine] = proposal.card
             .filter { $0.kind == .note || $0.kind == .plain }
             .map { ProposalDiffLine(ProposalDiffLine.Kind($0.kind), $0.text) }
-        for item in proposal.evidence {
-            let mark = item.confirmed ? "✓" : "✗"
-            context.append(ProposalDiffLine(.plain, "\(mark) \(item.claim) — \(item.observed)"))
-        }
         if let error = proposal.error {
             context.append(ProposalDiffLine(.note, "⚠ HomeKit error: \(error)"))
-        }
-
-        let evidence: String
-        if proposal.evidence.isEmpty {
-            evidence = "After approval, Niles re-reads the home from HomeKit and attaches the read-back "
-                + "evidence here. Denied and expired proposals never run anything."
-        } else {
-            let confirmed = proposal.evidence.filter(\.confirmed).count
-            evidence = "Read-back evidence: \(confirmed) of \(proposal.evidence.count) checks confirmed "
-                + "against the live home."
         }
 
         return NilesProposal(
@@ -347,7 +427,7 @@ final class LiveNilesStore: DashboardViewModel, ApprovalsViewModel, HomeGraphVie
             agentName: agentName,
             createdAt: proposal.createdAt,
             isDestructive: proposal.isDestructive,
-            evidence: evidence,
+            evidence: proposal.evidence,
             diff: proposal.card
                 .filter { $0.kind == .add || $0.kind == .remove }
                 .map { ProposalDiffLine(ProposalDiffLine.Kind($0.kind), $0.text) },
