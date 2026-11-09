@@ -453,11 +453,11 @@ struct MCPGatewaySessionTests {
 
         #expect(await gateway.closeSessions(tokenId: agentA) == 1)
         let revokedAgent = await gateway.handle(
-            post(jsonRPCRequest(id: 3, method: "ping"), sessionID: sessionA)
+            post(jsonRPCRequest(id: 3, method: "ping"), token: tokenA, sessionID: sessionA)
         )
         #expect(revokedAgent.statusCode == 404)
         let otherAgent = await gateway.handle(
-            post(jsonRPCRequest(id: 4, method: "ping"), sessionID: sessionB)
+            post(jsonRPCRequest(id: 4, method: "ping"), token: tokenB, sessionID: sessionB)
         )
         #expect(otherAgent.statusCode == 200)
     }
