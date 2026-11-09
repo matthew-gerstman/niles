@@ -29,7 +29,8 @@ private struct FailingTokenStore: TokenStoring {
     func loadOrCreate() throws -> String { "" }
     func listAgents() throws -> [PairedAgent] { [] }
     func issueToken(name: String?) throws -> PairedAgent {
-        throw KeychainTokenStore.TokenStoreError.keychainFailure(errSecFailure)
+        // errSecBadReq (-909): a real Keychain status — errSecFailure is macOS-only.
+        throw KeychainTokenStore.TokenStoreError.keychainFailure(errSecBadReq)
     }
     func revoke(id: UUID) throws {}
 }
