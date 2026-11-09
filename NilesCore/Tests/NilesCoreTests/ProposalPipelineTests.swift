@@ -393,9 +393,21 @@ import Testing
             HomeGraph.CharacteristicRef(id: "acc-dimmable-brightness", type: "Brightness", name: "Brightness"),
         ])
         let right = onOff("acc-right", "Right")
+        // The live read's shape: Characteristic.type carries the HomeKit UUID
+        // and the friendly name lives in `name` (DeviceHomeView coordination).
+        let liveShape = HomeGraph.Accessory(
+            id: "acc-live", name: "Live Shape",
+            services: [HomeGraph.AccessoryService(
+                id: "acc-live-svc", name: "Lightbulb", serviceType: "lightbulb",
+                characteristics: [
+                    HomeGraph.CharacteristicRef(id: "acc-live-on", type: "0x0003", name: "On"),
+                    HomeGraph.CharacteristicRef(id: "acc-live-brightness", type: "0x0008", name: "Brightness"),
+                ]
+            )]
+        )
         let home = HomeGraph.Home(
             id: "home-1", name: "Townhouse",
-            rooms: [HomeGraph.Room(id: "room-living", name: "Living Room", accessories: [right, dimmable])]
+            rooms: [HomeGraph.Room(id: "room-living", name: "Living Room", accessories: [right, dimmable, liveShape])]
         )
         return HomeGraph(homes: [home])
     }
@@ -476,6 +488,31 @@ import Testing
         ))
         #expect(staged.state == .staged)
         #expect(staged.card.contains { $0.text.contains("Could not verify Brightness support") })
+    }
+
+    /// Coordination with the write-resolver fix: live graphs populate
+    /// Characteristic.type with the HomeKit UUID while agents pass friendly
+    /// names, so staging matches name OR UUID — the same rule the executor
+    /// uses — and never rejects a write execution would accept.
+    @Test func friendlyNameMatchesUUIDShapedCharacteristicAtStaging() async throws {
+        let (_, store, registry, _) = makeContext(graph: capabilityGraph())
+
+        let staged = try proposal(from: await registry.call(
+            name: "create_scene",
+            arguments: [
+                "homeId": .string("home-1"),
+                "name": .string("Movie Night"),
+                "actions": .array([
+                    .object([
+                        "accessoryId": .string("acc-live"),
+                        "characteristic": .string("brightness"),
+                        "value": .int(30),
+                    ]),
+                ]),
+            ]
+        ))
+        #expect(staged.state == .staged)
+        #expect(!staged.card.contains { $0.text.contains("Could not verify") })
     }
 
     /// Same class of check for characteristic trigger events: the executor

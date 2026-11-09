@@ -754,11 +754,14 @@ public enum ProposalPlanner {
     }
 
     /// Whether an accessory supports a characteristic, mirroring the
-    /// executor's resolution (`DeviceWriteResolver.resolveAction`): the same
-    /// case-sensitive type match, and the same service-name-or-type filter
-    /// when the spec names a service — so staging never passes anything
-    /// execution would reject. Accessories whose services list no
-    /// characteristics (a graph without capability reads) are unverifiable.
+    /// executor's resolution (`DeviceWriteResolver.resolveAction`): the
+    /// characteristic is identified by type UUID or its metadata name (the
+    /// shared rule settled with the write-resolver fix so staging and
+    /// execution read the same DeviceHomeView shape), and the service
+    /// name-or-type filter matches when the spec names a service — so
+    /// staging never passes anything execution would reject. Accessories
+    /// whose services list no characteristics (a graph without capability
+    /// reads) are unverifiable.
     private static func capability(
         characteristic: String, service: String?, in accessory: HomeGraph.Accessory
     ) -> Capability {
@@ -777,7 +780,11 @@ public enum ProposalPlanner {
         } else {
             services = accessory.services
         }
-        guard services.contains(where: { $0.characteristics.contains { $0.type == characteristic } }) else {
+        let matches: (HomeGraph.CharacteristicRef) -> Bool = { ref in
+            ref.type == characteristic
+                || ref.name.map { $0.caseInsensitiveCompare(characteristic) == .orderedSame } == true
+        }
+        guard services.contains(where: { $0.characteristics.contains(where: matches) }) else {
             return .unsupported(.unsupportedCharacteristic(accessory: accessory.name, characteristic: characteristic))
         }
         return .supported
