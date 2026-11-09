@@ -374,7 +374,136 @@ import Testing
         #expect(third.id != first.id)
     }
 
+    // MARK: - Capability validation at staging
+
+    /// A graph whose accessories carry capability data (the read side's
+    /// accessory services with their characteristics). "Right" is a plain
+    /// on/off bulb; "Dimmable" supports Brightness too.
+    private func capabilityGraph() -> HomeGraph {
+        func onOff(_ id: String, _ name: String, extra: [HomeGraph.CharacteristicRef] = []) -> HomeGraph.Accessory {
+            HomeGraph.Accessory(
+                id: id, name: name,
+                services: [HomeGraph.AccessoryService(
+                    id: "\(id)-svc", name: "Lightbulb", serviceType: "lightbulb",
+                    characteristics: [HomeGraph.CharacteristicRef(id: "\(id)-on", type: "On", name: "On")] + extra
+                )]
+            )
+        }
+        let dimmable = onOff("acc-dimmable", "Dimmable", extra: [
+            HomeGraph.CharacteristicRef(id: "acc-dimmable-brightness", type: "Brightness", name: "Brightness"),
+        ])
+        let right = onOff("acc-right", "Right")
+        let home = HomeGraph.Home(
+            id: "home-1", name: "Townhouse",
+            rooms: [HomeGraph.Room(id: "room-living", name: "Living Room", accessories: [right, dimmable])]
+        )
+        return HomeGraph(homes: [home])
+    }
+
+    /// The recorded execute-time failure (prop_fde5efe84114: objectMissing —
+    /// Accessory "Right" has no service with characteristic Brightness) is
+    /// now a staging-time rejection, before any human sees a card.
+    @Test func unsupportedCharacteristicIsRejectedAtStaging() async throws {
+        let (_, store, registry, _) = makeContext(graph: capabilityGraph())
+
+        let result = await registry.call(
+            name: "create_scene",
+            arguments: [
+                "homeId": .string("home-1"),
+                "name": .string("Movie Night"),
+                "actions": .array([
+                    .object([
+                        "accessoryId": .string("acc-right"),
+                        "characteristic": .string("Brightness"),
+                        "value": .int(30),
+                    ]),
+                ]),
+            ]
+        )
+        #expect(result.isError == true)
+        let text = errorText(of: result) ?? ""
+        #expect(text.contains("Accessory “Right” has no service with characteristic Brightness"))
+        #expect(text.contains("Nothing was staged"))
+        #expect(await store.allProposals().isEmpty)
+    }
+
+    @Test func supportedCharacteristicStagesAndExecutes() async throws {
+        let (_, store, registry, _) = makeContext(graph: capabilityGraph())
+
+        let staged = try proposal(from: await registry.call(
+            name: "create_scene",
+            arguments: [
+                "homeId": .string("home-1"),
+                "name": .string("Movie Night"),
+                "actions": .array([
+                    .object([
+                        "accessoryId": .string("acc-dimmable"),
+                        "characteristic": .string("Brightness"),
+                        "value": .int(30),
+                    ]),
+                ]),
+            ]
+        ))
+        #expect(staged.state == .staged)
+        // Capability data was readable, so there is no permissive note.
+        #expect(!staged.card.contains { $0.text.contains("Could not verify") })
+
+        let approved = try await store.approve(id: staged.id)
+        #expect(approved.state == .executed)
+        #expect(approved.evidence.first?.confirmed == true)
+    }
+
+    /// Accessories whose services list no characteristics (a graph without
+    /// capability reads) leave support undeterminable — staging stays
+    /// permissive and the card notes it.
+    @Test func missingCapabilityDataDegradesToPermissiveNote() async throws {
+        // fixtureGraph()'s accessories carry no services — no capability data.
+        let (_, store, registry, _) = makeContext()
+
+        let staged = try proposal(from: await registry.call(
+            name: "create_scene",
+            arguments: [
+                "homeId": .string("home-1"),
+                "name": .string("Movie Night"),
+                "actions": .array([
+                    .object([
+                        "accessoryId": .string("acc-lamp-b"),
+                        "characteristic": .string("Brightness"),
+                        "value": .int(30),
+                    ]),
+                ]),
+            ]
+        ))
+        #expect(staged.state == .staged)
+        #expect(staged.card.contains { $0.text.contains("Could not verify Brightness support") })
+    }
+
+    /// Same class of check for characteristic trigger events: the executor
+    /// resolves events against accessory capabilities, so staging does too.
+    @Test func characteristicEventOnUnsupportedAccessoryIsRejectedAtStaging() async throws {
+        let (_, store, registry, _) = makeContext(graph: capabilityGraph())
+
+        let result = await registry.call(
+            name: "create_event_trigger",
+            arguments: [
+                "homeId": .string("home-1"),
+                "name": .string("Dim Alert"),
+                "events": .array([
+                    .object([
+                        "accessoryId": .string("acc-right"),
+                        "characteristic": .string("Brightness"),
+                        "value": .int(50),
+                    ]),
+                ]),
+            ]
+        )
+        #expect(result.isError == true)
+        #expect(errorText(of: result)?.contains("has no service with characteristic Brightness") == true)
+        #expect(await store.allProposals().isEmpty)
+    }
+
     // MARK: - Failed execution
+
 
     @Test func failedExecutionRecordsErrorAndUnconfirmedEvidence() async throws {
         let (fake, store, registry, _) = makeContext()
