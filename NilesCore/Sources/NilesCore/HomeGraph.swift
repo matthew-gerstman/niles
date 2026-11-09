@@ -46,9 +46,51 @@ public struct HomeGraph: Codable, Sendable, Equatable {
     public struct Accessory: Codable, Sendable, Equatable {
         public var id: String
         public var name: String
+        /// The services this accessory exposes, each with the characteristics
+        /// it supports — the capability surface agents consult before
+        /// staging writes (e.g. is Brightness supported at all?).
+        public var services: [AccessoryService]
 
-        public init(id: String, name: String) {
+        public init(id: String, name: String, services: [AccessoryService] = []) {
             self.id = id
+            self.name = name
+            self.services = services
+        }
+    }
+
+    /// One service of an accessory (lightbulb, switch, ...). Distinct from
+    /// `ServiceRef`, which names a service as a service-group member.
+    public struct AccessoryService: Codable, Sendable, Equatable {
+        public var id: String
+        public var name: String
+        /// HomeKit service type UUID (e.g. 0x0043, lightbulb); nil when unset.
+        public var serviceType: String?
+        public var characteristics: [CharacteristicRef]
+
+        public init(
+            id: String,
+            name: String,
+            serviceType: String? = nil,
+            characteristics: [CharacteristicRef] = []
+        ) {
+            self.id = id
+            self.name = name
+            self.serviceType = serviceType
+            self.characteristics = characteristics
+        }
+    }
+
+    /// A characteristic a service supports. `type` is the HomeKit
+    /// characteristic type string — the stable identity to match staged
+    /// writes against; `name` is the human-readable form when known.
+    public struct CharacteristicRef: Codable, Sendable, Equatable {
+        public var id: String
+        public var type: String
+        public var name: String?
+
+        public init(id: String, type: String, name: String? = nil) {
+            self.id = id
+            self.type = type
             self.name = name
         }
     }

@@ -8,16 +8,19 @@ import Testing
 @Suite struct ReadToolRegistryTests {
     // MARK: - Fixtures
 
+    // Well-known HomeKit type UUIDs (format 0x0000-1000-8000-0026BB765291):
+    // 0x0008 brightness characteristic, 0x0043 lightbulb service,
+    // 0x0025 switch-state characteristic (the event trigger's source),
+    // 0x0049 switch service.
+    private let brightness = "00000008-0000-1000-8000-0026BB765291"
+    private let lightbulb = "00000043-0000-1000-8000-0026BB765291"
+    private let powerEvent = "00000025-0000-1000-8000-0026BB765291"
+    private let switchService = "00000049-0000-1000-8000-0026BB765291"
+
     /// One home, three rooms, one zone spanning two of them, a scene with one
     /// action, a service group holding a service (not an accessory), and an
     /// enabled event trigger plus a disabled timer trigger.
     private func makeGraph() -> HomeGraph {
-        // Well-known HomeKit type UUIDs (format 0x0000-1000-8000-0026BB765291):
-        // 0x0008 brightness characteristic, 0x0043 lightbulb service,
-        // 0x0025 switch-state characteristic (the event trigger's source).
-        let brightness = "00000008-0000-1000-8000-0026BB765291"
-        let lightbulb = "00000043-0000-1000-8000-0026BB765291"
-        let powerEvent = "00000025-0000-1000-8000-0026BB765291"
         return HomeGraph(homes: [
             HomeGraph.Home(
                 id: "home-1",
@@ -26,14 +29,59 @@ import Testing
                     HomeGraph.Room(
                         id: "room-kitchen",
                         name: "Kitchen",
-                        accessories: [HomeGraph.Accessory(id: "acc-kitchen-lamp", name: "Kitchen Lamp")]
+                        accessories: [
+                            HomeGraph.Accessory(
+                                id: "acc-kitchen-lamp",
+                                name: "Kitchen Lamp",
+                                services: [
+                                    HomeGraph.AccessoryService(
+                                        id: "svc-kitchen-lamp-light",
+                                        name: "Kitchen Lamp",
+                                        serviceType: lightbulb,
+                                        characteristics: [
+                                            HomeGraph.CharacteristicRef(id: "char-kitchen-on", type: powerEvent, name: "On"),
+                                            HomeGraph.CharacteristicRef(id: "char-kitchen-brightness", type: brightness, name: "Brightness"),
+                                        ]
+                                    )
+                                ]
+                            )
+                        ]
                     ),
                     HomeGraph.Room(
                         id: "room-office",
                         name: "Office",
                         accessories: [
-                            HomeGraph.Accessory(id: "acc-desk-lamp", name: "Desk Lamp"),
-                            HomeGraph.Accessory(id: "acc-office-fan", name: "Ceiling Fan"),
+                            HomeGraph.Accessory(
+                                id: "acc-desk-lamp",
+                                name: "Desk Lamp",
+                                services: [
+                                    HomeGraph.AccessoryService(
+                                        id: "svc-desk-lamp-light",
+                                        name: "Desk Lamp",
+                                        serviceType: lightbulb,
+                                        characteristics: [
+                                            HomeGraph.CharacteristicRef(id: "char-desk-on", type: powerEvent, name: "On"),
+                                            HomeGraph.CharacteristicRef(id: "char-desk-brightness", type: brightness, name: "Brightness"),
+                                        ]
+                                    )
+                                ]
+                            ),
+                            // On/Off only — the non-dimmable control in the
+                            // capability tests below.
+                            HomeGraph.Accessory(
+                                id: "acc-office-fan",
+                                name: "Ceiling Fan",
+                                services: [
+                                    HomeGraph.AccessoryService(
+                                        id: "svc-office-fan",
+                                        name: "Ceiling Fan",
+                                        serviceType: switchService,
+                                        characteristics: [
+                                            HomeGraph.CharacteristicRef(id: "char-fan-on", type: powerEvent, name: "On")
+                                        ]
+                                    )
+                                ]
+                            ),
                         ]
                     ),
                     HomeGraph.Room(id: "room-guest", name: "Guest Room", accessories: []),
@@ -170,6 +218,23 @@ import Testing
         #expect(kitchen.zoneId == nil)
         #expect(kitchen.zoneName == nil)
         #expect(kitchen.accessories.map(\.name) == ["Kitchen Lamp"])
+    }
+
+    @Test func roomsToolExposesServiceCapabilitiesPerAccessory() async throws {
+        let registry = makeRegistry(graph: makeGraph())
+        let rooms = try decode(await registry.call(name: "get_rooms"), as: ReadToolRegistry.RoomsProjection.self)
+
+        // The dimmable bulb: its lightbulb service lists Brightness.
+        let kitchen = try #require(rooms.rooms.first { $0.id == "room-kitchen" })
+        let lamp = try #require(kitchen.accessories.first { $0.id == "acc-kitchen-lamp" })
+        let lampLight = try #require(lamp.services.first { $0.serviceType == lightbulb })
+        #expect(lampLight.characteristics.map(\.type) == [powerEvent, brightness])
+
+        // The On/Off-only switch: no Brightness anywhere on the accessory.
+        let office = try #require(rooms.rooms.first { $0.id == "room-office" })
+        let fan = try #require(office.accessories.first { $0.id == "acc-office-fan" })
+        #expect(fan.services.flatMap(\.characteristics).map(\.type) == [powerEvent])
+        #expect(!fan.services.contains { service in service.characteristics.contains { $0.type == brightness } })
     }
 
     @Test func zonesToolCarriesMemberRooms() async throws {
