@@ -55,11 +55,11 @@ struct AskNilesRouter {
 /// staged proposals, reported by dialog. Pure background — nothing executes,
 /// nothing opens, no follow-up prompts. Human approval stays in the Queue.
 ///
-/// TODO(siri-ai-preview): mark this `@AppIntent(.tool)` when CI's toolchain
-/// moves to Xcode 27.3 — the trait ships in the 27.3 beta SDK (it does not
-/// exist in 27.2, where the macro fails to expand) and lets the Siri AI
-/// preview route full utterances here without a phrase.
-@AppIntent
+/// Declared by plain `AppIntent` conformance: in the iOS 27 SDK the
+/// `@AppIntent` macro is schema-only — `@AppIntent(schema: .domain.action)`
+/// for a system-defined assistant schema (there is no argument-less form and
+/// no `.tool` member). Niles' home-configuration actions map to no system
+/// domain, so Siri routes here via the shortcut phrase below.
 struct AskNilesIntent: AppIntent {
     static let title: LocalizedStringResource = "Ask Niles"
     static let description = IntentDescription(
@@ -83,8 +83,7 @@ struct AskNilesIntent: AppIntent {
 /// The app's shortcut phrases. The free-form `prompt` parameter cannot be
 /// interpolated into a phrase — phrases only expand finite named sets
 /// (AppEnum/AppEntity/Bool) — so the phrase anchors on the app name and Siri
-/// elicits the request. Once the intent carries the `.tool` trait (Xcode
-/// 27.3+), the AI preview also routes full utterances with no phrase.
+/// elicits the request.
 struct NilesShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(
