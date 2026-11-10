@@ -236,6 +236,9 @@ public struct NilesAgent {
         Self.logger.info(
             "Model round 1: respond starting: \(AgentRunTrace.truncated(request, to: 500), privacy: .public)"
         )
+        await AgentRunTraceStore.shared.recordRound(
+            "respond starting: \(AgentRunTrace.truncated(request, to: 500))"
+        )
         let session: LanguageModelSession
         let response: LanguageModelSession.Response<String>
         do {
@@ -247,6 +250,7 @@ public struct NilesAgent {
         } catch {
             // The full underlying error chain, public (see the logger's comment).
             Self.logger.error("Agent session creation failed with the full toolset: \(AgentRunTrace.reflectedErrorChain(error), privacy: .public)")
+            await AgentRunTraceStore.shared.recordError(AgentRunTrace.reflectedErrorChain(error))
             await Self.logSessionDiagnostics(for: error)
             await bisectToolSchemas(using: model)
             throw AgentRunError.mapped(from: error)
@@ -255,6 +259,7 @@ public struct NilesAgent {
             response = try await session.respond(to: request)
         } catch {
             Self.logger.error("Agent session failed mid-run: \(AgentRunTrace.reflectedErrorChain(error), privacy: .public)")
+            await AgentRunTraceStore.shared.recordError(AgentRunTrace.reflectedErrorChain(error))
             await Self.logSessionDiagnostics(for: error)
             throw AgentRunError.mapped(from: error)
         }
@@ -263,6 +268,9 @@ public struct NilesAgent {
         let stagedIds = await dispatcher.stagedProposalIds
         Self.logger.info(
             "Model round 1: respond finished: text (\(response.content.count, privacy: .public) chars): \(AgentRunTrace.truncated(response.content, to: 500), privacy: .public) toolCalls=[\(calls.map(\.tool).joined(separator: ","), privacy: .public)] budgetUsed=\(calls.count, privacy: .public)/\(budget, privacy: .public) stagedProposalIds=[\(stagedIds.joined(separator: ","), privacy: .public)]"
+        )
+        await AgentRunTraceStore.shared.recordRound(
+            "respond finished: text (\(response.content.count) chars): \(AgentRunTrace.truncated(response.content, to: 500)) toolCalls=[\(calls.map(\.tool).joined(separator: ","))] budgetUsed=\(calls.count)/\(budget) stagedProposalIds=[\(stagedIds.joined(separator: ","))]"
         )
         return Outcome(
             summary: response.content,

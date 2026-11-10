@@ -112,6 +112,10 @@ public actor NilesToolDispatcher {
         AgentRunTrace.logger.info(
             "Tool call: \(name, privacy: .public) arguments: \(AgentRunTrace.argumentsJSON(arguments), privacy: .public)"
         )
+        await AgentRunTraceStore.shared.recordToolCall(
+            name: name,
+            argumentsJSON: AgentRunTrace.argumentsJSON(arguments)
+        )
         let clock = ContinuousClock()
         let startedAt = clock.now
         let outcome = await performCall(name: name, arguments: arguments)
@@ -120,6 +124,12 @@ public actor NilesToolDispatcher {
             + Double(duration.components.attoseconds) / 1e15
         AgentRunTrace.logger.info(
             "Tool call finished: \(name, privacy: .public) isError=\(outcome.isError, privacy: .public) durationMs=\(durationMs, privacy: .public) resultLength=\(outcome.text.count, privacy: .public) result: \(AgentRunTrace.truncated(outcome.text, to: 2_000), privacy: .public)"
+        )
+        await AgentRunTraceStore.shared.recordToolResult(
+            name: name,
+            isError: outcome.isError,
+            text: AgentRunTrace.truncated(outcome.text, to: 2_000),
+            durationMs: durationMs
         )
         return outcome
     }

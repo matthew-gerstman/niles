@@ -53,8 +53,10 @@ struct AskNilesRouter {
         Self.trace.info(
             "Ask Niles run start: entry=Siri request: \(AgentRunTrace.truncated(prompt, to: 500), privacy: .public)"
         )
+        await AgentRunTraceStore.shared.recordRunStart(entryPoint: "Siri", request: prompt)
         guard let runner else {
             Self.trace.error("Ask Niles run refused: entry=Siri — no runner (agent unavailable at feature entry)")
+            await AgentRunTraceStore.shared.recordError("Run refused — no runner (agent unavailable at feature entry)")
             return Self.unavailableOutcome
         }
         do {

@@ -97,6 +97,9 @@ public actor AgentService: AgentRunning {
             AgentRunTrace.logger.error(
                 "Agent run refused: availability=unavailable(\(String(describing: reason), privacy: .public)) request: \(AgentRunTrace.truncated(request, to: 500), privacy: .public)"
             )
+            await AgentRunTraceStore.shared.recordError(
+                "Run refused — availability unavailable: \(String(describing: reason)) · request: \(AgentRunTrace.truncated(request, to: 500))"
+            )
             throw AgentRunError.unavailable(reason)
         }
         // The entry point (Siri vs in-app chat) is known only by the
@@ -110,12 +113,16 @@ public actor AgentService: AgentRunning {
             AgentRunTrace.logger.info(
                 "Agent run finished: summary (\(result.summary.count, privacy: .public) chars): \(AgentRunTrace.truncated(result.summary, to: 500), privacy: .public) stagedProposalIds=[\(result.stagedProposalIds.joined(separator: ","), privacy: .public)]"
             )
+            await AgentRunTraceStore.shared.recordRunEnd(
+                summary: "\(AgentRunTrace.truncated(result.summary, to: 500)) stagedProposalIds=[\(result.stagedProposalIds.joined(separator: ","))]"
+            )
             return result
         } catch {
             // The mid-run chain itself is already logged in NilesAgent with
             // its asset probe; this line records the end result — the error
             // the caller actually receives, in its mapped form.
             AgentRunTrace.logger.error("Agent run failed: \(AgentRunTrace.reflectedErrorChain(error), privacy: .public)")
+            await AgentRunTraceStore.shared.recordError(AgentRunTrace.reflectedErrorChain(error))
             throw error
         }
     }
