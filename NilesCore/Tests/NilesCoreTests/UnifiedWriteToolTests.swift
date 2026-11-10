@@ -479,7 +479,7 @@ import Testing
         let graphAtStaging = await fake.graph
         #expect(graphAtStaging.homes.first?.rooms.first?.name == "Kitchen")
 
-        let denied = await store.deny(id: staged.id)
+        let denied = try await store.deny(id: staged.id)
         #expect(denied.state == .denied)
         let graphAfterDenial = await fake.graph
         #expect(graphAfterDenial.homes.first?.rooms.first?.name == "Kitchen")
