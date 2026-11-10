@@ -199,9 +199,14 @@ public actor HomeManagerHomeKitService: HomeKitService {
             )
         }
         if let eventTrigger = trigger as? HMEventTrigger {
+            let endEvents = eventTrigger.endEvents
             return .event(
-                events: eventTrigger.events.map(Self.eventRef(from:)),
-                predicate: eventTrigger.predicate?.description
+                Trigger.Detail.EventDetail.reading(
+                    events: eventTrigger.events.map(Self.eventRef(from:)),
+                    endEvents: endEvents.isEmpty ? nil : endEvents.map(Self.eventRef(from:)),
+                    executeOnce: eventTrigger.executeOnce,
+                    predicate: eventTrigger.predicate?.description
+                )
             )
         }
         return .unknown(kind: String(describing: type(of: trigger)))
@@ -228,6 +233,15 @@ public actor HomeManagerHomeKitService: HomeKitService {
     }
 
     private static func eventRef(from event: HMEvent) -> EventRef {
+        // Presence events: HomeKit evaluates them itself, so the structured
+        // read carries the event type it was created with.
+        if let presenceEvent = event as? HMPresenceEvent {
+            return EventRef(
+                type: "presence",
+                characteristicType: nil,
+                valueDescription: Self.presenceEventTypeDescription(presenceEvent.presenceEventType)
+            )
+        }
         // `HMCharacteristicEvent` is generic over its target value type and
         // has no public non-generic base, so match the concrete
         // specializations HomeKit actually produces.
@@ -245,6 +259,18 @@ public actor HomeManagerHomeKitService: HomeKitService {
             characteristicType: nil,
             valueDescription: nil
         )
+    }
+
+    /// `HMPresenceEventType` rendered as its JSON-friendly name. Unknown
+    /// future cases render as their debug name rather than a lie.
+    static func presenceEventTypeDescription(_ type: HMPresenceEventType) -> String {
+        switch type {
+        case .atHome: return "atHome"
+        case .notAtHome: return "notAtHome"
+        case .entering: return "entering"
+        case .exiting: return "exiting"
+        @unknown default: return String(describing: type)
+        }
     }
 
     private static func eventRef(characteristic: HMCharacteristic, value: Any?) -> EventRef {

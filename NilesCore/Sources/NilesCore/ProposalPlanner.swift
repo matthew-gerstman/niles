@@ -870,11 +870,12 @@ public enum ProposalPlanner {
         recurrences: [[String: Int]]?, executeOnce: Bool?, sceneId: String?, graph: HomeGraph
     ) throws -> Plan {
         let (home, trigger) = try self.trigger(id: triggerId, in: graph)
-        guard case .event(let currentEvents, _) = trigger.detail else {
+        guard case .event(let current) = trigger.detail else {
             throw PlannerError.invalidInput(
                 "Trigger “\(trigger.name)” is a timer trigger — set_trigger_state moves its schedule; event triggers have no fire date."
             )
         }
+        let currentEvents = current.events
         let capabilityNotes = try validate(events: events, home: home)
             + validate(events: endEvents ?? [], home: home)
         try validateEventTriggerRecurrences(recurrences)
@@ -1201,8 +1202,8 @@ public enum ProposalPlanner {
             group.services.contains { $0.accessoryId == accessory.id }
         }
         let referencingTriggers = home.triggers.filter { trigger in
-            guard case .event(let events, _) = trigger.detail else { return false }
-            return events.contains { $0.accessoryId == accessory.id }
+            guard case .event(let current) = trigger.detail else { return false }
+            return current.events.contains { $0.accessoryId == accessory.id }
         }
 
         var card: [ProposalCardLine] = [

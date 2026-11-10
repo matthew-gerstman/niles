@@ -384,8 +384,180 @@ public struct HomeGraph: Codable, Sendable, Equatable {
         /// as `.unknown` rather than being misrendered as a kind they are not.
         public enum Detail: Codable, Sendable, Equatable {
             case timer(fireDate: Date, recurrence: [String: Int])
-            case event(events: [EventRef], predicate: String?)
+            /// The event trigger's full contents — everything the write path
+            /// accepts, read back.
+            case event(EventDetail)
             case unknown(kind: String)
+
+            /// The structured event-trigger read. Carries every field the
+            /// write path accepts (`updateEvents` / `updateEndEvents` /
+            /// recurrences are the write side's events and end events;
+            /// `executeOnce`), plus the readability verdict.
+            ///
+            /// `readable == false` means some part of the trigger could not
+            /// be represented here — in practice a foreign predicate Niles
+            /// did not write. A declarative edit against an unreadable
+            /// trigger discards the parts the read cannot show, so clients
+            /// must surface that to the human before staging one.
+            public struct EventDetail: Codable, Sendable, Equatable {
+                /// The events that fire the trigger (characteristic events
+                /// and presence events).
+                public var events: [EventRef]
+                /// The raw HomeKit predicate description when one exists —
+                /// the evidence behind `readable == false` and the fallback
+                /// for a reader that wants the raw form.
+                public var predicate: String?
+                /// End events that restore the prior state after a duration.
+                /// Nil when the trigger has none (and on graphs captured
+                /// before the field existed).
+                public var endEvents: [EventRef]?
+                /// True when HomeKit disables the trigger after its first
+                /// fire.
+                public var executeOnce: Bool?
+                /// The structured presence read — set only when the
+                /// predicate is the known presence form Niles itself writes.
+                public var presence: Presence?
+                /// False when the trigger has parts the fields above cannot
+                /// represent (an unrecognized event kind, or a foreign
+                /// predicate).
+                public var readable: Bool
+
+                /// The structured presence read: what "someone is home"
+                /// means for this trigger. Niles writes exactly one form —
+                /// presence evaluated for every home user
+                /// (`presenceUserType: .homeUsers`).
+                public struct Presence: Codable, Sendable, Equatable {
+                    public var atHome: Bool
+                    public var userType: String
+
+                    public init(atHome: Bool, userType: String = Self.nilesUserType) {
+                        self.atHome = atHome
+                        self.userType = userType
+                    }
+
+                    /// The only presence user type Niles writes or reads.
+                    public static let nilesUserType = "homeUsers"
+                }
+
+                public init(
+                    events: [EventRef],
+                    predicate: String?,
+                    endEvents: [EventRef]? = nil,
+                    executeOnce: Bool? = nil,
+                    presence: Presence? = nil,
+                    readable: Bool = false
+                ) {
+                    self.events = events
+                    self.predicate = predicate
+                    self.endEvents = endEvents
+                    self.executeOnce = executeOnce
+                    self.presence = presence
+                    self.readable = readable
+                }
+
+                private enum CodingKeys: String, CodingKey {
+                    case events, predicate, endEvents, executeOnce, presence, readable
+                }
+
+                /// Graphs captured before the read-coverage fields existed
+                /// must still decode; the new fields default to their
+                /// "no information" values, and an unknown `readable` reads
+                /// as false — "may be incomplete" is the honest default.
+                public init(from decoder: Decoder) throws {
+                    let container = try decoder.container(keyedBy: CodingKeys.self)
+                    events = try container.decode([EventRef].self, forKey: .events)
+                    predicate = try container.decodeIfPresent(String.self, forKey: .predicate)
+                    endEvents = try container.decodeIfPresent([EventRef].self, forKey: .endEvents)
+                    executeOnce = try container.decodeIfPresent(Bool.self, forKey: .executeOnce)
+                    presence = try container.decodeIfPresent(Presence.self, forKey: .presence)
+                    readable = try container.decodeIfPresent(Bool.self, forKey: .readable) ?? false
+                }
+
+                /// Builds the read-side detail from what the device adapter
+                /// observed, computing `presence` and `readable` honestly.
+                public static func reading(
+                    events: [EventRef], endEvents: [EventRef]? = nil,
+                    executeOnce: Bool? = nil, predicate: String?
+                ) -> EventDetail {
+                    let all = events + (endEvents ?? [])
+                    let knownPredicate: Bool
+                    switch predicate {
+                    case nil: knownPredicate = true
+                    case .some(let description):
+                        knownPredicate = all.contains { $0.type == Self.presenceKind }
+                            && isKnownPresencePredicate(description)
+                    }
+                    return EventDetail(
+                        events: events,
+                        predicate: predicate,
+                        endEvents: endEvents,
+                        executeOnce: executeOnce,
+                        presence: knownPredicate ? structuredPresence(from: all) : nil,
+                        readable: isReadable(events: events, endEvents: endEvents, predicate: predicate)
+                    )
+                }
+
+                /// The event type the graph gives characteristic and
+                /// presence events.
+                static let presenceKind = "presence"
+
+                /// True when every part of the trigger is represented in
+                /// structured form: all events and end events are kinds the
+                /// graph reads, and the predicate is either absent
+                /// (characteristic-only triggers run unpredicated) or the
+                /// known presence form over presence events. Anything else —
+                /// an unrecognized event kind, a predicate without presence
+                /// events to explain it, a compound or foreign predicate —
+                /// makes the read incomplete.
+                static func isReadable(
+                    events: [EventRef], endEvents: [EventRef]?, predicate: String?
+                ) -> Bool {
+                    let knownKinds: Set<String> = ["characteristic", Self.presenceKind]
+                    let all = events + (endEvents ?? [])
+                    guard all.allSatisfy({ knownKinds.contains($0.type) }) else { return false }
+                    switch predicate {
+                    case nil:
+                        return true
+                    case .some(let description):
+                        return all.contains { $0.type == Self.presenceKind }
+                            && isKnownPresencePredicate(description)
+                    }
+                }
+
+                /// True when a predicate description is the known presence
+                /// form — the one Niles derives from presence events
+                /// (`HMEventTrigger.predicateForEvaluatingTrigger(withPresence:)`).
+                /// Deliberately conservative about compounds: AND/OR
+                /// combinations mean parts of the automation live outside
+                /// the structured read, so the trigger reports unreadable
+                /// rather than guessing which parts are covered.
+                static func isKnownPresencePredicate(_ description: String) -> Bool {
+                    let lowered = description.lowercased()
+                    guard lowered.contains("presence") else { return false }
+                    return !lowered.contains(" and ") && !lowered.contains(" or ")
+                        && !lowered.contains("&&") && !lowered.contains("||")
+                }
+
+                /// The presence read from the trigger's own presence event —
+                /// the predicate Niles derives follows the events, never the
+                /// reverse. Nil when the events carry no recognizable
+                /// presence event.
+                static func structuredPresence(from refs: [EventRef]) -> Presence? {
+                    guard
+                        let ref = refs.first(where: { $0.type == Self.presenceKind }),
+                        let value = ref.valueDescription?.lowercased()
+                    else { return nil }
+                    // The fake renders notAtHome as "away"; the device
+                    // adapter renders the HomeKit enum name. Both parse.
+                    if value.contains("athome") && !value.contains("notathome") {
+                        return Presence(atHome: true)
+                    }
+                    if value.contains("notathome") || value.contains("away") {
+                        return Presence(atHome: false)
+                    }
+                    return nil
+                }
+            }
         }
     }
 

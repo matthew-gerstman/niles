@@ -44,7 +44,7 @@ import Testing
         let watcher = HomeGraph.Trigger(
             id: "trigger-watch", name: "Light watcher", isEnabled: false,
             linkedSceneIds: [],
-            detail: .event(
+            detail: .event(HomeGraph.Trigger.Detail.EventDetail(
                 events: [
                     HomeGraph.EventRef(
                         type: "characteristic", characteristicType: "On",
@@ -52,7 +52,7 @@ import Testing
                     ),
                 ],
                 predicate: nil
-            )
+            ))
         )
         let home = HomeGraph.Home(
             id: "home-1",
@@ -318,8 +318,8 @@ import Testing
         #expect(graph.homes.first!.scenes.first { $0.id == "scene-movie" }?.actions.isEmpty == true)
         #expect(graph.homes.first!.serviceGroups.first { $0.id == "group-all" }?.services.isEmpty == true)
         #expect(graph.homes.first!.triggers.first { $0.id == "trigger-watch" } != nil)
-        if case .event(let events, _) = graph.homes.first!.triggers.first { $0.id == "trigger-watch" }!.detail {
-            #expect(events.isEmpty)
+        if case .event(let detail) = graph.homes.first!.triggers.first { $0.id == "trigger-watch" }!.detail {
+            #expect(detail.events.isEmpty)
         } else {
             Issue.record("Trigger watcher should remain an event trigger")
         }

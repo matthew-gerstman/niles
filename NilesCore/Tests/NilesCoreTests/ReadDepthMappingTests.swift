@@ -330,7 +330,7 @@ import Testing
                         id: "trig-event",
                         name: "Sunset Lights",
                         isEnabled: true,
-                        detail: .event(events: [], predicate: nil)
+                        detail: .event(HomeGraph.Trigger.Detail.EventDetail(events: [], predicate: nil))
                     ),
                 ]
             )

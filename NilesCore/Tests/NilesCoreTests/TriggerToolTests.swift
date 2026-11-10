@@ -138,15 +138,19 @@ import Testing
         let graph = await fake.graph
         let created = try #require(findTrigger(graph))
         #expect(created.isEnabled == false)
-        guard case .event(let events, let predicate) = created.detail else {
+        guard case .event(let detail) = created.detail else {
             Issue.record("Expected an event detail, got \(created.detail)")
             return
         }
-        #expect(events == [
+        #expect(detail.events == [
             HomeGraph.EventRef(type: "characteristic", characteristicType: "MotionDetected", valueDescription: "1", accessoryId: "acc-light-a"),
             HomeGraph.EventRef(type: "presence", characteristicType: nil, valueDescription: "atHome"),
         ])
-        #expect(predicate?.contains("MotionDetected") == true)
+        // Presence events imply the presence predicate; the structured read
+        // carries it, and the trigger is fully readable.
+        #expect(detail.predicate?.contains("presence") == true)
+        #expect(detail.presence?.atHome == true)
+        #expect(detail.readable == true)
         #expect(approved.evidence.first?.confirmed == true)
     }
 
@@ -426,12 +430,12 @@ import Testing
         let edited = try #require(findTrigger(graph))
         // The create/arm firewall: editing never silently enables.
         #expect(edited.isEnabled == false)
-        guard case .event(let events, let predicate) = edited.detail else {
+        guard case .event(let detail) = edited.detail else {
             Issue.record("Expected an event detail, got \(edited.detail)")
             return
         }
-        #expect(events == [HomeGraph.EventRef(type: "presence", characteristicType: nil, valueDescription: "atHome")])
-        #expect(predicate?.contains("presence") == true)
+        #expect(detail.events == [HomeGraph.EventRef(type: "presence", characteristicType: nil, valueDescription: "atHome")])
+        #expect(detail.predicate?.contains("presence") == true)
     }
 
     @Test func deniedEventTriggerUpdateLeavesTriggerUntouched() async throws {
@@ -471,11 +475,11 @@ import Testing
         let graph = await fake.graph
         let untouched = try #require(findTrigger(graph))
         #expect(untouched.isEnabled == false)
-        guard case .event(let events, _) = untouched.detail else {
+        guard case .event(let detail) = untouched.detail else {
             Issue.record("Expected an event detail, got \(untouched.detail)")
             return
         }
-        #expect(events.first?.characteristicType == "On")
+        #expect(detail.events.first?.characteristicType == "On")
     }
 
     @Test func editingAnEventTriggerWithTheSameEventsIsNoChange() async throws {
@@ -550,16 +554,20 @@ import Testing
         let approved = try await store.approve(id: created.id)
         #expect(approved.state == .executed)
         #expect(approved.evidence.first?.confirmed == true)
-        // Born disabled, with its events; end events and executeOnce are
-        // device-side (not yet graph-observable).
+        // Born disabled, and everything the write path accepts reads back:
+        // events, end events, and the run-once behavior are all observable
+        // on the graph detail.
         let graph = await fake.graph
         let trigger = try #require(findTrigger(graph))
         #expect(trigger.isEnabled == false)
-        guard case .event(let events, _) = trigger.detail else {
+        guard case .event(let detail) = trigger.detail else {
             Issue.record("Expected an event detail, got \(trigger.detail)")
             return
         }
-        #expect(events.count == 1 && events.first?.characteristicType == "On")
+        #expect(detail.events.count == 1 && detail.events.first?.characteristicType == "On")
+        #expect(detail.endEvents == [HomeGraph.EventRef(type: "characteristic", characteristicType: "On", valueDescription: "0", accessoryId: "acc-light-a")])
+        #expect(detail.executeOnce == true)
+        #expect(detail.readable == true)
     }
 
     // MARK: - Argument errors, reported in-band

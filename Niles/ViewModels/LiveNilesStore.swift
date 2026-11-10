@@ -928,8 +928,10 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
             }
             let schedule = parts.joined(separator: " ")
             return schedule.isEmpty ? "Timer · \(time)" : "Timer · \(schedule)"
-        case .event(let events, let predicate):
-            return "Event · \(events.count) event\(events.count == 1 ? "" : "s")\(predicate.map { " · \($0)" } ?? "")"
+        case .event(let event):
+            let readableSuffix = event.readable ? "" : " · parts unreadable"
+            let predicateSuffix = event.predicate.map { " · \($0)" } ?? ""
+            return "Event · \(event.events.count) event\(event.events.count == 1 ? "" : "s")\(predicateSuffix)\(readableSuffix)"
         case .unknown(let kind):
             return "\(kind) · unsupported trigger kind"
         }
