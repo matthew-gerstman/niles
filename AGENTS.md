@@ -34,7 +34,7 @@ Lessons that cost us three failed attempts — all verified by real failures:
 | Second iPhone (iPhone19,4) | `00008160-001850A80CA8000A` |
 | Bedroom Apple TV 4K (2nd gen) | `27aa3cf91abfe5816512167cfb1098b0ce36fbb2` |
 
-Both phones share the display name "Matthew's iPhone" — always target by UDID, never by name. List with `xcrun devicectl list devices` (needs `DEVELOPER_DIR` set).
+Both phones share the display name "Matthew's iPhone" — always target by UDID, never by name. **The iPhone Duo (00008160-…) is Matthew's primary device** for Niles builds and QA; the 17 Pro Max is secondary. List with `xcrun devicectl list devices` (needs `DEVELOPER_DIR` set).
 
 ### Install to a phone
 
