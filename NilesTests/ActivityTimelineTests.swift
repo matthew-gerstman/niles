@@ -28,7 +28,12 @@ struct ActivityTimelineTests {
 
     // MARK: - Fixtures
 
-    private let now = Date()
+    /// Anchor at local noon: every bucket fixture ("Today", "Yesterday", …)
+    /// offsets from this clock, so a run near midnight can't push an event
+    /// across a calendar boundary. CI hit exactly that at 01:25 UTC —
+    /// now−26h landed the day before yesterday and the "Yesterday" bucket
+    /// vanished from timelineGroupsByRecency.
+    private let now = Calendar.current.startOfDay(for: Date()).addingTimeInterval(12 * 3600)
 
     private func event(
         _ kind: ActivityEvent.Kind,
@@ -41,7 +46,7 @@ struct ActivityTimelineTests {
         evidence: [ProposalEvidence] = []
     ) -> ActivityEvent {
         ActivityEvent(
-            at: Date().addingTimeInterval(-minutesAgo * 60),
+            at: now.addingTimeInterval(-minutesAgo * 60),
             kind: kind,
             proposalId: proposalId,
             proposalTitle: title,
@@ -65,7 +70,7 @@ struct ActivityTimelineTests {
             tool: tool,
             title: title,
             agentName: "Claude Code",
-            createdAt: Date().addingTimeInterval(-minutesAgo * 60),
+            createdAt: now.addingTimeInterval(-minutesAgo * 60),
             isDestructive: false,
             evidence: [],
             diff: [],
