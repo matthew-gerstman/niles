@@ -1,3 +1,4 @@
+import Foundation
 import NilesCore
 
 /// The process-wide store. A background App Intent launches the app process
