@@ -28,13 +28,15 @@ import Testing
         let onB = HomeGraph.CharacteristicRef(id: "char-light-b-on", type: "On")
         let brightA = HomeGraph.CharacteristicRef(id: "char-light-a-bright", type: "Brightness")
         let brightB = HomeGraph.CharacteristicRef(id: "char-light-b-bright", type: "Brightness")
+        // MotionDetected backs the event-trigger dispatch case.
+        let motionA = HomeGraph.CharacteristicRef(id: "char-light-a-motion", type: "MotionDetected")
         let kitchen = HomeGraph.Room(
             id: "room-kitchen", name: "Kitchen",
             accessories: [HomeGraph.Accessory(
                 id: "acc-light-a", name: "Light A",
                 services: [HomeGraph.AccessoryService(
                     id: "svc-light-a", name: "Light A",
-                    characteristics: [onA, brightA]
+                    characteristics: [onA, brightA, motionA]
                 )]
             )]
         )
