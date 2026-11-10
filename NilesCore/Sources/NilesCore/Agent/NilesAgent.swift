@@ -13,13 +13,11 @@ public struct NilesAgentTool: Tool {
     public let name: String
     public let description: String
 
-    /// The registry tool's JSON schema projected into a GenerationSchema.
-    public var parameters: GenerationSchema {
-        Self.generationSchema(from: inputSchema)
-    }
+    /// The registry tool's JSON schema projected into a GenerationSchema,
+    /// computed once at init — projection is not cheap and the schema is static.
+    public var parameters: GenerationSchema { parametersSchema }
 
-    /// Tool schemas are static per tool; the projection runs per access.
-    private let inputSchema: MCP.Value
+    private let parametersSchema: GenerationSchema
     private let dispatcher: NilesToolDispatcher
 
     public init(for tool: Tool, dispatcher: NilesToolDispatcher) {
@@ -28,8 +26,14 @@ public struct NilesAgentTool: Tool {
         // session instructions, so it is stripped here, and the input schema
         // shrinks to an argument summary line.
         self.description = NilesToolCatalog.toolDescription(for: tool)
-        self.inputSchema = tool.inputSchema
         self.dispatcher = dispatcher
+        do {
+            self.parametersSchema = try Self.generationSchema(from: tool.inputSchema)
+        } catch {
+            // Registry schemas are static and reviewed; a malformed one is a
+            // programmer error, and no runtime fallback can answer for it.
+            fatalError("Invalid input schema for tool \(tool.name): \(error)")
+        }
     }
 
     /// Never throws: every failure is an in-band error string so the model can
@@ -41,70 +45,102 @@ public struct NilesAgentTool: Tool {
     }
 
     /// The model's dynamic arguments arrive as GeneratedContent; the
-    /// registries take MCP values. A malformed envelope decodes to no
+    /// registries take MCP values. A non-structure envelope decodes to no
     /// arguments — the registry then rejects the call in-band (missing
     /// required arguments), which teaches the model the same lesson.
     static func registryArguments(from arguments: GeneratedContent) -> [String: MCP.Value] {
-        guard let data = try? JSONEncoder().encode(arguments),
-              let decoded = try? JSONDecoder().decode([String: MCP.Value].self, from: data)
-        else { return [:] }
-        return decoded
+        switch arguments.kind {
+        case .structure(let properties, _):
+            return properties.mapValues(Self.mcpValue)
+        default:
+            return [:]
+        }
+    }
+
+    private static func mcpValue(from content: GeneratedContent) -> MCP.Value {
+        switch content.kind {
+        case .null:
+            return .null
+        case .bool(let value):
+            return .bool(value)
+        case .number(let value):
+            // Whole numbers arrive as Double but travel losslessly as Int,
+            // which is what the registries declare for counts and percentages.
+            if value.truncatingRemainder(dividingBy: 1) == 0, abs(value) < 9_007_199_254_740_992 {
+                return .int(Int(value))
+            }
+            return .double(value)
+        case .string(let value):
+            return .string(value)
+        case .array(let values):
+            return .array(values.map(Self.mcpValue))
+        case .structure(let properties, _):
+            return .object(properties.mapValues(Self.mcpValue))
+        }
     }
 
     // MARK: - Schema projection (MCP JSON schema → GenerationSchema)
 
-    static func generationSchema(from schema: MCP.Value) -> GenerationSchema {
-        let object = Self.objectShape(schema)
-        return GenerationSchema(properties: object.properties, required: object.required)
+    static func generationSchema(from schema: MCP.Value) throws -> GenerationSchema {
+        try GenerationSchema(root: Self.dynamicSchema(schema), dependencies: [])
     }
 
-    private static func objectShape(_ schema: MCP.Value) -> (properties: [GenerationSchema.Property], required: [String]) {
-        guard case .object(let fields) = schema else { return ([], []) }
-        var required: [String] = []
-        if case .array(let requiredValues)? = fields["required"] {
-            required = requiredValues.compactMap { value in
-                if case .string(let name) = value { return name }
-                return nil
-            }
+    /// The Foundation Models dynamic-schema surface: build a
+    /// `DynamicGenerationSchema` tree from the registry's JSON schema, then
+    /// root a GenerationSchema on it.
+    private static func dynamicSchema(_ schema: MCP.Value) -> DynamicGenerationSchema {
+        guard case .object(let fields) = schema else {
+            return DynamicGenerationSchema(type: String.self)
         }
-        guard case .object(let definitions)? = fields["properties"] else {
-            return ([], required)
-        }
-        let properties = definitions
-            .sorted { $0.key < $1.key }
-            .map { name, definition in
-                GenerationSchema.Property(
-                    name: name,
-                    type: Self.propertyKind(definition),
-                    description: Self.description(of: definition)
-                )
-            }
-        return (properties, required)
-    }
-
-    private static func propertyKind(_ definition: MCP.Value) -> GenerationSchema.PropertyKind {
-        guard case .object(let fields) = definition else { return .any }
-        let typeString: String
-        if case .string(let type)? = fields["type"] { typeString = type } else { return .any }
+        let typeString: String?
+        if case .string(let type)? = fields["type"] { typeString = type } else { typeString = nil }
         switch typeString {
-        case "string":
-            return .string
-        case "boolean":
-            return .boolean
-        case "integer", "number":
-            return .number
-        case "array":
-            let items: GenerationSchema
-            if case .object(let itemSchema)? = fields["items"] {
-                items = Self.generationSchema(from: .object(itemSchema))
-            } else {
-                items = GenerationSchema(properties: [], required: [])
-            }
-            return .array(items)
         case "object":
-            return .object(Self.generationSchema(from: definition))
+            var required: Set<String> = []
+            if case .array(let values)? = fields["required"] {
+                required = Set(values.compactMap { value in
+                    if case .string(let name) = value { return name }
+                    return nil
+                })
+            }
+            guard case .object(let definitions)? = fields["properties"] else {
+                return DynamicGenerationSchema(name: "object", properties: [])
+            }
+            let properties = definitions
+                .sorted { $0.key < $1.key }
+                .map { name, definition in
+                    DynamicGenerationSchema.Property(
+                        name: name,
+                        description: Self.description(of: definition),
+                        schema: Self.dynamicSchema(definition),
+                        isOptional: !required.contains(name)
+                    )
+                }
+            return DynamicGenerationSchema(name: "object", properties: properties)
+        case "array":
+            if case .object(let itemSchema)? = fields["items"] {
+                return DynamicGenerationSchema(arrayOf: Self.dynamicSchema(.object(itemSchema)))
+            }
+            return DynamicGenerationSchema(arrayOf: DynamicGenerationSchema(type: String.self))
+        case "string":
+            if case .array(let values)? = fields["enum"] {
+                let choices = values.compactMap { value in
+                    if case .string(let choice) = value { return choice }
+                    return nil
+                }
+                if !choices.isEmpty {
+                    return DynamicGenerationSchema(name: "choice", anyOf: choices)
+                }
+            }
+            return DynamicGenerationSchema(type: String.self)
+        case "integer":
+            return DynamicGenerationSchema(type: Int.self)
+        case "number":
+            return DynamicGenerationSchema(type: Double.self)
+        case "boolean":
+            return DynamicGenerationSchema(type: Bool.self)
         default:
-            return .any
+            return DynamicGenerationSchema(type: String.self)
         }
     }
 
@@ -120,7 +156,7 @@ public enum NilesToolset {
     /// One `NilesAgentTool` per registry tool — all of them, reads and writes
     /// alike — backed by the shared dispatcher that owns the budget.
     public static func tools(dispatcher: NilesToolDispatcher) -> [any Tool] {
-        (dispatcher.readToolDefinitions + dispatcher.writeToolDefinitions)
+        dispatcher.toolDefinitions
             .map { NilesAgentTool(for: $0, dispatcher: dispatcher) }
     }
 }
