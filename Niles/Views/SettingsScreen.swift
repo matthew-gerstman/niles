@@ -17,6 +17,7 @@ struct SettingsScreen: View {
                 serverSection
                 pairingSection
                 pairedAgentsSection
+                agentSection
                 connectionSection
             }
             .navigationTitle("Settings")
@@ -114,6 +115,60 @@ struct SettingsScreen: View {
             }
         } header: {
             Text("Paired Agents")
+        }
+    }
+
+    /// The on-device agent (spec art_VrC0iUUA §Availability gate): what the
+    /// gate decided, and — when it passed — session usage. No run entry
+    /// lives here; requests arrive via Siri, and this surface states
+    /// whether the agent can run at all. When the gate fails, the footer
+    /// names the exact reason and no row invites a request.
+    private var agentSection: some View {
+        Section {
+            LabeledContent("Status", value: Self.agentStatusLabel(model.agentAvailability))
+            if case .available = model.agentAvailability {
+                LabeledContent("Requests", value: model.agentUsage.requestCount.formatted())
+                LabeledContent("Tool calls", value: model.agentUsage.toolCallCount.formatted())
+                if !model.agentUsage.lastStagedProposalIds.isEmpty {
+                    LabeledContent("Last staged", value: model.agentUsage.lastStagedProposalIds.joined(separator: ", "))
+                }
+            }
+        } header: {
+            Text("On-Device Agent")
+        } footer: {
+            Text(Self.agentFooterText(model.agentAvailability))
+        }
+    }
+
+    /// Status row text, one label per gate state. Pure, so the wording is
+    /// directly testable.
+    static func agentStatusLabel(_ availability: AgentAvailability) -> String {
+        switch availability {
+        case .available: return "Available"
+        case .unavailable(.needsIOS27): return "Needs iOS 27"
+        case .unavailable(.deviceNotEligible): return "Device not eligible"
+        case .unavailable(.appleIntelligenceNotEnabled): return "Apple Intelligence off"
+        case .unavailable(.modelNotReady): return "Model not ready"
+        case .unavailable(.unknown): return "Unavailable"
+        }
+    }
+
+    /// The footer states what is missing and nothing else — no fallback is
+    /// ever implied, per the spec's no-degraded-mode invariant. Pure.
+    static func agentFooterText(_ availability: AgentAvailability) -> String {
+        switch availability {
+        case .available:
+            return "Ask Niles by voice via Siri. Every change becomes a proposal awaiting your approval in the Queue — nothing applies until you approve it."
+        case .unavailable(.needsIOS27):
+            return "The on-device agent needs iOS 27 or later. Update your iPhone to use it."
+        case .unavailable(.deviceNotEligible):
+            return "The on-device agent needs Apple Intelligence hardware, which this device does not have."
+        case .unavailable(.appleIntelligenceNotEnabled):
+            return "Turn on Apple Intelligence in Settings to use the on-device agent."
+        case .unavailable(.modelNotReady):
+            return "Apple Intelligence is still downloading the on-device model. Check back soon."
+        case .unavailable(.unknown):
+            return "The on-device agent is unavailable on this device."
         }
     }
 
