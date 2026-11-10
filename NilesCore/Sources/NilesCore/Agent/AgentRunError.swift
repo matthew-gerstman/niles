@@ -22,6 +22,8 @@ public enum AgentRunError: Error, Equatable, Sendable {
 }
 
 #if canImport(FoundationModels)
+import FoundationModels
+
 @available(iOS 27.0, *)
 extension AgentRunError {
     /// Maps a Foundation Models session failure onto the typed error. The
