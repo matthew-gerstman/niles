@@ -134,7 +134,8 @@ import Testing
                         isEnabled: true,
                         detail: .event(HomeGraph.Trigger.Detail.EventDetail(
                             events: [HomeGraph.EventRef(type: "characteristic", characteristicType: powerEvent, valueDescription: "1")],
-                            predicate: nil
+                            predicate: nil,
+                            readable: true
                         ))
                     ),
                 ]
