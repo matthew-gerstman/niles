@@ -230,6 +230,12 @@ public struct NilesAgent {
     /// The runner seam: the scripted-model tests drive this with a custom
     /// `LanguageModel` and get the production instructions and toolset.
     public func run(_ request: String, using model: any LanguageModel) async throws -> Outcome {
+        // One `respond(to:)` per run — the SDK's automatic tool calling
+        // loops the rounds internally, and each round's tool calls surface
+        // here through the dispatcher's trace lines between these two.
+        Self.logger.info(
+            "Model round 1: respond starting: \(AgentRunTrace.truncated(request, to: 500), privacy: .public)"
+        )
         let session: LanguageModelSession
         let response: LanguageModelSession.Response<String>
         do {
@@ -239,8 +245,8 @@ public struct NilesAgent {
                 instructions: instructions
             )
         } catch {
-            // The full underlying error, public (see the logger's comment).
-            Self.logger.error("Agent session creation failed with the full toolset: \(String(describing: error), privacy: .public)")
+            // The full underlying error chain, public (see the logger's comment).
+            Self.logger.error("Agent session creation failed with the full toolset: \(AgentRunTrace.reflectedErrorChain(error), privacy: .public)")
             await Self.logSessionDiagnostics(for: error)
             await bisectToolSchemas(using: model)
             throw AgentRunError.mapped(from: error)
@@ -248,13 +254,19 @@ public struct NilesAgent {
         do {
             response = try await session.respond(to: request)
         } catch {
-            Self.logger.error("Agent session failed mid-run: \(String(describing: error), privacy: .public)")
+            Self.logger.error("Agent session failed mid-run: \(AgentRunTrace.reflectedErrorChain(error), privacy: .public)")
             await Self.logSessionDiagnostics(for: error)
             throw AgentRunError.mapped(from: error)
         }
+        let calls = await dispatcher.attemptedCalls
+        let budget = dispatcher.budget
+        let stagedIds = await dispatcher.stagedProposalIds
+        Self.logger.info(
+            "Model round 1: respond finished: text (\(response.content.count, privacy: .public) chars): \(AgentRunTrace.truncated(response.content, to: 500), privacy: .public) toolCalls=[\(calls.map(\.tool).joined(separator: ","), privacy: .public)] budgetUsed=\(calls.count, privacy: .public)/\(budget, privacy: .public) stagedProposalIds=[\(stagedIds.joined(separator: ","), privacy: .public)]"
+        )
         return Outcome(
             summary: response.content,
-            stagedProposalIds: await dispatcher.stagedProposalIds
+            stagedProposalIds: stagedIds
         )
     }
 

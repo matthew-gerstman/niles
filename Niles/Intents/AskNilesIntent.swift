@@ -1,5 +1,6 @@
 import AppIntents
 import NilesCore
+import os
 
 /// What one Ask-Niles run produced, shaped for the Siri dialog.
 struct AskNilesOutcome: Equatable, Sendable {
@@ -19,6 +20,11 @@ struct AskNilesOutcome: Equatable, Sendable {
 struct AskNilesRouter {
     /// The gated runner, or `nil` when this device cannot run the agent.
     var runner: (any AgentRunning)?
+
+    /// Run-trace logger for the Siri entry point — the entry line (with the
+    /// request text) lives here because the entry point is known only at
+    /// this layer; the shared run trace continues in AgentService.
+    private static let trace = AgentRunTrace.logger
 
     /// Why the agent can't take requests here, stated once — a pure-background
     /// intent has no conversational channel beyond the dialog.
@@ -44,7 +50,13 @@ struct AskNilesRouter {
     /// the runner's summary; only a session-level failure throws, and that
     /// surfaces as a dialog rather than a silent drop.
     func run(_ prompt: String) async -> AskNilesOutcome {
-        guard let runner else { return Self.unavailableOutcome }
+        Self.trace.info(
+            "Ask Niles run start: entry=Siri request: \(AgentRunTrace.truncated(prompt, to: 500), privacy: .public)"
+        )
+        guard let runner else {
+            Self.trace.error("Ask Niles run refused: entry=Siri — no runner (agent unavailable at feature entry)")
+            return Self.unavailableOutcome
+        }
         do {
             let result = try await runner.run(prompt)
             // The agent's summary already reports the staged outcome — titles,

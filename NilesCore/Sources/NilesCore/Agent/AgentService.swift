@@ -89,13 +89,35 @@ public actor AgentService: AgentRunning {
         // (the "Resource (Local Model Asset) unavailable" report). The
         // scripted-model seam (`run(_:using:)`) stays unchecked: tests
         // drive it precisely to exercise the generation path itself.
-        switch availability() {
+        let availabilityState = availability()
+        switch availabilityState {
         case .available:
             break
         case .unavailable(let reason):
+            AgentRunTrace.logger.error(
+                "Agent run refused: availability=unavailable(\(String(describing: reason), privacy: .public)) request: \(AgentRunTrace.truncated(request, to: 500), privacy: .public)"
+            )
             throw AgentRunError.unavailable(reason)
         }
-        return try await run(request, using: SystemLanguageModel())
+        // The entry point (Siri vs in-app chat) is known only by the
+        // callers — they log it with the request text; this line adds the
+        // per-run availability state.
+        AgentRunTrace.logger.info(
+            "Agent run start: availability=available request: \(AgentRunTrace.truncated(request, to: 500), privacy: .public)"
+        )
+        do {
+            let result = try await run(request, using: SystemLanguageModel())
+            AgentRunTrace.logger.info(
+                "Agent run finished: summary (\(result.summary.count, privacy: .public) chars): \(AgentRunTrace.truncated(result.summary, to: 500), privacy: .public) stagedProposalIds=[\(result.stagedProposalIds.joined(separator: ","), privacy: .public)]"
+            )
+            return result
+        } catch {
+            // The mid-run chain itself is already logged in NilesAgent with
+            // its asset probe; this line records the end result — the error
+            // the caller actually receives, in its mapped form.
+            AgentRunTrace.logger.error("Agent run failed: \(AgentRunTrace.reflectedErrorChain(error), privacy: .public)")
+            throw error
+        }
     }
 
     /// The test seam, same shape as `NilesAgent.run(_:using:)`: scripted

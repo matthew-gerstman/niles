@@ -597,6 +597,11 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
     /// are ignored: `canSend` is false from before the first await.
     func send(_ text: String) async {
         guard canSend, let runner = agentRunner else { return }
+        // Entry-point trace for in-app chat: the shared run trace continues
+        // in AgentService (and the dispatcher) once the run starts.
+        AgentRunTrace.logger.info(
+            "Ask Niles run start: entry=in-app chat request: \(AgentRunTrace.truncated(text, to: 500), privacy: .public)"
+        )
         entries.append(ChatEntry(id: UUID(), role: .user, text: text))
         let pending = ChatEntry(id: UUID(), role: .agent, text: "", state: .running)
         entries.append(pending)
