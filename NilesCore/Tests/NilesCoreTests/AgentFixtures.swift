@@ -1,5 +1,9 @@
 import Foundation
 import MCP
+import XCTest
+#if canImport(FoundationModels)
+import FoundationModels
+#endif
 @testable import NilesCore
 
 /// Shared fixtures for the agent-core tests: a small home with dimmable
@@ -201,3 +205,87 @@ enum AgentFixtures {
         ])
     }
 }
+
+// MARK: - Scripted model (shared by the runner and service tests)
+
+/// One scripted turn: a tool call or the final text, exactly one per
+/// generation request. Internal so both test files script the same way.
+@available(iOS 27.0, *)
+struct ScriptedTurn: Hashable, Sendable {
+    var toolName: String?
+    var argumentsJSON: String?
+    var finalText: String
+
+    static func call(_ tool: String, _ argumentsJSON: String) -> ScriptedTurn {
+        ScriptedTurn(toolName: tool, argumentsJSON: argumentsJSON, finalText: "")
+    }
+    static func done(_ text: String) -> ScriptedTurn {
+        ScriptedTurn(toolName: nil, argumentsJSON: nil, finalText: text)
+    }
+}
+
+@available(iOS 27.0, *)
+struct ScriptedExecutorConfiguration: Hashable, Sendable {
+    var turns: [ScriptedTurn]
+}
+
+/// A custom `LanguageModel` replays the script with no on-device model —
+/// the seam that keeps the acceptance scenarios deterministic.
+@available(iOS 27.0, *)
+struct ScriptedLanguageModel: LanguageModel {
+    typealias Executor = ScriptedExecutor
+    var configuration: ScriptedExecutorConfiguration
+
+    var capabilities: LanguageModelCapabilities {
+        LanguageModelCapabilities([.toolCalling])
+    }
+
+    var executorConfiguration: ScriptedExecutorConfiguration { configuration }
+}
+
+@available(iOS 27.0, *)
+struct ScriptedExecutor: LanguageModelExecutor {
+    typealias Model = ScriptedLanguageModel
+
+    let configuration: ScriptedExecutorConfiguration
+
+    init(configuration: ScriptedExecutorConfiguration) throws {
+        self.configuration = configuration
+    }
+
+    func prewarm(model: ScriptedLanguageModel, transcript: Transcript) {}
+
+    func respond(
+        to request: LanguageModelExecutorGenerationRequest,
+        model: ScriptedLanguageModel,
+        streamingInto channel: LanguageModelExecutorGenerationChannel
+    ) async throws {
+        // Each generation corresponds to one tool-call turn or the final
+        // response; count the ones already in the transcript. One tool call
+        // per scripted turn keeps this indexing exact. Transcript is a
+        // RandomAccessCollection, not an `entries` property.
+        let completed = request.transcript.filter { entry in
+            switch entry {
+            case .toolCalls, .response: return true
+            default: return false
+            }
+        }.count
+        let turns = model.configuration.turns
+        guard completed < turns.count else {
+            // Script exhausted: emit nothing further rather than loop forever.
+            await channel.send(.response(action: .appendText("", tokenCount: 0)))
+            return
+        }
+        let turn = turns[completed]
+        if let name = turn.toolName, let argumentsJSON = turn.argumentsJSON {
+            await channel.send(.toolCalls(action: .toolCall(
+                id: UUID().uuidString,
+                name: name,
+                action: .appendArguments(argumentsJSON, tokenCount: argumentsJSON.count / 4)
+            )))
+        } else {
+            await channel.send(.response(action: .appendText(turn.finalText, tokenCount: turn.finalText.count / 4)))
+        }
+    }
+}
+
