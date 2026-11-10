@@ -226,7 +226,7 @@ struct ActivityDetailView: View {
                                 .foregroundStyle(entry.verdict.tint)
                             Text(entry.verdict.label)
                             Spacer()
-                            Text(entry.event.at.formatted(date: .abbreviated, time: .short))
+                            Text(entry.event.at.formatted(date: .abbreviated, time: .shortened))
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
