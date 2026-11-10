@@ -181,6 +181,7 @@ struct AgentChatScreen: View {
                     .submitLabel(.send)
                     .focused($composerFocused)
                     .disabled(!model.canSend)
+                    .accessibilityIdentifier("chat-composer")
                 Button {
                     send()
                 } label: {

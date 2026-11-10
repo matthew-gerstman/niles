@@ -103,14 +103,14 @@ final class AgentChatUITests: XCTestCase {
     // MARK: - Helpers
 
     /// The vertical-axis composer surfaces to XCUITest as a text field or a
-    /// text view depending on OS rendering; match it by placeholder either way.
+    /// text view depending on OS rendering; match it by identifier either way.
     @MainActor
     private func composerField(in app: XCUIApplication) -> XCUIElement {
-        let placeholder = "Ask Niles to dim the living room tonight…"
-        let predicate = NSPredicate(format: "label CONTAINS %@", placeholder)
-        let field = app.textFields.matching(predicate).firstMatch
+        // A vertical-axis TextField exposes an unlabeled text view in the
+        // accessibility hierarchy — match by identifier, not placeholder.
+        let field = app.textFields["chat-composer"]
         if field.exists { return field }
-        return app.textViews.matching(predicate).firstMatch
+        return app.textViews["chat-composer"]
     }
 
     /// SwiftUI List rows intermittently report an invalid activation point
