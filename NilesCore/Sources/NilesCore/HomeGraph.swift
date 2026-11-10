@@ -389,6 +389,72 @@ public struct HomeGraph: Codable, Sendable, Equatable {
             case event(EventDetail)
             case unknown(kind: String)
 
+            /// One wire form for both consumers: the case name keys the
+            /// payload — `{"timer": {"fireDate": …, "recurrence": …}}`,
+            /// `{"event": {…}}`, `{"unknown": "DeviceStateTrigger"}`. Swift's
+            /// synthesized enum encoding nests the unlabeled `.event` payload
+            /// under a `_0` key instead, which no reader documents; explicit
+            /// coding keeps `get_details` and the agent projection on the
+            /// shape the registry description promises.
+            private enum CodingKeys: String, CodingKey { case timer, event, unknown }
+            private enum TimerKeys: String, CodingKey { case fireDate, recurrence }
+            /// The synthesized legacy form for a single-payload case.
+            private enum SynthesizedKeys: String, CodingKey { case payload = "_0" }
+            /// The synthesized legacy form for a labeled single-payload case.
+            private enum UnknownKeys: String, CodingKey { case kind }
+
+            public func encode(to encoder: Encoder) throws {
+                var container = encoder.container(keyedBy: CodingKeys.self)
+                switch self {
+                case .timer(let fireDate, let recurrence):
+                    var timer = container.nestedContainer(keyedBy: TimerKeys.self, forKey: .timer)
+                    try timer.encode(fireDate, forKey: .fireDate)
+                    try timer.encode(recurrence, forKey: .recurrence)
+                case .event(let detail):
+                    try container.encode(detail, forKey: .event)
+                case .unknown(let kind):
+                    try container.encode(kind, forKey: .unknown)
+                }
+            }
+
+            /// Decodes the flat keyed form, tolerating the synthesized
+            /// `_0` event nesting and the keyed `unknown` payload older
+            /// captures emitted.
+            public init(from decoder: Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                if let timer = try? container.nestedContainer(keyedBy: TimerKeys.self, forKey: .timer) {
+                    self = .timer(
+                        fireDate: try timer.decode(Date.self, forKey: .fireDate),
+                        recurrence: try timer.decode([String: Int].self, forKey: .recurrence)
+                    )
+                    return
+                }
+                if let detail = try? container.decode(EventDetail.self, forKey: .event) {
+                    self = .event(detail)
+                    return
+                }
+                if let legacy = try? container.nestedContainer(keyedBy: SynthesizedKeys.self, forKey: .event) {
+                    self = .event(try legacy.decode(EventDetail.self, forKey: .payload))
+                    return
+                }
+                if let kind = try? container.decode(String.self, forKey: .unknown) {
+                    self = .unknown(kind: kind)
+                    return
+                }
+                // The synthesized legacy form nests the labeled payload
+                // under its label.
+                if let legacy = try? container.nestedContainer(keyedBy: UnknownKeys.self, forKey: .unknown),
+                    let kind = try? legacy.decode(String.self, forKey: .kind)
+                {
+                    self = .unknown(kind: kind)
+                    return
+                }
+                throw DecodingError.dataCorruptedError(
+                    forKey: .event, in: container,
+                    debugDescription: "Unrecognized trigger detail encoding."
+                )
+            }
+
             /// The structured event-trigger read. Carries every field the
             /// write path accepts (`updateEvents` / `updateEndEvents` /
             /// recurrences are the write side's events and end events;
