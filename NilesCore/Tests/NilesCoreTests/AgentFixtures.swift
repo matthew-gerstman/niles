@@ -1,5 +1,9 @@
 import Foundation
 import MCP
+import XCTest
+#if canImport(FoundationModels)
+import FoundationModels
+#endif
 @testable import NilesCore
 
 /// Shared fixtures for the agent-core tests: a small home with dimmable
