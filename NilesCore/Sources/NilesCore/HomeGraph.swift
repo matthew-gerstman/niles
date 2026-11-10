@@ -400,6 +400,8 @@ public struct HomeGraph: Codable, Sendable, Equatable {
             private enum TimerKeys: String, CodingKey { case fireDate, recurrence }
             /// The synthesized legacy form for a single-payload case.
             private enum SynthesizedKeys: String, CodingKey { case payload = "_0" }
+            /// The synthesized legacy form for a labeled single-payload case.
+            private enum UnknownKeys: String, CodingKey { case kind }
 
             public func encode(to encoder: Encoder) throws {
                 var container = encoder.container(keyedBy: CodingKeys.self)
@@ -441,7 +443,6 @@ public struct HomeGraph: Codable, Sendable, Equatable {
                 }
                 // The synthesized legacy form nests the labeled payload
                 // under its label.
-                private enum UnknownKeys: String, CodingKey { case kind }
                 if let legacy = try? container.nestedContainer(keyedBy: UnknownKeys.self, forKey: .unknown),
                     let kind = try? legacy.decode(String.self, forKey: .kind)
                 {
