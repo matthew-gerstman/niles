@@ -304,13 +304,14 @@ public enum ProposalEvidenceCollector {
                     confirmed: false
                 )
             }
-            guard case .event(let currentEvents, _) = trigger.detail else {
+            guard case .event(let detail) = trigger.detail else {
                 return ProposalEvidence(
                     claim: "Event trigger \(triggerId) events updated",
                     observed: "Trigger “\(trigger.name)” is no longer an event trigger",
                     confirmed: false
                 )
             }
+            let currentEvents = detail.events
             let currentKeys = Set(currentEvents.map { $0.canonicalKey(in: home) })
             let eventsConfirmed = events.allSatisfy { currentKeys.contains($0.canonicalKey(in: home)) }
             let sceneConfirmed = sceneId.map { trigger.linkedSceneIds.contains($0) } ?? true
