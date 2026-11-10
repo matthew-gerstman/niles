@@ -211,24 +211,29 @@ public actor FakeHomeKitService: HomeKitWriting {
             )
             return id
 
-        case .addEventTrigger(let homeId, let name, let events, _, _, let sceneId):
-            // endEvents and executeOnce are executed by the device but not
-            // yet graph-observable — the read side's trigger detail carries
-            // events and predicate only.
+        case .addEventTrigger(let homeId, let name, let events, let endEvents, let executeOnce, let sceneId):
+            // The graph now carries the full write-path coverage: end
+            // events and execute-once round-trip so reads show what writes
+            // staged (the trigger round-trip fixture test enforces this).
             let h = try indexOfHome(id: homeId)
             let id = nextId(prefix: "trigger", existing: graph.homes[h].triggers.map(\.id))
             graph.homes[h].triggers.append(
                 HomeGraph.Trigger(
                     id: id, name: name, isEnabled: false,
                     linkedSceneIds: sceneId.map { [$0] } ?? [],
-                    detail: .event(events: events.map(Self.eventRef(from:)), predicate: Self.predicateDescription(events))
+                    detail: .event(HomeGraph.Trigger.Detail.EventDetail.reading(
+                        events: events.map(Self.eventRef(from:)),
+                        endEvents: endEvents.isEmpty ? nil : endEvents.map(Self.eventRef(from:)),
+                        executeOnce: executeOnce,
+                        predicate: Self.predicateDescription(events)
+                    ))
                 )
             )
             return id
 
-        case .updateEventTrigger(_, let triggerId, let events, _, _, _, let sceneId):
+        case .updateEventTrigger(_, let triggerId, let events, let endEvents, _, let executeOnce, let sceneId):
             let (h, t) = try indexOfTrigger(id: triggerId)
-            guard case .event = graph.homes[h].triggers[t].detail else {
+            guard case .event(let current) = graph.homes[h].triggers[t].detail else {
                 throw HomeKitWriteError.invalidOperation(
                     "Trigger \(graph.homes[h].triggers[t].name) is not an event trigger; it has no events to edit."
                 )
@@ -237,14 +242,22 @@ public actor FakeHomeKitService: HomeKitWriting {
                 _ = try indexOfScene(id: sceneId)
             }
             // Declarative replacement, mirroring the device executor: events
-            // swap wholesale and the predicate follows them. endEvents,
-            // recurrences, and executeOnce are not yet graph-observable (the
-            // read side doesn't surface them); the fake records what reads
-            // show. The create/arm firewall: isEnabled is never touched here.
-            graph.homes[h].triggers[t].detail = .event(
+            // swap wholesale and the predicate follows them. Optional end
+            // events and execute-once keep their prior value when absent
+            // (nil), exactly like the device executor's update calls. The
+            // create/arm firewall: isEnabled is never touched here.
+            let nextEndEvents: [HomeGraph.EventRef]?
+            if let endEvents {
+                nextEndEvents = endEvents.isEmpty ? nil : endEvents.map(Self.eventRef(from:))
+            } else {
+                nextEndEvents = current.endEvents
+            }
+            graph.homes[h].triggers[t].detail = .event(HomeGraph.Trigger.Detail.EventDetail.reading(
                 events: events.map(Self.eventRef(from:)),
+                endEvents: nextEndEvents,
+                executeOnce: executeOnce ?? current.executeOnce,
                 predicate: Self.predicateDescription(events)
-            )
+            ))
             if let sceneId {
                 graph.homes[h].triggers[t].linkedSceneIds = [sceneId]
             }
@@ -326,9 +339,16 @@ public actor FakeHomeKitService: HomeKitWriting {
                 graph.homes[h].scenes[s].actions.removeAll { $0.accessoryId == accessoryId }
             }
             for t in graph.homes[h].triggers.indices {
-                if case .event(let events, let predicate) = graph.homes[h].triggers[t].detail {
-                    let remaining = events.filter { $0.accessoryId != accessoryId }
-                    graph.homes[h].triggers[t].detail = .event(events: remaining, predicate: predicate)
+                if case .event(let current) = graph.homes[h].triggers[t].detail {
+                    let remaining = current.events.filter { $0.accessoryId != accessoryId }
+                    graph.homes[h].triggers[t].detail = .event(HomeGraph.Trigger.Detail.EventDetail(
+                        events: remaining,
+                        predicate: current.predicate,
+                        endEvents: current.endEvents,
+                        executeOnce: current.executeOnce,
+                        presence: current.presence,
+                        readable: current.readable
+                    ))
                 }
             }
             return nil
@@ -425,20 +445,23 @@ public actor FakeHomeKitService: HomeKitWriting {
         }
     }
 
-    /// The predicate the real adapter derives from the events (presence
-    /// events imply `predicateForEvaluatingTrigger(withPresence:)`). The fake
-    /// records a human-readable equivalent.
+    /// The predicate the real adapter derives from the events: presence
+    /// events imply `predicateForEvaluatingTrigger(withPresence:)` (one
+    /// predicate, never a compound over the event list); characteristic-only
+    /// events run unpredicated. The fake records a human-readable
+    /// equivalent, so the structured read's `readable` flag behaves the
+    /// same as the device's.
     private static func predicateDescription(_ events: [TriggerEventSpec]) -> String? {
-        let descriptions = events.map { (event: TriggerEventSpec) -> String in
-            switch event {
-            case .characteristic(_, let characteristic, let value):
-                value.map { "\(characteristic) == \($0.rendered)" } ?? "\(characteristic) changes"
-            case .presence(let atHome):
-                "presence == \(atHome ? "atHome" : "away")"
-            }
+        func isPresence(_ event: TriggerEventSpec) -> Bool {
+            if case .presence = event { return true }
+            return false
         }
-        guard !descriptions.isEmpty else { return nil }
-        return descriptions.joined(separator: " AND ")
+        guard events.contains(where: isPresence) else { return nil }
+        let atHome = events.contains { event in
+            if case .presence(let atHome) = event { return atHome }
+            return false
+        }
+        return "presence == \(atHome ? "atHome" : "notAtHome")"
     }
 
     private func action(from spec: SceneActionSpec) -> HomeGraph.SceneAction {

@@ -132,10 +132,11 @@ import Testing
                         id: "trig-event",
                         name: "Sunset Lights",
                         isEnabled: true,
-                        detail: .event(
+                        detail: .event(HomeGraph.Trigger.Detail.EventDetail(
                             events: [HomeGraph.EventRef(type: "characteristic", characteristicType: powerEvent, valueDescription: "1")],
-                            predicate: nil
-                        )
+                            predicate: nil,
+                            readable: true
+                        ))
                     ),
                 ]
             )
@@ -160,13 +161,24 @@ import Testing
 
     // MARK: - Tool listing
 
-    @Test func listsSixReadOnlyTools() {
+    @Test func listsConsolidatedReadsFirstThenLegacyReads() {
         let registry = ReadToolRegistry(service: FakeHomeKitService())
         #expect(
             registry.tools.map(\.name)
-                == ["get_homes", "get_rooms", "get_zones", "get_scenes", "get_service_groups", "get_triggers"]
+                == [
+                    "search", "get_details",
+                    "get_homes", "get_rooms", "get_zones", "get_scenes", "get_service_groups", "get_triggers",
+                ]
         )
         #expect(registry.tools.allSatisfy { $0.annotations.readOnlyHint == true })
+        // The six per-type reads remain registered for compatibility —
+        // deprecated in favor of search + get_details, never removed here.
+        let deprecated = registry.tools.filter { $0.description?.contains("DEPRECATED") == true }
+        #expect(
+            Set(deprecated.map(\.name))
+                == ["get_homes", "get_rooms", "get_zones", "get_scenes", "get_service_groups", "get_triggers"]
+        )
+        #expect(registry.toolNames.isSuperset(of: ["search", "get_details"]))
     }
 
     // MARK: - Empty home
@@ -319,12 +331,15 @@ import Testing
         let triggers = try decode(await registry.call(name: "get_triggers"), as: ReadToolRegistry.TriggersProjection.self)
         let sunset = try #require(triggers.triggers.first { $0.id == "trig-event" })
         #expect(sunset.isEnabled == true)
-        guard case .event(let events, let predicate) = sunset.detail else {
+        guard case .event(let detail) = sunset.detail else {
             Issue.record("expected an event trigger, got \(sunset.detail)")
             return
         }
-        #expect(events.first?.type == "characteristic")
-        #expect(predicate == nil)
+        #expect(detail.events.first?.type == "characteristic")
+        #expect(detail.predicate == nil)
+        // No presence event and nothing the parser cannot reconstruct.
+        #expect(detail.presence == nil)
+        #expect(detail.readable == true)
     }
 
     @Test func unknownTriggerKindSerializesAsUnknown() async throws {

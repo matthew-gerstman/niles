@@ -256,8 +256,8 @@ enum RevertPlanBuilder {
                     )],
                     memberRestore: nil, recreatedNames: []
                 )
-            case .event(let events, _):
-                guard let specs = Self.eventSpecs(from: events) else { return nil }
+            case .event(let current):
+                guard let specs = Self.eventSpecs(from: current.events) else { return nil }
                 return BuiltRevert(
                     operations: [.addEventTrigger(
                         homeId: homeId, name: trigger.name, events: specs, endEvents: [],
@@ -332,8 +332,8 @@ enum RevertPlanBuilder {
             )
         case .updateEventTrigger(let homeId, let triggerId, _, _, _, _, _):
             guard let trigger = home?.triggers.first(where: { $0.id == triggerId }),
-                  case .event(let events, _) = trigger.detail,
-                  let specs = Self.eventSpecs(from: events)
+                  case .event(let current) = trigger.detail,
+                  let specs = Self.eventSpecs(from: current.events)
             else { return nil }
             return BuiltRevert(
                 operations: [.updateEventTrigger(
