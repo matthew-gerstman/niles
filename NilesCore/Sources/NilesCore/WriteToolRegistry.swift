@@ -49,9 +49,116 @@ public struct WriteToolRegistry: Sendable {
     // MARK: - Tool definitions
 
     private static let toolDefinitions: [Tool] = [
+        // Unified verbs (Blueprint art_34OYtrUm, write layer): one entry
+        // point per operation, dispatched by id to the same staged-proposal
+        // code paths the per-type tools use. Additive — the per-type tools
+        // below stay registered and functional, marked DEPRECATED.
+        Tool(
+            name: "rename",
+            description: "Rename a room, zone, scene, accessory group, or accessory by id — resolve the id with search or get_details first. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            inputSchema: objectSchema(
+                [
+                    "entityId": stringProperty("The object to rename (from search or get_details)."),
+                    "newName": stringProperty("The object's new name."),
+                ],
+                required: ["entityId", "newName"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false)
+        ),
+        Tool(
+            name: "delete",
+            description: "Delete an object by id: a room, zone, scene, accessory group, accessory, or automation trigger. Per-type consequences — where a room's accessories go, which triggers a deleted scene leaves behind — appear on the review card; for a scene, pass deleteLinkedTriggers to delete those too. DESTRUCTIVE. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            inputSchema: objectSchema(
+                [
+                    "entityId": stringProperty("The object to delete (from search or get_details)."),
+                    "deleteLinkedTriggers": .object([
+                        "type": .string("boolean"),
+                        "description": .string("When deleting a scene: true also deletes every trigger that runs it; omit or false keeps them (they run nothing)."),
+                    ]),
+                ],
+                required: ["entityId"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false, destructiveHint: true)
+        ),
+        Tool(
+            name: "create",
+            description: "Create an object: kind is room, zone, scene, group, timer, or event. Groups contain services (serviceIds); scenes take actions — characteristic writes (Niles never executes scenes); timer and event create automations, which are created DISABLED — arming one requires a separate set_trigger_state approval. Zone names are unique within a home. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            inputSchema: objectSchema(
+                [
+                    "kind": .object([
+                        "type": .string("string"),
+                        "description": .string("What to create: \"room\", \"zone\", \"scene\", \"group\", \"timer\" (timer automation), or \"event\" (event automation)."),
+                    ]),
+                    "homeId": stringProperty("The home to create the object in (from get_homes)."),
+                    "name": stringProperty("The new object's name."),
+                    "actions": sceneActionsProperty,
+                    "serviceIds": .object([
+                        "type": .string("array"),
+                        "items": .object(["type": .string("string")]),
+                        "description": .string("Groups only: the services to group (from get_service_groups); omit for an empty group."),
+                    ]),
+                    "fireDate": stringProperty("Timers only: first fire time, ISO-8601, e.g. 2026-11-09T07:30:00Z."),
+                    "recurrence": .object([
+                        "type": .string("object"),
+                        "description": .string("Timers only: optional repeat rule as date components, e.g. {\"weekday\": 1, \"hour\": 7, \"minute\": 30}. Omit for a one-shot trigger."),
+                    ]),
+                    "events": triggerEventsProperty("Event automations only: every event that can activate the trigger."),
+                    "endEvents": triggerEventsProperty(
+                        "Event automations only: optional events that end the effect and restore the prior state — e.g. end events on the same characteristics the trigger raised."
+                    ),
+                    "executeOnce": .object([
+                        "type": .string("boolean"),
+                        "description": .string("Event automations only: true runs the trigger once and HomeKit disables it afterwards."),
+                    ]),
+                    "sceneId": stringProperty("Timers and event automations only: optional scene the trigger runs when it fires (from get_scenes)."),
+                ],
+                required: ["kind", "homeId", "name"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false)
+        ),
+        Tool(
+            name: "update",
+            description: "Replace an object's complete contents — declarative: anything absent from the list is removed. Groups take members (service ids); zones take rooms (room ids); scenes take actions (characteristic writes); event triggers take events (plus optional endEvents, recurrences, executeOnce, or a new sceneId). Timer triggers have no event list — set_trigger_state moves their schedule, and arming is always its own proposal. Editing never changes a trigger's armed state. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            inputSchema: objectSchema(
+                [
+                    "entityId": stringProperty("The group, zone, scene, or event trigger to update (from search or get_details)."),
+                    "members": .object([
+                        "type": .string("array"),
+                        "items": .object(["type": .string("string")]),
+                        "description": .string("Groups only: every service the group should contain (from get_service_groups)."),
+                    ]),
+                    "rooms": .object([
+                        "type": .string("array"),
+                        "items": .object(["type": .string("string")]),
+                        "description": .string("Zones only: every room the zone should contain (from get_rooms)."),
+                    ]),
+                    "actions": sceneActionsProperty,
+                    "events": triggerEventsProperty("Event triggers only: the full replacement event list that can activate the trigger."),
+                    "endEvents": triggerEventsProperty(
+                        "Event triggers only: optional replacement end events; omit to leave them unchanged, pass [] to clear."
+                    ),
+                    "recurrences": .object([
+                        "type": .string("array"),
+                        "items": .object(["type": .string("object")]),
+                        "description": .string(
+                            "Event triggers only: optional days of the week when the trigger is evaluated, e.g. [{\"weekday\": 1}] (1 = Sunday). Omit to leave unchanged; pass [] to clear."
+                        ),
+                    ]),
+                    "executeOnce": .object([
+                        "type": .string("boolean"),
+                        "description": .string("Event triggers only: true runs the trigger once and HomeKit disables it afterwards; omit to leave unchanged."),
+                    ]),
+                    "sceneId": stringProperty(
+                        "Event triggers only: optional scene the trigger runs when it fires (from get_scenes); re-points the trigger when passed, leaves the current scene untouched when omitted."
+                    ),
+                ],
+                required: ["entityId"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false)
+        ),
         Tool(
             name: "create_room",
-            description: "Create a room in a home. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles on the iPhone. Returns the proposal id immediately; poll get_proposal to learn whether it was approved.",
+            description: "DEPRECATED — prefer create(kind: \"room\", homeId, name). Create a room in a home. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles on the iPhone. Returns the proposal id immediately; poll get_proposal to learn whether it was approved.",
             inputSchema: objectSchema(
                 [
                     "homeId": stringProperty("The home to create the room in (from get_homes)."),
@@ -63,7 +170,7 @@ public struct WriteToolRegistry: Sendable {
         ),
         Tool(
             name: "rename_room",
-            description: "Rename a room. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            description: "DEPRECATED — prefer rename(entityId, newName). Rename a room. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
             inputSchema: objectSchema(
                 [
                     "roomId": stringProperty("The room to rename (from get_rooms)."),
@@ -75,7 +182,7 @@ public struct WriteToolRegistry: Sendable {
         ),
         Tool(
             name: "delete_room",
-            description: "Delete a room. Its accessories move to the default room (HomeKit behavior; the review card says which). DESTRUCTIVE. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            description: "DEPRECATED — prefer delete(entityId). Delete a room. Its accessories move to the default room (HomeKit behavior; the review card says which). DESTRUCTIVE. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
             inputSchema: objectSchema(
                 ["roomId": stringProperty("The room to delete (from get_rooms).")],
                 required: ["roomId"]
@@ -84,7 +191,7 @@ public struct WriteToolRegistry: Sendable {
         ),
         Tool(
             name: "set_zone_rooms",
-            description: "Set a zone's complete room membership — declarative: pass every room the zone should contain; rooms absent from the list are removed, and the review card shows both. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            description: "DEPRECATED — prefer update(entityId, rooms:). Set a zone's complete room membership — declarative: pass every room the zone should contain; rooms absent from the list are removed, and the review card shows both. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
             inputSchema: objectSchema(
                 [
                     "zoneId": stringProperty("The zone to update (from get_zones)."),
@@ -100,7 +207,7 @@ public struct WriteToolRegistry: Sendable {
         ),
         Tool(
             name: "create_zone",
-            description: "Create an empty zone (e.g. 'Upstairs'); add rooms with set_zone_rooms. Zone names are unique within a home. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            description: "DEPRECATED — prefer create(kind: \"zone\", homeId, name). Create an empty zone (e.g. 'Upstairs'); add rooms with set_zone_rooms. Zone names are unique within a home. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
             inputSchema: objectSchema(
                 [
                     "homeId": stringProperty("The home to create the zone in (from get_homes)."),
@@ -112,7 +219,7 @@ public struct WriteToolRegistry: Sendable {
         ),
         Tool(
             name: "rename_zone",
-            description: "Rename a zone. Its rooms are unaffected. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            description: "DEPRECATED — prefer rename(entityId, newName). Rename a zone. Its rooms are unaffected. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
             inputSchema: objectSchema(
                 [
                     "zoneId": stringProperty("The zone to rename (from get_zones)."),
@@ -124,7 +231,7 @@ public struct WriteToolRegistry: Sendable {
         ),
         Tool(
             name: "delete_zone",
-            description: "Delete a zone. Its rooms survive untouched — only the grouping is removed (the review card says which rooms were grouped). DESTRUCTIVE. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            description: "DEPRECATED — prefer delete(entityId). Delete a zone. Its rooms survive untouched — only the grouping is removed (the review card says which rooms were grouped). DESTRUCTIVE. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
             inputSchema: objectSchema(
                 ["zoneId": stringProperty("The zone to delete (from get_zones).")],
                 required: ["zoneId"]
@@ -133,7 +240,7 @@ public struct WriteToolRegistry: Sendable {
         ),
         Tool(
             name: "create_scene",
-            description: "Create a scene (HomeKit action set) whose actions are characteristic writes. Niles stages scenes; it never executes them — running the scene stays in the Home app or Siri. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            description: "DEPRECATED — prefer create(kind: \"scene\", homeId, name, actions:). Create a scene (HomeKit action set) whose actions are characteristic writes. Niles stages scenes; it never executes them — running the scene stays in the Home app or Siri. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
             inputSchema: objectSchema(
                 [
                     "homeId": stringProperty("The home to create the scene in (from get_homes)."),
@@ -146,7 +253,7 @@ public struct WriteToolRegistry: Sendable {
         ),
         Tool(
             name: "set_scene_actions",
-            description: "Set a scene's complete action list — declarative: actions absent from the list are removed. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            description: "DEPRECATED — prefer update(entityId, actions:). Set a scene's complete action list — declarative: actions absent from the list are removed. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
             inputSchema: objectSchema(
                 [
                     "sceneId": stringProperty("The scene to update (from get_scenes)."),
@@ -158,7 +265,7 @@ public struct WriteToolRegistry: Sendable {
         ),
         Tool(
             name: "rename_scene",
-            description: "Rename a scene (HomeKit action set). Scene names are unique across all homes. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            description: "DEPRECATED — prefer rename(entityId, newName). Rename a scene (HomeKit action set). Scene names are unique across all homes. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
             inputSchema: objectSchema(
                 [
                     "sceneId": stringProperty("The scene to rename (from get_scenes)."),
@@ -170,7 +277,7 @@ public struct WriteToolRegistry: Sendable {
         ),
         Tool(
             name: "delete_scene",
-            description: "Delete a scene. Any trigger that runs it keeps existing but no longer runs anything — the review card names every linked trigger; pass deleteLinkedTriggers to delete those too. DESTRUCTIVE. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            description: "DEPRECATED — prefer delete(entityId). Delete a scene. Any trigger that runs it keeps existing but no longer runs anything — the review card names every linked trigger; pass deleteLinkedTriggers to delete those too. DESTRUCTIVE. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
             inputSchema: objectSchema(
                 [
                     "sceneId": stringProperty("The scene to delete (from get_scenes)."),
@@ -210,7 +317,7 @@ public struct WriteToolRegistry: Sendable {
         ),
         Tool(
             name: "create_service_group",
-            description: "Create an empty service group (e.g. 'Desk Lamps'); add members with set_service_group_members. Groups contain services, not accessories. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            description: "DEPRECATED — prefer create(kind: \"group\", homeId, name, serviceIds:). Create an empty service group (e.g. 'Desk Lamps'); add members with set_service_group_members. Groups contain services, not accessories. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
             inputSchema: objectSchema(
                 [
                     "homeId": stringProperty("The home to create the group in (from get_homes)."),
@@ -222,7 +329,7 @@ public struct WriteToolRegistry: Sendable {
         ),
         Tool(
             name: "rename_service_group",
-            description: "Rename a service group. Its members and devices are unaffected. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            description: "DEPRECATED — prefer rename(entityId, newName). Rename a service group. Its members and devices are unaffected. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
             inputSchema: objectSchema(
                 [
                     "groupId": stringProperty("The group to rename (from get_service_groups)."),
@@ -234,7 +341,7 @@ public struct WriteToolRegistry: Sendable {
         ),
         Tool(
             name: "set_service_group_members",
-            description: "Set a service group's complete membership — declarative: services absent from the list are removed. Service ids come from get_service_groups. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            description: "DEPRECATED — prefer update(entityId, members:). Set a service group's complete membership — declarative: services absent from the list are removed. Service ids come from get_service_groups. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
             inputSchema: objectSchema(
                 [
                     "groupId": stringProperty("The group to update (from get_service_groups)."),
@@ -250,7 +357,7 @@ public struct WriteToolRegistry: Sendable {
         ),
         Tool(
             name: "delete_service_group",
-            description: "Delete a service group. Devices are unaffected — a group is a label over services. DESTRUCTIVE. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            description: "DEPRECATED — prefer delete(entityId). Delete a service group. Devices are unaffected — a group is a label over services. DESTRUCTIVE. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
             inputSchema: objectSchema(
                 ["groupId": stringProperty("The group to delete (from get_service_groups).")],
                 required: ["groupId"]
@@ -259,7 +366,7 @@ public struct WriteToolRegistry: Sendable {
         ),
         Tool(
             name: "create_timer_trigger",
-            description: "Create a timer automation (HomeKit HMTimerTrigger) with a fire date and optional recurrence. Created DISABLED — arming it requires a separate set_trigger_state approval, so an automation can never silently start running. Optionally runs an existing scene (sceneId from get_scenes). STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            description: "DEPRECATED — prefer create(kind: \"timer\", homeId, name, fireDate:). Create a timer automation (HomeKit HMTimerTrigger) with a fire date and optional recurrence. Created DISABLED — arming it requires a separate set_trigger_state approval, so an automation can never silently start running. Optionally runs an existing scene (sceneId from get_scenes). STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
             inputSchema: objectSchema(
                 [
                     "homeId": stringProperty("The home to create the trigger in (from get_homes)."),
@@ -277,7 +384,7 @@ public struct WriteToolRegistry: Sendable {
         ),
         Tool(
             name: "create_event_trigger",
-            description: "Create an event automation (HomeKit HMEventTrigger): characteristic events and/or presence events (atHome/away — presence is evaluated by HomeKit itself, no location access). Optionally restores the prior state after a duration (endEvents) and optionally runs once (executeOnce — HomeKit disables the trigger after its first fire). Created DISABLED — arming it requires a separate set_trigger_state approval. Optionally runs an existing scene (sceneId from get_scenes). STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            description: "DEPRECATED — prefer create(kind: \"event\", homeId, name, events:). Create an event automation (HomeKit HMEventTrigger): characteristic events and/or presence events (atHome/away — presence is evaluated by HomeKit itself, no location access). Optionally restores the prior state after a duration (endEvents) and optionally runs once (executeOnce — HomeKit disables the trigger after its first fire). Created DISABLED — arming it requires a separate set_trigger_state approval. Optionally runs an existing scene (sceneId from get_scenes). STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
             inputSchema: objectSchema(
                 [
                     "homeId": stringProperty("The home to create the trigger in (from get_homes)."),
@@ -298,7 +405,7 @@ public struct WriteToolRegistry: Sendable {
         ),
         Tool(
             name: "update_event_trigger",
-            description: "Edit an event automation's contents: replace its events (declarative — the full list; presence events re-derive their predicate), and optionally its end events, days-of-week recurrences, or run-once behavior, and optionally re-point it at a different scene. Editing never changes the trigger's armed state — a disabled trigger stays disabled; arming stays a separate set_trigger_state approval. Timer triggers have no events; use set_trigger_state to move their schedule. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            description: "DEPRECATED — prefer update(entityId, events: …). Edit an event automation's contents: replace its events (declarative — the full list; presence events re-derive their predicate), and optionally its end events, days-of-week recurrences, or run-once behavior, and optionally re-point it at a different scene. Editing never changes the trigger's armed state — a disabled trigger stays disabled; arming stays a separate set_trigger_state approval. Timer triggers have no events; use set_trigger_state to move their schedule. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
             inputSchema: objectSchema(
                 [
                     "triggerId": stringProperty("The event trigger to edit (from get_triggers)."),
@@ -344,7 +451,7 @@ public struct WriteToolRegistry: Sendable {
         ),
         Tool(
             name: "delete_trigger",
-            description: "Delete an automation trigger — it stops firing immediately. DESTRUCTIVE. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            description: "DEPRECATED — prefer delete(entityId). Delete an automation trigger — it stops firing immediately. DESTRUCTIVE. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
             inputSchema: objectSchema(
                 ["triggerId": stringProperty("The trigger to delete (from get_triggers).")],
                 required: ["triggerId"]
@@ -353,7 +460,7 @@ public struct WriteToolRegistry: Sendable {
         ),
         Tool(
             name: "rename_accessory",
-            description: "Rename an accessory (e.g. a lamp) as it appears across HomeKit. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            description: "DEPRECATED — prefer rename(entityId, newName). Rename an accessory (e.g. a lamp) as it appears across HomeKit. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
             inputSchema: objectSchema(
                 [
                     "accessoryId": stringProperty("The accessory to rename (from get_rooms)."),
@@ -395,7 +502,7 @@ public struct WriteToolRegistry: Sendable {
         ),
         Tool(
             name: "remove_accessory",
-            description: "Remove an accessory from the home — its services leave their service groups, its scene actions die, and triggers watching its characteristics stop working. The review card lists every affected scene, group, and trigger. DESTRUCTIVE. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            description: "DEPRECATED — prefer delete(entityId). Remove an accessory from the home — its services leave their service groups, its scene actions die, and triggers watching its characteristics stop working. The review card lists every affected scene, group, and trigger. DESTRUCTIVE. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
             inputSchema: objectSchema(
                 ["accessoryId": stringProperty("The accessory to remove (from get_rooms).")],
                 required: ["accessoryId"]
