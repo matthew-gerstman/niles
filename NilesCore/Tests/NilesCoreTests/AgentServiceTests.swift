@@ -87,5 +87,66 @@ final class AgentServiceTests: XCTestCase {
         XCTAssertEqual(usage.toolCallCount, 3, "per-request sessions accumulate into usage, one call each")
         XCTAssertTrue(usage.lastStagedProposalIds.isEmpty, "usage reports the latest request, not a running total of staged ids")
     }
+
+    // MARK: - Per-run availability recheck
+
+    func testPerRunRecheckRefusesWithTheTypedReasonWhenTheGateNoLongerPasses() async throws {
+        let fixture = AgentFixtures.registries()
+        let counter = EvaluationCounter()
+        let service = AgentService(store: fixture.store, availability: {
+            counter.increment()
+            return .unavailable(.modelNotReady)
+        })
+
+        do {
+            _ = try await service.run("Set the living room lights to 30%.")
+            XCTFail("a stale gate must refuse the run with the typed reason")
+        } catch let error as AgentRunError {
+            XCTAssertEqual(error, .unavailable(.modelNotReady))
+        }
+
+        // The run never reached the model — usage stays at zero.
+        let usage = await service.usage
+        XCTAssertEqual(usage.requestCount, 0)
+        XCTAssertEqual(counter.value, 1, "the recheck runs once per run, not once per service")
+    }
+
+    func testPerRunRecheckReevaluatesOnEveryRun() async throws {
+        let fixture = AgentFixtures.registries()
+        let counter = EvaluationCounter()
+        let service = AgentService(store: fixture.store, availability: {
+            counter.increment()
+            return .unavailable(.modelNotReady)
+        })
+
+        for _ in 0..<2 {
+            do {
+                _ = try await service.run("Set the living room lights to 30%.")
+                XCTFail("a stale gate must refuse the run with the typed reason")
+            } catch let error as AgentRunError {
+                XCTAssertEqual(error, .unavailable(.modelNotReady))
+            }
+        }
+        XCTAssertEqual(counter.value, 2, "each run re-evaluates the gate — the entry-time verdict is never cached")
+    }
+}
+
+/// A thread-safe evaluation counter for injected availability closures —
+/// the actor calls the closure; the test reads the count back.
+private final class EvaluationCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    func increment() {
+        lock.lock()
+        count += 1
+        lock.unlock()
+    }
+
+    var value: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
+    }
 }
 #endif

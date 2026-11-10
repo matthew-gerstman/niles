@@ -31,6 +31,61 @@ final class AgentScriptedModelTests: XCTestCase {
         return try await agent.run(request, using: model)
     }
 
+    // MARK: - Asset-unavailable mapping (the "Resource (Local Model Asset)
+    // unavailable" device report)
+
+    /// A session that throws the iOS 27 asset-unavailable case surfaces as
+    /// the typed `AgentRunError.assetUnavailable` — the case
+    /// `AskNilesRouter.failureMessage` renders the retry wording for.
+    func testAssetUnavailableGenerationErrorMapsToTheTypedCase() async throws {
+        let (agent, _, _, _) = makeAgent()
+        let model = ScriptedLanguageModel(configuration: ScriptedExecutorConfiguration(
+            turns: [], failure: .systemAssetsUnavailable
+        ))
+
+        do {
+            _ = try await agent.run("Set the living room lights to 30%.", using: model)
+            XCTFail("the scripted asset-unavailable failure must surface")
+        } catch let error as AgentRunError {
+            XCTAssertEqual(error, .assetUnavailable)
+        }
+    }
+
+    /// The deprecated `GenerationError` spelling maps to the same typed
+    /// case — a runtime that still throws the legacy case cannot slip past
+    /// the typed handling.
+    func testDeprecatedAssetUnavailableSpellingAlsoMapsToTheTypedCase() async throws {
+        let (agent, _, _, _) = makeAgent()
+        let model = ScriptedLanguageModel(configuration: ScriptedExecutorConfiguration(
+            turns: [], failure: .legacyAssetsUnavailable
+        ))
+
+        do {
+            _ = try await agent.run("Set the living room lights to 30%.", using: model)
+            XCTFail("the scripted asset-unavailable failure must surface")
+        } catch let error as AgentRunError {
+            XCTAssertEqual(error, .assetUnavailable)
+        }
+    }
+
+    /// Anything the SDK names differently is passed through unchanged — the
+    /// generic failure copy keeps rendering the real localized description.
+    func testOpaqueSessionErrorPassesThroughUnmapped() async throws {
+        let (agent, _, _, _) = makeAgent()
+        let model = ScriptedLanguageModel(configuration: ScriptedExecutorConfiguration(
+            turns: [], failure: .opaque("Something else entirely")
+        ))
+
+        do {
+            _ = try await agent.run("Set the living room lights to 30%.", using: model)
+            XCTFail("the scripted failure must surface")
+        } catch let error as AgentRunError {
+            XCTFail("an unknown failure must not be rewrapped: \(error)")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, "Something else entirely")
+        }
+    }
+
     // MARK: - Living-room lights to 30%
 
     func testLivingRoomLightsTo30PercentStagesOneCreateSceneProposal() async throws {

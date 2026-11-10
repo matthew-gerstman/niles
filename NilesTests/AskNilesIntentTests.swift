@@ -47,6 +47,23 @@ struct AskNilesIntentTests {
         #expect(outcome.stagedProposalIds.isEmpty)
     }
 
+    // MARK: - Typed failure copy
+
+    /// The asset-unavailable case (gate read `.available`, the asset was
+    /// missing at generation time) renders the retry wording — a state that
+    /// resolves on its own, not a request the agent misunderstood.
+    @Test
+    func assetUnavailableErrorRendersTheModelNotReadyRetryCopy() {
+        let message = AskNilesRouter.failureMessage(for: AgentRunError.assetUnavailable)
+        #expect(message == "The on-device model isn't ready yet — try again in a few minutes.")
+    }
+
+    @Test
+    func otherSessionErrorsKeepTheGenericFailureCopy() {
+        let message = AskNilesRouter.failureMessage(for: AgentRunError.unavailable(.modelNotReady))
+        #expect(message.contains("couldn't complete"))
+    }
+
     // MARK: - The human gate
 
     @Test

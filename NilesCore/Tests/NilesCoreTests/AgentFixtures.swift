@@ -227,6 +227,53 @@ struct ScriptedTurn: Hashable, Sendable {
 @available(iOS 27.0, *)
 struct ScriptedExecutorConfiguration: Hashable, Sendable {
     var turns: [ScriptedTurn]
+    /// When set, every generation throws the named Foundation Models
+    /// failure instead of replaying the script — the seam for
+    /// session-failure tests (asset-unavailable mapping, pass-through).
+    var failure: ScriptedFailure?
+
+    init(turns: [ScriptedTurn], failure: ScriptedFailure? = nil) {
+        self.turns = turns
+        self.failure = failure
+    }
+}
+
+/// A Foundation Models failure a scripted model throws. The real error
+/// types, constructed the way the SDK's public initializers allow — never
+/// a lookalike — so the production mapping is matched against the actual
+/// enum cases.
+@available(iOS 27.0, *)
+enum ScriptedFailure: Hashable, Sendable {
+    /// The iOS 27 spelling the session throws when the local model asset
+    /// is unavailable (`SystemLanguageModel.Error.assetsUnavailable`).
+    case systemAssetsUnavailable
+    /// The deprecated `GenerationError.assetsUnavailable` spelling — the
+    /// iOS 26 case, covered so the mapping cannot miss a runtime that
+    /// still throws it.
+    case legacyAssetsUnavailable
+    /// An arbitrary error the mapping must pass through unchanged.
+    case opaque(String)
+
+    var error: Error {
+        switch self {
+        case .systemAssetsUnavailable:
+            return SystemLanguageModel.Error.assetsUnavailable(
+                SystemLanguageModel.Error.AssetsUnavailable(
+                    debugDescription: "Resource (Local Model Asset) unavailable"
+                )
+            )
+        case .legacyAssetsUnavailable:
+            return GenerationError.assetsUnavailable(
+                GenerationError.Context(debugDescription: "Resource (Local Model Asset) unavailable")
+            )
+        case .opaque(let description):
+            return NSError(
+                domain: "NilesCoreTests.ScriptedFailure",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: description]
+            )
+        }
+    }
 }
 
 /// A custom `LanguageModel` replays the script with no on-device model —
@@ -260,6 +307,11 @@ struct ScriptedExecutor: LanguageModelExecutor {
         model: ScriptedLanguageModel,
         streamingInto channel: LanguageModelExecutorGenerationChannel
     ) async throws {
+        // A scripted session failure replaces the whole script: every
+        // generation throws the named Foundation Models error.
+        if let failure = model.configuration.failure {
+            throw failure.error
+        }
         // Each generation corresponds to one tool-call turn or the final
         // response; count the ones already in the transcript. One tool call
         // per scripted turn keeps this indexing exact. Transcript is a

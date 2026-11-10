@@ -63,12 +63,39 @@ public actor AgentService: AgentRunning {
 
     private let store: ProposalStore
 
+    /// The per-run availability check. Production reads the live gate;
+    /// tests inject a stub so recheck behavior is exercised without
+    /// hardware that reports it.
+    private let availability: @Sendable () -> AgentAvailability
+
     public init(store: ProposalStore) {
         self.store = store
+        self.availability = { AgentAvailabilityGate.evaluate() }
+    }
+
+    /// The test seam: an injected availability closure stands in for the
+    /// live gate.
+    public init(store: ProposalStore, availability: @escaping @Sendable () -> AgentAvailability) {
+        self.store = store
+        self.availability = availability
     }
 
     public func run(_ request: String) async throws -> AgentRunResult {
-        try await run(request, using: SystemLanguageModel())
+        // Per-run recheck: feature entry evaluated the gate once, but the
+        // on-device model's readiness changes at system level between runs
+        // (settings, OS update, asset download state). Re-evaluate here —
+        // once per run, never in a loop — so a stale runner refuses with
+        // the typed reason instead of throwing a raw generation failure
+        // (the "Resource (Local Model Asset) unavailable" report). The
+        // scripted-model seam (`run(_:using:)`) stays unchecked: tests
+        // drive it precisely to exercise the generation path itself.
+        switch availability() {
+        case .available:
+            break
+        case .unavailable(let reason):
+            throw AgentRunError.unavailable(reason)
+        }
+        return try await run(request, using: SystemLanguageModel())
     }
 
     /// The test seam, same shape as `NilesAgent.run(_:using:)`: scripted

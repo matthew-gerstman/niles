@@ -46,8 +46,9 @@ public enum AgentAvailabilityGate {
     /// eligible.
     public static func evaluate() -> AgentAvailability {
         guard #available(iOS 27.0, *) else { return .unavailable(.needsIOS27) }
-        // Checked at feature entry, not per request: the on-device model's
-        // availability changes only at system level (settings, OS update).
+        // Feature entry evaluates this once (LiveNilesStore init); every
+        // run re-evaluates it (AgentService) — the on-device model's
+        // availability changes at system level between runs.
         return evaluate(isOS27OrNewer: true, systemAvailability: SystemLanguageModel.default.availability)
     }
 

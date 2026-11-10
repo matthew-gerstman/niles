@@ -1,5 +1,6 @@
 import Foundation
 import MCP
+import os
 #if canImport(FoundationModels)
 import FoundationModels
 
@@ -171,6 +172,12 @@ public enum NilesToolset {
 /// the shared dispatcher.
 @available(iOS 27.0, *)
 public struct NilesAgent {
+    /// Session-failure diagnostics: the full underlying error at public
+    /// privacy, so device Console capture shows the real failure (the
+    /// availability gate can read `.available` while the asset is missing
+    /// at generation time) instead of an os_log privacy redaction.
+    private static let logger = Logger(subsystem: "com.gerstman.niles", category: "agent")
+
     public struct Outcome: Sendable, Equatable {
         public var summary: String
         public var stagedProposalIds: [String]
@@ -204,12 +211,21 @@ public struct NilesAgent {
     /// The runner seam: the scripted-model tests drive this with a custom
     /// `LanguageModel` and get the production instructions and toolset.
     public func run(_ request: String, using model: any LanguageModel) async throws -> Outcome {
-        let session = try LanguageModelSession(
-            model: model,
-            tools: NilesToolset.tools(dispatcher: dispatcher),
-            instructions: instructions
-        )
-        let response = try await session.respond(to: request)
+        let session: LanguageModelSession
+        let response: LanguageModelSession.Response<String>
+        do {
+            session = try LanguageModelSession(
+                model: model,
+                tools: NilesToolset.tools(dispatcher: dispatcher),
+                instructions: instructions
+            )
+            response = try await session.respond(to: request)
+        } catch {
+            // One line at the one session-failure catch site — the full
+            // underlying error, public (see the logger's comment).
+            Self.logger.error("Agent session failed: \(String(describing: error), privacy: .public)")
+            throw AgentRunError.mapped(from: error)
+        }
         return Outcome(
             summary: response.content,
             stagedProposalIds: await dispatcher.stagedProposalIds
