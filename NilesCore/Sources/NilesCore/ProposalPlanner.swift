@@ -1,4 +1,5 @@
 import Foundation
+import MCP
 
 /// Pure planning: one typed write request + the current graph -> the minimal
 /// HomeKit operations and the full review card. No side effects; every
