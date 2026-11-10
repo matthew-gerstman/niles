@@ -164,7 +164,7 @@ import Testing
     @Test func toolDescriptionCarriesTheCompactLineAndArgs() throws {
         let rename = try #require(agentTool("rename"))
         let description = NilesToolCatalog.toolDescription(for: rename)
-        #expect(description.hasPrefix("Rename a room, zone, scene, accessory group, or accessory."))
+        #expect(description.hasPrefix("Rename a room, zone, scene, accessory group, or accessory by id — resolve the id with search or get_details first."))
         #expect(description.contains("args:"))
         #expect(!description.contains("STAGES A PROPOSAL"))
     }

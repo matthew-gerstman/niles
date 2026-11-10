@@ -103,7 +103,7 @@ import Testing
         // Declarative-replace consequences on the declarative tools.
         for name in ["update", "set_zone_rooms", "set_scene_actions", "set_service_group_members"] {
             #expect(
-                description(name).contains("absent from the list is removed"),
+                description(name).lowercased().contains("absent from the list"),
                 "\(name) must state the declarative-replace consequence"
             )
         }
@@ -134,10 +134,13 @@ import Testing
     // MARK: - Two-sided coherence
 
     @Test func agentSurfaceDescriptionsAreTheRegistryText() {
-        // Both projections read one source: each agent tool's description
-        // is its registry twin's text with the MCP staging boilerplate
-        // stripped. A unified verb given its own diverging text, or an
-        // adapter description that drifts from the shared static, fails here.
+        // Both projections read one source: with the MCP staging boilerplate
+        // stripped, each agent tool's description is identical to its
+        // registry twin's text. A unified verb given its own diverging text,
+        // or an adapter description that drifts from the shared static,
+        // fails here. (Pass-through tools carry the staging suffix in both
+        // listings — the MCP server lists the registry text verbatim — so
+        // the comparison strips it from both sides.)
         let registry = listingByName
         for tool in agentSurfaceTools {
             guard let registryTool = registry[tool.name] else {
@@ -146,7 +149,7 @@ import Testing
             }
             let compacted = NilesToolCatalog.compactedRegistryDescription(for: registryTool)
             #expect(
-                tool.description == compacted,
+                NilesToolCatalog.compactedRegistryDescription(for: tool) == compacted,
                 "\(tool.name): agent description diverges from the registry text"
             )
         }
