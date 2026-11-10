@@ -65,11 +65,16 @@ public struct ReadToolRegistry: Sendable {
                 return try Self.result(Self.searchView(graph, query: query))
             }
             if name == "get_details" {
-                return try Self.result(try Self.detailsView(
+                // `detailsView` returns a finished `CallTool.Result` (cap
+                // handling can downgrade to an in-band error) — return it
+                // directly. Passing it through `result(_:)` would encode the
+                // CallTool.Result envelope as the projection, double-wrapping
+                // the summary under a "content" key.
+                return Self.detailsView(
                     graph,
                     kind: arguments?["kind"]?.stringValue,
                     id: arguments?["id"]?.stringValue
-                ))
+                )
             }
             if name == "get_rooms" {
                 let detail = arguments?["detail"]?.stringValue ?? Self.leanDetail
