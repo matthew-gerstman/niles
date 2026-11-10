@@ -24,8 +24,8 @@ final class AgentContextBudgetTests: XCTestCase {
             throw XCTSkip("Apple Intelligence is unavailable on this runtime; token counting needs the system model")
         }
 
-        let toolTokens = try model.tokenCount(for: tools)
-        let instructionTokens = try model.tokenCount(for: Instructions(NilesAgentInstructions.text()))
+        let toolTokens = try await model.tokenCount(for: tools)
+        let instructionTokens = try await model.tokenCount(for: Instructions(NilesAgentInstructions.text()))
         let fixedSurface = toolTokens + instructionTokens
 
         // The measured budget: instructions + tools ≈ 1,600 tokens, well
