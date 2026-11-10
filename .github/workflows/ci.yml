@@ -1,7 +1,8 @@
 name: CI
 
+# CI runs on main only — PR checks were removed for providing no signal
+# over the main-branch run.
 on:
-  pull_request:
   push:
     branches:
       - main
