@@ -224,12 +224,39 @@ public struct NilesAgent {
             // One line at the one session-failure catch site — the full
             // underlying error, public (see the logger's comment).
             Self.logger.error("Agent session failed: \(String(describing: error), privacy: .public)")
+            await Self.logAssetDiagnostics(for: error)
             throw AgentRunError.mapped(from: error)
         }
         return Outcome(
             summary: response.content,
             stagedProposalIds: await dispatcher.stagedProposalIds
         )
+    }
+
+    /// Runtime model diagnostics for the asset-unavailable bisect. Logs the
+    /// live system-model availability and en_US support (what the gate reads
+    /// between runs), and — when the failure mapped to `.assetUnavailable` —
+    /// runs a one-shot minimal probe session: no tools, no instructions, one
+    /// short prompt. A passing probe points at the Niles session surface
+    /// (tools/schema/instructions); a failing one at the device asset itself.
+    private static func logAssetDiagnostics(for error: Error) async {
+        let system = SystemLanguageModel.default
+        let supportsEnUS = system.supportsLocale(Locale(identifier: "en_US"))
+        Self.logger.error(
+            "Agent asset diagnostics: availability=\(String(describing: system.availability), privacy: .public) supportsEnUS=\(supportsEnUS, privacy: .public)"
+        )
+        guard case AgentRunError.assetUnavailable = AgentRunError.mapped(from: error) else { return }
+        do {
+            let probe = try LanguageModelSession()
+            let reply = try await probe.respond(to: "Reply with OK.")
+            Self.logger.error(
+                "Agent asset probe: minimal session succeeded (\(reply.content, privacy: .public)) — failure likely from the Niles session surface (tools/schema/instructions), not the device asset"
+            )
+        } catch {
+            Self.logger.error(
+                "Agent asset probe: minimal session failed: \(String(describing: error), privacy: .public) — the device asset itself is unavailable"
+            )
+        }
     }
 }
 #endif
