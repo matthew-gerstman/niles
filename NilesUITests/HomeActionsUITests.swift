@@ -53,8 +53,10 @@ final class HomeActionsUITests: XCTestCase {
         )
         let detailRun = app.buttons["Run"].firstMatch
         XCTAssertTrue(detailRun.waitForExistence(timeout: 10))
-        XCTAssertTrue(app.buttons["Rename"].exists)
-        XCTAssertTrue(app.buttons["Delete"].exists)
+        // Structural management is not a Home-tab quick action: the detail
+        // page offers Run only — no Rename, no Delete.
+        XCTAssertFalse(app.buttons["Rename"].exists)
+        XCTAssertFalse(app.buttons["Delete"].exists)
         capture("home-detail-actions", in: app)
         detailRun.tap()
         app.navigationBars.buttons.firstMatch.tap()
