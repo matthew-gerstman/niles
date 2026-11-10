@@ -18,12 +18,12 @@ final class AppNavigation {
 /// approval — the review hand-off for an Ask-Niles run. It only navigates;
 /// approving or denying stays a human action in the app.
 struct OpenQueueIntent: AppIntent {
-    static var title: LocalizedStringResource = "Open Queue"
-    static var description = IntentDescription(
+    static let title: LocalizedStringResource = "Open Queue"
+    static let description = IntentDescription(
         "Opens Niles' Queue, where staged proposals wait for your approval."
     )
 
-    static var openAppWhenRun = true
+    static let openAppWhenRun = true
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
         AppNavigation.shared.requestQueue()
