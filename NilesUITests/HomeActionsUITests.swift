@@ -105,7 +105,7 @@ final class HomeActionsUITests: XCTestCase {
             let frame = element.frame
             if frame.origin.x.isFinite, frame.width > 1, frame.height > 1 {
                 app.coordinate(withNormalizedOffset: .zero)
-                    .withOffset(CGPoint(x: frame.midX, y: frame.midY))
+                    .withOffset(CGVector(dx: frame.midX, dy: frame.midY))
                     .tap()
                 return
             }
