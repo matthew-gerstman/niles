@@ -172,7 +172,7 @@ import Testing
         #expect(registry.tools.allSatisfy { $0.annotations.readOnlyHint == true })
         // The six per-type reads remain registered for compatibility —
         // deprecated in favor of search + get_details, never removed here.
-        let deprecated = registry.tools.filter { $0.description.contains("Deprecated") }
+        let deprecated = registry.tools.filter { $0.description?.contains("DEPRECATED") == true }
         #expect(
             Set(deprecated.map(\.name))
                 == ["get_homes", "get_rooms", "get_zones", "get_scenes", "get_service_groups", "get_triggers"]
