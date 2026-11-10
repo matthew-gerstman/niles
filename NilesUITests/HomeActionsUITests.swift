@@ -46,7 +46,8 @@ final class HomeActionsUITests: XCTestCase {
             NSPredicate(format: "label BEGINSWITH %@", "Good Morning")
         ).firstMatch
         XCTAssertTrue(sceneRow.waitForExistence(timeout: 10))
-        sceneRow.tap()
+        sleep(1)
+        tapCenter(of: sceneRow, in: app)
         XCTAssertTrue(
             app.navigationBars["Good Morning"].waitForExistence(timeout: 10),
             "Tapping the scene row should push its detail page"
