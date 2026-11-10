@@ -96,11 +96,25 @@ struct ActivityTimelineTests {
     /// Events group into recency buckets, newest bucket first.
     @Test
     func timelineGroupsByRecency() {
+        // Anchor fixture events to calendar days, not fixed offsets from
+        // now: a fixed "26h ago" falls outside Yesterday whenever the test
+        // runs within two hours of local midnight (CI runs in UTC).
+        let calendar = Calendar.current
+        let now = self.now
+        let startOfToday = calendar.startOfDay(for: now)
+        let today = max(startOfToday, now.addingTimeInterval(-30 * 60))
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: startOfToday)!
+            .addingTimeInterval(12 * 3600)
+        let thisWeek = calendar.date(byAdding: .day, value: -3, to: startOfToday)!
+            .addingTimeInterval(12 * 3600)
+        let earlier = calendar.date(byAdding: .day, value: -20, to: startOfToday)!
+            .addingTimeInterval(12 * 3600)
+        let minutesAgo = { (date: Date) in now.timeIntervalSince(date) / 60 }
         let events = [
-            event(.staged, minutesAgo: 30, proposalId: "prop_today"),
-            event(.expired, minutesAgo: 26 * 60, proposalId: "prop_yesterday"),
-            event(.executed, minutesAgo: 6 * 24 * 60, proposalId: "prop_this_week"),
-            event(.executed, minutesAgo: 20 * 24 * 60, proposalId: "prop_earlier"),
+            event(.staged, minutesAgo: minutesAgo(today), proposalId: "prop_today"),
+            event(.expired, minutesAgo: minutesAgo(yesterday), proposalId: "prop_yesterday"),
+            event(.executed, minutesAgo: minutesAgo(thisWeek), proposalId: "prop_this_week"),
+            event(.executed, minutesAgo: minutesAgo(earlier), proposalId: "prop_earlier"),
         ]
         let sections = ActivityTimeline.sections(
             rows: ActivityTimeline.rows(events: events, proposals: []),

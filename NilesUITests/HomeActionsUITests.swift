@@ -46,15 +46,28 @@ final class HomeActionsUITests: XCTestCase {
             NSPredicate(format: "label BEGINSWITH %@", "Good Morning")
         ).firstMatch
         XCTAssertTrue(sceneRow.waitForExistence(timeout: 10))
-        sceneRow.tap()
+        sleep(1)
+        // The Home row tap is flaky right after the Queue→Home tab
+        // transition: XCUITest sometimes cannot compute the row button's
+        // hit point (element taps then abort the test), and a coordinate
+        // tap can land on a frame the settling list has already moved.
+        // Coordinate taps never abort the test, so retry until the detail
+        // page actually pushes, re-resolving the row's frame each attempt.
+        let detailNavBar = app.navigationBars["Good Morning"]
+        for _ in 0..<5 where !detailNavBar.exists {
+            tapCenter(of: sceneRow, in: app)
+            detailNavBar.waitForExistence(timeout: 3)
+        }
         XCTAssertTrue(
-            app.navigationBars["Good Morning"].waitForExistence(timeout: 10),
+            detailNavBar.waitForExistence(timeout: 10),
             "Tapping the scene row should push its detail page"
         )
         let detailRun = app.buttons["Run"].firstMatch
         XCTAssertTrue(detailRun.waitForExistence(timeout: 10))
-        XCTAssertTrue(app.buttons["Rename"].exists)
-        XCTAssertTrue(app.buttons["Delete"].exists)
+        // Structural management is not a Home-tab quick action: the detail
+        // page offers Run only — no Rename, no Delete.
+        XCTAssertFalse(app.buttons["Rename"].exists)
+        XCTAssertFalse(app.buttons["Delete"].exists)
         capture("home-detail-actions", in: app)
         detailRun.tap()
         app.navigationBars.buttons.firstMatch.tap()
@@ -90,6 +103,25 @@ final class HomeActionsUITests: XCTestCase {
         // sessions, pairing code) is captured for the PR evidence.
         XCTAssertTrue(app.staticTexts["Settings"].waitForExistence(timeout: 15))
         capture("settings-consolidated", in: app)
+    }
+
+    /// SwiftUI List rows intermittently report an invalid activation point
+    /// while the list settles — the frame then re-resolves to {{inf, inf},
+    /// {0,0}} — which fails plain element taps on slow CI runners. Tap the
+    /// row's center by coordinate, re-resolving until the frame is valid.
+    @MainActor
+    private func tapCenter(of element: XCUIElement, in app: XCUIApplication) {
+        for _ in 0..<10 {
+            let frame = element.frame
+            if frame.origin.x.isFinite, frame.width > 1, frame.height > 1 {
+                app.coordinate(withNormalizedOffset: .zero)
+                    .withOffset(CGVector(dx: frame.midX, dy: frame.midY))
+                    .tap()
+                return
+            }
+            Thread.sleep(forTimeInterval: 0.3)
+        }
+        element.tap() // last resort: the normal tap path
     }
 
     @MainActor

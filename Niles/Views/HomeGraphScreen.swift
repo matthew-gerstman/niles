@@ -3,15 +3,11 @@ import SwiftUI
 /// Home graph: Rooms, Zones, Scenes and Triggers — exactly what agents see
 /// through the read tools. A native List: rows push a detail, and quick
 /// actions live in the row's trailing menu (mirrored in the context menu).
-/// Every action stages a proposal — nothing applies from this screen.
+/// Every action stages a proposal — nothing applies from this screen, and
+/// structural changes (rename, delete) are left to the Queue: agents stage
+/// them via the MCP write tools, not from Home.
 struct HomeGraphScreen: View {
     var model: any HomeGraphViewModel
-
-    /// The rename prompt's target row; non-nil shows the alert.
-    @State private var renameTarget: HomeRow?
-    @State private var renameText = ""
-    /// The row pending a delete-stage confirmation; non-nil shows the dialog.
-    @State private var deleteTarget: HomeRow?
 
     var body: some View {
         NavigationStack {
@@ -42,40 +38,6 @@ struct HomeGraphScreen: View {
             .navigationTitle("Home")
         }
         .tint(NilesTheme.accent)
-        .alert(
-            "Rename “\(renameTarget?.name ?? "")”",
-            isPresented: Binding(
-                get: { renameTarget != nil },
-                set: { if !$0 { renameTarget = nil } }
-            )
-        ) {
-            TextField("New name", text: $renameText)
-            Button("Stage Rename") {
-                if let target = renameTarget { stage(target, .rename, newName: renameText) }
-                renameTarget = nil
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("The rename is staged for your review — nothing applies until you approve it.")
-        }
-        .confirmationDialog(
-            "Delete “\(deleteTarget?.name ?? "")”?",
-            isPresented: Binding(
-                get: { deleteTarget != nil },
-                set: { if !$0 { deleteTarget = nil } }
-            ),
-            titleVisibility: .visible
-        ) {
-            Button("Stage Delete Proposal", role: .destructive) {
-                if let target = deleteTarget {
-                    Task { await model.stage(row: target, action: .delete, newName: nil) }
-                }
-                deleteTarget = nil
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This adds a delete proposal to the Queue for your review — nothing is removed until you approve it.")
-        }
     }
 
     /// Actionable rows push their detail and carry quick actions; rows
@@ -107,19 +69,10 @@ struct HomeGraphScreen: View {
     }
 
     /// The single funnel to the store's stage path — menus, context menus,
-    /// the detail page, and the rename alert all end here, so nothing on
-    /// Home can apply directly. Rename without a name yet opens the prompt
-    /// instead of staging; delete confirms before staging.
+    /// and the detail page all end here, so nothing on Home can apply
+    /// directly. Only non-structural actions (Run, Arm/Disarm) reach it;
+    /// rename and delete are no longer offered from Home.
     private func stage(_ row: HomeRow, _ action: HomeRowAction, newName: String? = nil) {
-        if action == .rename && newName == nil {
-            renameText = row.name
-            renameTarget = row
-            return
-        }
-        if action == .delete {
-            deleteTarget = row
-            return
-        }
         Task { await model.stage(row: row, action: action, newName: newName) }
     }
 }

@@ -133,24 +133,29 @@ struct HomeRow: Identifiable, Hashable {
     var isActionable: Bool { kind != nil && entityId != nil }
 
     /// The swipe-right action: Run for scenes, Arm/Disarm for triggers
-    /// (the opposite of its current state), Rename otherwise.
+    /// (the opposite of its current state). Rooms and zones have no quick
+    /// action — their structural changes live in the Queue.
     var primaryAction: HomeRowAction? {
         guard isActionable else { return nil }
         switch kind {
         case .scene: return .run
         case .trigger: return .setArmed(!isEnabled)
-        case .room, .zone: return .rename
+        case .room, .zone: return nil
         case nil: return nil
         }
     }
 
-    /// The swipe-left quick actions, context-appropriate per row kind.
+    /// The quick actions for the row menu and context menu, per row kind:
+    /// Run for scenes, Arm/Disarm for triggers. Rename and delete are
+    /// deliberately absent — HomeKit structural management is not a
+    /// Home-tab quick action; those changes are reviewed in the Queue like
+    /// everything else (agents still stage them via the MCP write tools).
     var quickActions: [HomeRowAction] {
         guard isActionable else { return [] }
         switch kind {
-        case .scene: return [.run, .rename, .delete]
-        case .room, .zone: return [.rename, .delete]
-        case .trigger: return [.setArmed(!isEnabled), .delete]
+        case .scene: return [.run]
+        case .trigger: return [.setArmed(!isEnabled)]
+        case .room, .zone: return []
         case nil: return []
         }
     }
