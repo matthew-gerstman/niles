@@ -27,6 +27,7 @@ private struct ScriptedTurn: Hashable, Sendable {
     }
 }
 
+@available(iOS 27.0, *)
 private struct ScriptedExecutorConfiguration: Hashable, Sendable {
     var turns: [ScriptedTurn]
 }
@@ -312,8 +313,10 @@ final class AgentScriptedModelTests: XCTestCase {
         )
 
         XCTAssertEqual(outcome.stagedProposalIds, [])
-        XCTAssertTrue(await dispatcher.stagedProposalIds.isEmpty)
-        XCTAssertTrue(await store.allProposals().isEmpty)
+        let staged = await dispatcher.stagedProposalIds
+        XCTAssertTrue(staged.isEmpty)
+        let proposals = await store.allProposals()
+        XCTAssertTrue(proposals.isEmpty)
         let attempted = await dispatcher.attemptedCalls
         XCTAssertEqual(attempted.map(\.tool), ["search"])
         XCTAssertFalse(attempted.contains { $0.isError })
@@ -337,7 +340,8 @@ final class AgentScriptedModelTests: XCTestCase {
         var attempted = await dispatcher.attemptedCalls
         XCTAssertEqual(attempted.map(\.tool), ["get_details"])
         XCTAssertFalse(attempted.contains { $0.isError })
-        XCTAssertTrue(await store.allProposals().isEmpty)
+        let summaryProposals = await store.allProposals()
+        XCTAssertTrue(summaryProposals.isEmpty)
 
         // A fresh run: kind + id deep read of one accessory.
         let (agent2, store2, dispatcher2, _) = makeAgent(graph: AgentFixtures.syracuseShapedGraph())
@@ -352,7 +356,8 @@ final class AgentScriptedModelTests: XCTestCase {
         attempted = await dispatcher2.attemptedCalls
         XCTAssertEqual(attempted.map(\.tool), ["get_details"])
         XCTAssertFalse(attempted.contains { $0.isError })
-        XCTAssertTrue(await store2.allProposals().isEmpty)
+        let deepReadProposals = await store2.allProposals()
+        XCTAssertTrue(deepReadProposals.isEmpty)
     }
 }
 #endif

@@ -70,7 +70,9 @@ import Testing
 
     private func agentTools() -> [MCP.Tool] {
         let fixture = AgentFixtures.registries()
-        return NilesToolDispatcher.assembleAgentTools(reads: fixture.reads, writes: fixture.writes)
+        return NilesToolDispatcher.assembleAgentTools(
+            reads: fixture.reads.toolDefinitions, writes: fixture.writes.toolDefinitions
+        )
     }
 
     private func agentTool(_ name: String) -> MCP.Tool? {
