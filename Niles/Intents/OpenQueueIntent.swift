@@ -26,7 +26,9 @@ struct OpenQueueIntent: AppIntent {
     static let openAppWhenRun = true
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        AppNavigation.shared.requestQueue()
+        // AppNavigation is MainActor-isolated; the intent hops over to set the
+        // flag, then returns.
+        await AppNavigation.shared.requestQueue()
         return .result(dialog: "Opening the Queue — staged proposals are waiting for your approval.")
     }
 }
