@@ -267,8 +267,6 @@ public actor HomeManagerHomeKitService: HomeKitService {
         switch type {
         case .atHome: return "atHome"
         case .notAtHome: return "notAtHome"
-        case .entering: return "entering"
-        case .exiting: return "exiting"
         @unknown default: return String(describing: type)
         }
     }

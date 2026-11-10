@@ -221,7 +221,7 @@ public actor FakeHomeKitService: HomeKitWriting {
                 HomeGraph.Trigger(
                     id: id, name: name, isEnabled: false,
                     linkedSceneIds: sceneId.map { [$0] } ?? [],
-                    detail: .event(Trigger.Detail.EventDetail.reading(
+                    detail: .event(HomeGraph.Trigger.Detail.EventDetail.reading(
                         events: events.map(Self.eventRef(from:)),
                         endEvents: endEvents.isEmpty ? nil : endEvents.map(Self.eventRef(from:)),
                         executeOnce: executeOnce,
@@ -252,7 +252,7 @@ public actor FakeHomeKitService: HomeKitWriting {
             } else {
                 nextEndEvents = current.endEvents
             }
-            graph.homes[h].triggers[t].detail = .event(Trigger.Detail.EventDetail.reading(
+            graph.homes[h].triggers[t].detail = .event(HomeGraph.Trigger.Detail.EventDetail.reading(
                 events: events.map(Self.eventRef(from:)),
                 endEvents: nextEndEvents,
                 executeOnce: executeOnce ?? current.executeOnce,
@@ -341,7 +341,7 @@ public actor FakeHomeKitService: HomeKitWriting {
             for t in graph.homes[h].triggers.indices {
                 if case .event(let current) = graph.homes[h].triggers[t].detail {
                     let remaining = current.events.filter { $0.accessoryId != accessoryId }
-                    graph.homes[h].triggers[t].detail = .event(Trigger.Detail.EventDetail(
+                    graph.homes[h].triggers[t].detail = .event(HomeGraph.Trigger.Detail.EventDetail(
                         events: remaining,
                         predicate: current.predicate,
                         endEvents: current.endEvents,
