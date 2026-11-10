@@ -8,61 +8,10 @@ import Testing
 /// untouched, the outcome surfaces as the dialog, an unavailable or failing
 /// session is reported honestly — and nothing on this path can approve or
 /// execute. None of it needs the App Intents runtime.
+/// The `AgentRunning` fakes live in `AgentRunnerFakes.swift`, shared with
+/// the chat view-model suite.
 @MainActor
 struct AskNilesIntentTests {
-
-    /// Stands in for `AgentService`: records the routed prompt and returns a
-    /// canned result.
-    private actor ScriptedRunner: AgentRunning {
-        let result: AgentRunResult
-        private(set) var lastPrompt: String?
-
-        init(result: AgentRunResult) { self.result = result }
-
-        var usage: AgentSessionUsage { AgentSessionUsage() }
-
-        func run(_ request: String) async throws -> AgentRunResult {
-            lastPrompt = request
-            return result
-        }
-    }
-
-    /// A runner whose session fails — the dialog must carry the error, never
-    /// swallow it.
-    private actor ThrowingRunner: AgentRunning {
-        struct SessionFailure: Error {}
-
-        var usage: AgentSessionUsage { AgentSessionUsage() }
-        func run(_ request: String) async throws -> AgentRunResult { throw SessionFailure() }
-    }
-
-    /// Stages one write exactly the way the agent's write tools do — through
-    /// `ProposalStore.stage`, the only write path this layer can reach.
-    private actor StagingRunner: AgentRunning {
-        let store: ProposalStore
-        init(store: ProposalStore) { self.store = store }
-
-        var usage: AgentSessionUsage { AgentSessionUsage() }
-        func run(_ request: String) async throws -> AgentRunResult {
-            let proposal = try await store.stage(
-                tool: "create",
-                arguments: [
-                    "kind": .string("scene"),
-                    "homeId": .string("home-1"),
-                    "name": .string("Movie Time"),
-                    "actions": .array([.object([
-                        "accessoryId": .string("acc-1"),
-                        "characteristic": .string("Brightness"),
-                        "value": .int(30),
-                    ])]),
-                ]
-            )
-            return AgentRunResult(
-                summary: "Staged 1 proposal: \(proposal.title).",
-                stagedProposalIds: [proposal.id]
-            )
-        }
-    }
 
     // MARK: - Routing and outcome surfacing
 

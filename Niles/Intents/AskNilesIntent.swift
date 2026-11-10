@@ -27,6 +27,12 @@ struct AskNilesRouter {
         stagedProposalIds: []
     )
 
+    /// The one session-failure copy, shared by the Siri dialog and the
+    /// in-app chat's failed turns — one wording, one source of truth.
+    static func failureMessage(for error: Error) -> String {
+        "Niles couldn't complete that request: \(error.localizedDescription)"
+    }
+
     /// One request to completion. Tool-level failures are already in-band in
     /// the runner's summary; only a session-level failure throws, and that
     /// surfaces as a dialog rather than a silent drop.
@@ -44,7 +50,7 @@ struct AskNilesRouter {
             )
         } catch {
             return AskNilesOutcome(
-                dialog: "Niles couldn't complete that request: \(error.localizedDescription)",
+                dialog: Self.failureMessage(for: error),
                 stagedProposalIds: []
             )
         }
