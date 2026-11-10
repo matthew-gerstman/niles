@@ -592,7 +592,7 @@ public struct ReadToolRegistry: Sendable {
                     "Response exceeds the \\(responseCap)-character cap (\\(data.count) characters) and was not returned. \\(hint)"
                 )
             }
-            return Self.textResult(data)
+            return try Self.textResult(data)
         } catch {
             return Self.errorResult("Failed to encode the read result: \\(error)")
         }
@@ -605,7 +605,7 @@ public struct ReadToolRegistry: Sendable {
     ) -> CallTool.Result {
         do {
             let fullData = try encoder.encode(FullObject(kind: kind, id: id, truncated: nil, note: nil, object: full))
-            guard fullData.count > responseCap else { return Self.textResult(fullData) }
+            guard fullData.count > responseCap else { return try Self.textResult(fullData) }
             let marked = FullObject(kind: kind, id: id, truncated: true, note: note, object: reduced)
             let reducedData = try encoder.encode(marked)
             guard reducedData.count <= responseCap else {
@@ -613,19 +613,19 @@ public struct ReadToolRegistry: Sendable {
                     "Response exceeds the \\(responseCap)-character cap even in reduced form — narrow the read."
                 )
             }
-            return Self.textResult(reducedData)
+            return try Self.textResult(reducedData)
         } catch {
             return Self.errorResult("Failed to encode the read result: \\(error)")
         }
     }
 
-    private static func textResult(_ data: Data) -> CallTool.Result {
+    private static func textResult(_ data: Data) throws -> CallTool.Result {
         // One encode for both channels: the text body and the structured
         // content mirror the same ISO-8601 JSON (the write registry's
         // pattern — the SDK's `Value(_:)` conversion would emit Apple's
         // reference-date doubles).
         let structured = try? JSONDecoder().decode(Value.self, from: data)
-        return CallTool.Result(
+        return try CallTool.Result(
             content: [.text(text: String(decoding: data, as: UTF8.self), annotations: nil, _meta: nil)],
             structuredContent: structured ?? .null,
             isError: false
