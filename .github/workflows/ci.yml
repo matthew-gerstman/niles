@@ -52,6 +52,13 @@ jobs:
       # (-34018) in an unsigned test host, which would skip verification of the
       # Keychain-backed token-store tests. The entitlements and generated
       # Info.plists live in project.yml.
+      #
+      # -retry-tests-on-failure: the runner's simulator intermittently fails to
+      # launch or terminate the app under test ("Failed to get background
+      # assertion", "Failed to terminate") — on a1924d0 the same SHA failed
+      # three times, each time on a different UI test, each test passing in at
+      # least one of the three runs. This reruns only the failed tests in the
+      # same run instead of failing the job; it is not a skip.
       - name: Test
         run: |
           set -o pipefail
@@ -59,6 +66,8 @@ jobs:
             -project Niles.xcodeproj \
             -scheme Niles \
             -destination 'platform=iOS Simulator,name=iPhone 18 Pro,OS=27.2' \
+            -retry-tests-on-failure \
+            -test-iterations 3 \
             CODE_SIGNING_ALLOWED=YES \
             CODE_SIGN_IDENTITY=- \
             CODE_SIGNING_REQUIRED=NO
