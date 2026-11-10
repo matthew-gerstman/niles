@@ -281,7 +281,8 @@ struct ActivityTimelineTests {
         let groups = ActivityTimeline.groups(events: events, proposals: [])
         #expect(groups.map(\.proposalId) == ["prop_2", "prop_1"])
         #expect(groups[1].title == "A proposal")
-        #expect(groups[1].latestAt == Date().addingTimeInterval(-10 * 60))
+        // The executed event is the most recent of prop_1.
+        #expect(groups[1].latestAt == events[2].at)
         // The lifecycle timeline is newest first inside the group.
         #expect(groups[1].events.map { $0.event.kind } == [.executed, .decided, .staged])
     }
