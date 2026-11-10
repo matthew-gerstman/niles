@@ -7,6 +7,7 @@ import FoundationModels
 /// the OS bar plus every system-availability reason, mapped onto what
 /// Settings shows. The pure form covers states no CI hardware reports;
 /// the production `evaluate()` entry only composes the same pieces.
+@available(iOS 26.0, *)
 final class AgentAvailabilityGateTests: XCTestCase {
     func testOSBelowAgentCoreBarIsUnavailableRegardlessOfModel() {
         // Foundation Models itself starts at iOS 26, but the agent core
