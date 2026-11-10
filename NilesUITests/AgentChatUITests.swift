@@ -106,11 +106,12 @@ final class AgentChatUITests: XCTestCase {
     /// text view depending on OS rendering; match it by identifier either way.
     @MainActor
     private func composerField(in app: XCUIApplication) -> XCUIElement {
-        // A vertical-axis TextField exposes an unlabeled text view in the
-        // accessibility hierarchy — match by identifier, not placeholder.
-        let field = app.textFields["chat-composer"]
-        if field.exists { return field }
-        return app.textViews["chat-composer"]
+        // A vertical-axis TextField morphs between a text field and a text
+        // view as it gains focus — match both renderings with one query that
+        // re-resolves on every snapshot.
+        app.descendants(matching: .any)
+            .matching(identifier: "chat-composer")
+            .firstMatch
     }
 
     /// SwiftUI List rows intermittently report an invalid activation point
