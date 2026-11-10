@@ -59,6 +59,44 @@ enum ActivityTimeline {
         var id: String { event.id }
     }
 
+    /// One lifecycle entry inside a proposal group: the event plus the
+    /// verdict it renders as (a decided event inherits its decision, an
+    /// executed one may be a failure).
+    struct EventEntry: Equatable {
+        let event: ActivityEvent
+        let verdict: Verdict
+    }
+
+    /// One rendered proposal card: all of a proposal's events collapsed into
+    /// a single row. `state` is the furthest lifecycle state reached (an
+    /// undone proposal stays Undone; an executed failure stays Failed);
+    /// `latestAt` is the newest event's timestamp; `events` is newest first.
+    struct Group: Identifiable, Equatable {
+        let proposalId: String
+        let title: String
+        let state: Verdict
+        let latestAt: Date
+        let events: [EventEntry]
+        /// The MCP tool name when the live proposal is in memory — plumbing,
+        /// rendered only in the detail sheet's secondary section.
+        let toolName: String?
+        let undoAvailable: Bool
+        /// The most recent executed event's structured read-back.
+        let evidence: [ProposalEvidence]
+        /// For `.undone` groups: the revert's own read-back evidence.
+        let revertEvidence: [ProposalEvidence]
+        /// For `.undone` groups: the live revert proposal's title ("Undo — …").
+        let revertTitle: String?
+
+        var id: String { proposalId }
+
+        /// True when the execution re-read the home and everything matched —
+        /// the plain "Verified" badge; never a raw check count.
+        var verified: Bool {
+            !evidence.isEmpty && evidence.allSatisfy(\.confirmed)
+        }
+    }
+
     /// A recency bucket of rows, newest first ("Today", "Yesterday", …).
     struct Section: Identifiable, Equatable {
         let title: String
@@ -90,6 +128,71 @@ enum ActivityTimeline {
                     revertTitle: revertTitle
                 )
             }
+    }
+
+    /// Collapses the per-event timeline into one group per proposal, newest
+    /// proposal first (by its most recent event). A pure view-layer grouping
+    /// over the same persisted events `rows` renders individually.
+    static func groups(events: [ActivityEvent], proposals: [NilesProposal]) -> [Group] {
+        let rows = Self.rows(events: events, proposals: proposals)
+        var order: [String] = []
+        var byProposal: [String: [Row]] = [:]
+        for row in rows {
+            let id = row.event.proposalId
+            if byProposal[id] == nil { order.append(id) }
+            byProposal[id, default: []].append(row)
+        }
+        return order.map { id in
+            let eventRows = byProposal[id]!
+            let newest = eventRows[0]
+            let tool = proposals.first { $0.id == id }?.tool
+            // The most recent execution carries the read-back that counts.
+            let executedRow = eventRows.first { $0.event.kind == .executed }
+            let undoneRow = eventRows.first { $0.event.kind == .undone }
+            return Group(
+                proposalId: id,
+                title: newest.event.proposalTitle,
+                state: mergedVerdict(eventRows.map(\.verdict)),
+                latestAt: newest.event.at,
+                events: eventRows.map { EventEntry(event: $0.event, verdict: $0.verdict) },
+                toolName: tool,
+                undoAvailable: executedRow.map {
+                    undoAvailability(event: $0.event, events: events, proposals: proposals)
+                } ?? false,
+                evidence: executedRow?.event.evidence ?? [],
+                revertEvidence: undoneRow?.revertEvidence ?? [],
+                revertTitle: undoneRow?.revertTitle
+            )
+        }
+    }
+
+    /// The furthest state a proposal's events reached. Undo dominates (the
+    /// last word on a change), then failure, then execution, then the
+    /// decision, then expiry, then bare staging.
+    private static func mergedVerdict(_ verdicts: [Verdict]) -> Verdict {
+        for state in [Verdict.undone, .failed, .executed, .denied, .approved, .expired] {
+            if verdicts.contains(state) { return state }
+        }
+        return .staged
+    }
+
+    /// Plain language for an execution's read-back. The raw tally
+    /// ("1 of 1 checks confirmed") is plumbing; a person is told what was
+    /// actually done — the home was re-read and compared — with the count
+    /// only as context. Returns nil when there is nothing to report.
+    static func evidenceSummary(_ evidence: [ProposalEvidence]) -> String? {
+        guard !evidence.isEmpty else { return nil }
+        let confirmed = evidence.filter(\.confirmed).count
+        let total = evidence.count
+        let totalChecks = total == 1 ? "1 check" : "\(total) checks"
+        if confirmed == total {
+            return "Re-read the home after execution; state matched expectations (\(totalChecks))."
+        }
+        if confirmed == 0 {
+            return "Re-read the home after execution; the home did not match expectations."
+        }
+        let confirmedChecks = confirmed == 1 ? "1 check" : "\(confirmed) checks"
+        return "Re-read the home after execution; \(confirmedChecks) of \(totalChecks) matched expectations."
     }
 
     /// Groups rows by recency and orders the buckets themselves.
