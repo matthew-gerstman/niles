@@ -3,12 +3,12 @@ import NilesCore
 
 /// Queue: the vertical proposal list, newest first — one native list row per
 /// proposal with severity carried by a warning glyph, a one-line diff, and
-/// relative time. Decisions arrive as swipe actions (trailing Deny/Approve,
-/// leading Details, row tap for the detail sheet); Undo is a trailing swipe
-/// on executed rows that still offer it. Approve-all lives in the toolbar
-/// behind a confirmation dialog. Destructive rows approve with a standard
-/// tap everywhere (user decision Nov 9); severity is signaled by the red
-/// warning symbol plus its label, never by color alone.
+/// relative time. Decisions arrive as swipe actions (leading Approve on the
+/// right, trailing Deny on the left, row tap for the detail sheet); Undo is
+/// a trailing swipe on executed rows that still offer it. Approve-all lives
+/// in the toolbar behind a confirmation dialog. Destructive rows approve
+/// with a standard tap everywhere (user decision Nov 9); severity is
+/// signaled by the red warning symbol plus its label, never by color alone.
 struct QueueScreen: View {
     var model: any QueueViewModel
 
@@ -28,8 +28,6 @@ struct QueueScreen: View {
                         ForEach(model.proposals) { proposal in
                             row(for: proposal)
                         }
-                    } footer: {
-                        Text("Nothing changes until you approve it")
                     }
                 }
             }
@@ -105,18 +103,13 @@ struct QueueScreen: View {
             trailingActions(for: proposal)
         }
         .swipeActions(edge: .leading, allowsFullSwipe: false) {
-            Button {
-                openDetail = proposal
-            } label: {
-                Label("Details", systemImage: "doc.text.magnifyingglass")
-            }
-            .tint(Color.accentColor)
+            leadingActions(for: proposal)
         }
     }
 
-    /// Trailing swipes: Deny (destructive role) then Approve (tint) on staged
-    /// rows — full swipe is disabled so a thumb slip can never deny — and
-    /// Undo on executed rows that still offer it.
+    /// Trailing (left) swipes: Deny (destructive role) on staged rows and
+    /// Undo on executed rows that still offer it. Full swipe is disabled so
+    /// a thumb slip can never deny.
     @ViewBuilder
     private func trailingActions(for proposal: NilesProposal) -> some View {
         let decision = model.decisionsInFlight[proposal.id]
@@ -128,13 +121,6 @@ struct QueueScreen: View {
                 Label("Deny", systemImage: "xmark.circle")
             }
             .disabled(decision != nil)
-            Button {
-                model.approve(proposal.id)
-            } label: {
-                Label("Approve", systemImage: "checkmark.circle")
-            }
-            .tint(Color.accentColor)
-            .disabled(decision != nil)
         } else if undoState != nil {
             Button {
                 model.undo(proposal.id)
@@ -142,6 +128,23 @@ struct QueueScreen: View {
                 Label("Undo", systemImage: "arrow.uturn.backward")
             }
             .disabled(undoState == .inFlight)
+        }
+    }
+
+    /// Leading (right) swipes: Approve (green tint) on staged rows. The
+    /// former leading Details action is gone — the row tap already opens
+    /// the detail sheet.
+    @ViewBuilder
+    private func leadingActions(for proposal: NilesProposal) -> some View {
+        let decision = model.decisionsInFlight[proposal.id]
+        if proposal.isPending {
+            Button {
+                model.approve(proposal.id)
+            } label: {
+                Label("Approve", systemImage: "checkmark.circle")
+            }
+            .tint(Color.green)
+            .disabled(decision != nil)
         }
     }
 
