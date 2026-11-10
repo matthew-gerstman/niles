@@ -76,7 +76,7 @@ public enum NilesToolCatalog {
     /// Mechanical fallback: the registry description with staging boilerplate
     /// stripped (the instructions carry it once).
     static func compactedRegistryDescription(for tool: Tool) -> String {
-        var text = tool.description
+        var text = tool.description ?? tool.name
         if let markerEnd = text.range(of: "STAGES A PROPOSAL") {
             text = String(text[..<markerEnd.lowerBound])
         }

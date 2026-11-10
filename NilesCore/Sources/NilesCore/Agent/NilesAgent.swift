@@ -76,6 +76,10 @@ public struct NilesAgentTool: FoundationModels.Tool {
             return .array(values.map(Self.mcpValue))
         case .structure(let properties, _):
             return .object(properties.mapValues(Self.mcpValue))
+        @unknown default:
+            // Future kinds travel as their JSON — lossless and visible to the
+            // registry's argument parser.
+            return .string(content.jsonString)
         }
     }
 

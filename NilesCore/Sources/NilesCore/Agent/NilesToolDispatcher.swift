@@ -48,6 +48,11 @@ public actor NilesToolDispatcher {
     private let writeNames: Set<String>
     private let proposalIdExtraction: @Sendable (CallTool.Result) -> String?
 
+    /// Every registry tool definition, in registry order — the toolset
+    /// generator's source of truth. A fixed snapshot, so the toolset can be
+    /// built without entering the actor.
+    public let toolDefinitions: [MCP.Tool]
+
     public init(
         reads: ReadToolRegistry,
         writes: WriteToolRegistry,
@@ -61,14 +66,11 @@ public actor NilesToolDispatcher {
         self.budget = budget
         self.responseCharacterLimit = responseCharacterLimit
         self.proposalIdExtraction = Self.proposalId(in:)
+        self.toolDefinitions = reads.toolDefinitions + writes.toolDefinitions
     }
 
     public static let defaultBudget = 12
     public static let defaultResponseCharacterLimit = 4_000
-
-    /// Every registry tool definition, in registry order — the toolset
-    /// generator's source of truth.
-    public var toolDefinitions: [Tool] { reads.toolDefinitions + writes.toolDefinitions }
 
     /// Dispatches one tool call. Never throws and never returns a thrown
     /// error to the caller: every failure mode — unknown tool, invalid
