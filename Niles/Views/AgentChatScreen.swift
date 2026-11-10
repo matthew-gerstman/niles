@@ -1,3 +1,4 @@
+import NilesCore
 import SwiftUI
 
 /// The in-app agent chat (spec art_AL0RolQe): a typed surface over the same
