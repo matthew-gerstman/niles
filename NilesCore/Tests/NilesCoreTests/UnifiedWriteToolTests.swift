@@ -19,17 +19,34 @@ import Testing
 
     // MARK: - Fixtures
 
-    /// One home with every entity kind: two rooms with accessories, a zone,
-    /// a scene with actions, a service group, and one timer plus one event
-    /// trigger — everything a unified verb can dispatch to.
+    /// One home with every entity kind: two rooms with accessories (each
+    /// exposing a Lightbulb service with the characteristics writes target),
+    /// a zone, a scene with actions, a service group, and one timer plus one
+    /// event trigger — everything a unified verb can dispatch to.
     private func fixtureGraph() -> HomeGraph {
+        let onA = HomeGraph.CharacteristicRef(id: "char-light-a-on", type: "On")
+        let onB = HomeGraph.CharacteristicRef(id: "char-light-b-on", type: "On")
+        let brightA = HomeGraph.CharacteristicRef(id: "char-light-a-bright", type: "Brightness")
+        let brightB = HomeGraph.CharacteristicRef(id: "char-light-b-bright", type: "Brightness")
         let kitchen = HomeGraph.Room(
             id: "room-kitchen", name: "Kitchen",
-            accessories: [HomeGraph.Accessory(id: "acc-light-a", name: "Light A")]
+            accessories: [HomeGraph.Accessory(
+                id: "acc-light-a", name: "Light A",
+                services: [HomeGraph.AccessoryService(
+                    id: "svc-light-a", name: "Light A",
+                    characteristics: [onA, brightA]
+                )]
+            )]
         )
         let living = HomeGraph.Room(
             id: "room-living", name: "Living Room",
-            accessories: [HomeGraph.Accessory(id: "acc-light-b", name: "Light B")]
+            accessories: [HomeGraph.Accessory(
+                id: "acc-light-b", name: "Light B",
+                services: [HomeGraph.AccessoryService(
+                    id: "svc-light-b", name: "Light B",
+                    characteristics: [onB, brightB]
+                )]
+            )]
         )
         let upstairs = HomeGraph.Zone(id: "zone-upstairs", name: "Upstairs", roomIds: ["room-kitchen", "room-living"])
         let movieNight = HomeGraph.Scene(
@@ -379,13 +396,17 @@ import Testing
         #expect(staged.card.contains { $0.text.contains("DISABLED") })
         #expect(staged.card.contains { $0.kind == .note && $0.text.contains("separate") })
 
+        // Nothing applies at staging — the fixture's two triggers are the
+        // only ones in the graph.
         let graphAtStaging = await fake.graph
-        #expect(graphAtStaging.homes.first?.triggers.isEmpty == true)
+        #expect(graphAtStaging.homes.first?.triggers.count == 2)
 
         let approved = try await store.approve(id: staged.id)
         #expect(approved.state == .executed)
         let graph = await fake.graph
-        let created = try #require(graph.homes.first?.triggers.first)
+        // Find the automation this test created by name: the fixture's two
+        // triggers also exist, and both are disabled by fixture default.
+        let created = try #require(graph.homes.first?.triggers.first { $0.name == "Wake Up" })
         // The locked rule holds through the unified verb: creation never arms.
         #expect(created.isEnabled == false)
     }
