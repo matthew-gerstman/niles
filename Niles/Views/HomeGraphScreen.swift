@@ -8,60 +8,29 @@ import SwiftUI
 /// them via the MCP write tools, not from Home.
 struct HomeGraphScreen: View {
     var model: any HomeGraphViewModel
-    /// The chat surface the entry row pushes — the same store instance, so
-    /// the transcript, the gate, and the proposal states stay in one place.
-    var chat: any ChatViewModel & AgentStatusViewModel & QueueViewModel
-
-    /// Value-based push target for the entry row (spec art_AL0RolQe: a
-    /// NavigationStack push, not a sheet and not a fifth tab).
-    private enum ChatDestination: Hashable { case askNiles }
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if model.sections.isEmpty {
-                    ContentUnavailableView(
-                        "No home graph yet",
-                        systemImage: "house",
-                        description: Text("Connect to HomeKit to see rooms, zones, scenes, and triggers.")
-                    )
-                } else {
-                    List {
-                        askNilesEntry
-                        ForEach(model.sections) { section in
-                            Section(section.title) {
-                                ForEach(section.rows) { row in
-                                    rowView(row)
-                                }
+        Group {
+            if model.sections.isEmpty {
+                ContentUnavailableView(
+                    "No home graph yet",
+                    systemImage: "house",
+                    description: Text("Connect to HomeKit to see rooms, zones, scenes, and triggers.")
+                )
+            } else {
+                List {
+                    ForEach(model.sections) { section in
+                        Section(section.title) {
+                            ForEach(section.rows) { row in
+                                rowView(row)
                             }
                         }
                     }
                 }
             }
-            .navigationTitle("Home")
-            .navigationDestination(for: ChatDestination.self) { _ in
-                AgentChatScreen(model: chat)
-            }
         }
-        .tint(NilesTheme.accent)
-    }
-
-    /// The prominent chat entry: always present above the graph sections;
-    /// an unavailable gate renders inside the chat screen, where the reason
-    /// copy lives.
-    private var askNilesEntry: some View {
-        Section {
-            NavigationLink(value: ChatDestination.askNiles) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Label("Ask Niles", systemImage: "sparkles")
-                        .font(.headline)
-                    Text("Ask for home changes — they stage in the Queue for your approval")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.vertical, 2)
-            }
-        }
+        .navigationTitle("Home")
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     /// Actionable rows push their detail and carry quick actions; rows
@@ -214,5 +183,7 @@ extension HomeRowAction {
 }
 
 #Preview("Home graph") {
-    HomeGraphScreen(model: InMemoryNilesStore(), chat: InMemoryNilesStore())
+    NavigationStack {
+        HomeGraphScreen(model: InMemoryNilesStore())
+    }
 }

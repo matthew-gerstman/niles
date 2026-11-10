@@ -182,7 +182,7 @@ struct AgentChatScreen: View {
         ContentUnavailableView {
             Label("Niles' agent isn't available", systemImage: "sparkles")
         } description: {
-            Text(SettingsScreen.agentFooterText(.unavailable(reason)))
+            Text(HomeScreen.agentFooterText(.unavailable(reason)))
         }
     }
 
