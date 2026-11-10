@@ -196,6 +196,7 @@ struct AgentChatScreen: View {
                     .font(.title2)
             }
             .accessibilityLabel("Send")
+            .accessibilityIdentifier("chat-send")
             .disabled(!model.canSend || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
         .padding(.horizontal)

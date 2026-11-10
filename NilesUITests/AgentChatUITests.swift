@@ -43,7 +43,8 @@ final class AgentChatUITests: XCTestCase {
         XCTAssertTrue(composer.waitForExistence(timeout: 10), "The composer text field is present")
         composer.tap()
         app.typeText("Dim the living room lights tonight at 8")
-        app.buttons["Send"].tap()
+        // By identifier: the "Send" label also matches the keyboard's return key.
+        app.buttons["chat-send"].tap()
 
         XCTAssertTrue(
             app.staticTexts["Dim the living room lights tonight at 8"].waitForExistence(timeout: 5),
