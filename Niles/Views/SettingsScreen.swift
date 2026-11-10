@@ -19,6 +19,7 @@ struct SettingsScreen: View {
                 pairingSection
                 pairedAgentsSection
                 agentSection
+                traceSection
                 connectionSection
             }
             .navigationTitle("Settings")
@@ -138,6 +139,23 @@ struct SettingsScreen: View {
             Text("On-Device Agent")
         } footer: {
             Text(Self.agentFooterText(model.agentAvailability))
+        }
+    }
+
+    /// Diagnostics entry: the on-device run-trace viewer (in-memory twin of
+    /// the AgentRunTrace log stream). Always present — the screen's empty
+    /// state explains itself when no run has happened yet.
+    private var traceSection: some View {
+        Section {
+            NavigationLink {
+                AgentTraceScreen()
+            } label: {
+                Label("Agent Trace", systemImage: "list.bullet.rectangle")
+            }
+        } header: {
+            Text("Diagnostics")
+        } footer: {
+            Text("Every model round, tool call, and error the agent records — the same detail the run-trace log carries.")
         }
     }
 

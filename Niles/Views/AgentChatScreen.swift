@@ -40,6 +40,18 @@ struct AgentChatScreen: View {
         }
         .navigationTitle("Ask Niles")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            // The trace viewer is one tap from the chat: the buffer mirrors
+            // exactly the runs this screen produces.
+            ToolbarItem(placement: .topBarTrailing) {
+                NavigationLink {
+                    AgentTraceScreen()
+                } label: {
+                    Image(systemName: "list.bullet.rectangle")
+                }
+                .accessibilityLabel("Agent Trace")
+            }
+        }
         .safeAreaInset(edge: .bottom) { composerBar }
         .sensoryFeedback(.success, trigger: resolvedTurnCount)
         .sensoryFeedback(.error, trigger: failedTurnCount)
