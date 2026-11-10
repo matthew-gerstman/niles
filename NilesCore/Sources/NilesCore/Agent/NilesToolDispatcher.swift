@@ -229,7 +229,19 @@ public actor NilesToolDispatcher {
         }
         do {
             let graph = try await reads.service.snapshot()
-            return jsonResult(NilesAgentSurface.search(query: query, graph: graph))
+            let result = NilesAgentSurface.search(query: query, graph: graph)
+            if result.results.isEmpty {
+                // Diagnostics only: a zero-result search names the exact
+                // query and graph scale, so the trace separates "the graph
+                // was empty or partial" from "the query arrived mangled".
+                let rooms = graph.homes.reduce(0) { $0 + $1.rooms.count }
+                let accessories = graph.homes.reduce(0) { $0 + $1.rooms.reduce(0) { $0 + $1.accessories.count } }
+                let diagnostic =
+                    "search returned no results — query='\(query)' rawArguments=\(AgentRunTrace.argumentsJSON(arguments)) graph(homes=\(graph.homes.count), rooms=\(rooms), accessories=\(accessories))"
+                AgentRunTrace.logger.info("\(diagnostic, privacy: .public)")
+                await AgentRunTraceStore.shared.recordRound(diagnostic)
+            }
+            return jsonResult(result)
         } catch {
             return agentError("Failed to read the home graph: \(error)")
         }

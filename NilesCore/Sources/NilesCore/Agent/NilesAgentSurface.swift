@@ -64,7 +64,7 @@ public enum NilesAgentSurface {
             name: "search",
             description: ReadToolRegistry.searchDescription,
             inputSchema: objectSchema(
-                ["query": stringProperty("The name to look for — a room, zone, scene, group, trigger, or accessory.")],
+                ["query": stringProperty(Self.queryDescription)],
                 required: ["query"]
             ),
             annotations: Tool.Annotations(readOnlyHint: true)
@@ -148,43 +148,159 @@ public enum NilesAgentSurface {
             public var type: String
             public var id: String
             public var name: String
+            /// The room an accessory sits in — the extra context a match
+            /// via room name or service type needs to be recognizable.
+            /// Nil for the non-accessory kinds.
+            public var roomName: String?
 
-            init(kind: DetailKind, id: String, name: String) {
+            init(kind: DetailKind, id: String, name: String, roomName: String? = nil) {
                 self.type = kind.rawValue
                 self.id = id
                 self.name = name
+                self.roomName = roomName
             }
         }
 
         public var results: [Match]
     }
 
-    /// Case-insensitive contains across rooms, zones, scenes, groups,
-    /// triggers, and accessories, in graph order — deterministic so a
-    /// scripted disambiguation test sees stable output.
+    // MARK: - Tokenized query matching (shared by both search projections)
+
+    /// The `query` argument's description — one text for both search
+    /// projections (the registry's own and the adapter's), so the model
+    /// hears the same thing from either surface.
+    public static let queryDescription =
+        "What to look for — a room, zone, scene, group, trigger, or accessory. Simple terms or a room name work best; multi-word queries are supported (e.g. \"office lights\")."
+
+    /// A natural-language query, split into lowercase terms with the
+    /// trailing "s" stripped ("lights" → "light"). A multi-word query
+    /// matches an entity when EVERY term matches — so "office lights"
+    /// finds lights in the Office instead of failing the whole-string
+    /// contains() the old matcher used.
+    public static func searchTerms(_ query: String) -> [String] {
+        query.lowercased()
+            .split { !$0.isLetter && !$0.isNumber }
+            .map(String.init)
+            .map { term in
+                if term.count > 3, term.hasSuffix("ies") { return String(term.dropLast(3)) + "y" }
+                if term.count > 3, term.hasSuffix("ches") || term.hasSuffix("shes")
+                    || term.hasSuffix("sses") || term.hasSuffix("xes") {
+                    return String(term.dropLast(2))
+                }
+                if term.count > 1, term.hasSuffix("s"), !term.hasSuffix("ss") {
+                    return String(term.dropLast())
+                }
+                return term
+            }
+    }
+
+    /// Whole-entity name matching: every term must appear in the name.
+    public static func nameMatches(_ terms: [String], name: String) -> Bool {
+        let lowered = name.lowercased()
+        return terms.allSatisfy { lowered.contains($0) }
+    }
+
+    /// Accessory matching: every term must match any of the accessory's
+    /// own name, its owning room's name, or a plain keyword for one of its
+    /// service types ("light" → Lightbulb service) — so "office lights"
+    /// reaches a Lightbulb named Office Lights from either direction.
+    public static func accessoryMatches(
+        _ terms: [String], name: String, roomName: String, serviceTypes: [String]
+    ) -> Bool {
+        let loweredName = name.lowercased()
+        let loweredRoom = roomName.lowercased()
+        let codes = Set(serviceTypes.compactMap(serviceTypeCode))
+        return terms.allSatisfy { term in
+            loweredName.contains(term) || loweredRoom.contains(term)
+                || !codes.isDisjoint(with: Self.serviceCodes(for: term))
+        }
+    }
+
+    /// HAP service type (short code, lowercased) → the plain words a
+    /// query might use for it. The lightbulb, thermostat, fan, television,
+    /// outlet, and motion-sensor codes are confirmed against live captures
+    /// where the capture names the service; the rest are from the HAP
+    /// specification. Only consulted when a query term equals one of the
+    /// words, so an over-broad entry can only ever add a match.
+    static let serviceTypeWords: [String: Set<String>] = [
+        "00000043": ["light"],         // Lightbulb
+        "00000040": ["fan"],            // Fan (deprecated)
+        "000000b7": ["fan"],            // FanV2
+        "00000044": ["lock"],           // Lock Mechanism
+        "00000064": ["lock"],           // Lock Management
+        "0000004a": ["thermostat"],     // Thermostat
+        "000000bd": ["thermostat"],     // Heater/Cooler
+        "00000113": ["speaker"],        // Smart Speaker
+        "000000d8": ["tv"],             // Television
+        "00000110": ["camera"],         // Camera RTP Stream Management
+        "00000112": ["camera"],         // Camera control cluster
+        "00000121": ["doorbell"],       // Doorbell
+        "00000041": ["garage", "door"], // Garage Door Opener
+        "00000047": ["outlet"],         // Outlet
+        "00000049": ["switch"],         // Switch
+        "00000096": ["switch"],         // Stateful Programmable Switch
+        "000000cc": ["switch"],         // Stateless Programmable Switch
+        "00000080": ["sensor"],         // Contact Sensor
+        "00000085": ["sensor"],         // Motion Sensor
+        "00000087": ["sensor"],         // Carbon Monoxide Sensor
+        "00000088": ["sensor"],         // Smoke Sensor
+        "00000089": ["sensor"],         // Occupancy Sensor
+        "0000008a": ["sensor"],         // Humidity Sensor
+        "0000008d": ["sensor"],         // Air Quality Sensor
+    ]
+
+    /// The service short codes a query term can stand for — the inverse
+    /// of `serviceTypeWords`.
+    static func serviceCodes(for term: String) -> Set<String> {
+        Set(serviceTypeWords.filter { $0.value.contains(term) }.keys)
+    }
+
+    /// The lowercase HAP short code of a service type string — full UUID
+    /// ("00000043-0000-1000-8000-0026BB765291"), short hex ("00000043"),
+    /// or the 0x-prefixed form ("0x0043"). Nil when not a hex type code.
+    static func serviceTypeCode(_ serviceType: String) -> String? {
+        var lowered = serviceType.lowercased()
+        if let dash = lowered.firstIndex(of: "-") { lowered = String(lowered[..<dash]) }
+        if lowered.hasPrefix("0x") { lowered = String(lowered.dropFirst(2)) }
+        guard !lowered.isEmpty, lowered.count <= 8, lowered.allSatisfy(\.isHexDigit) else { return nil }
+        return String(repeating: "0", count: 8 - lowered.count) + lowered
+    }
+
+    /// Tokenized matching across rooms, zones, scenes, groups, triggers,
+    /// and accessories, in graph order — deterministic so callers see
+    /// stable output. Accessories match on name, owning room name, and
+    /// service type; every other kind matches on its own name.
     public static func search(query: String, graph: HomeGraph) -> SearchResults {
-        let needle = query.lowercased()
+        let terms = searchTerms(query)
         typealias Match = SearchResults.Match
         var matches: [Match] = []
         for home in graph.homes {
-            for room in home.rooms where room.name.lowercased().contains(needle) {
+            for room in home.rooms where nameMatches(terms, name: room.name) {
                 matches.append(Match(kind: .room, id: room.id, name: room.name))
             }
-            for zone in home.zones where zone.name.lowercased().contains(needle) {
+            for zone in home.zones where nameMatches(terms, name: zone.name) {
                 matches.append(Match(kind: .zone, id: zone.id, name: zone.name))
             }
-            for scene in home.scenes where scene.name.lowercased().contains(needle) {
+            for scene in home.scenes where nameMatches(terms, name: scene.name) {
                 matches.append(Match(kind: .scene, id: scene.id, name: scene.name))
             }
-            for group in home.serviceGroups where group.name.lowercased().contains(needle) {
+            for group in home.serviceGroups where nameMatches(terms, name: group.name) {
                 matches.append(Match(kind: .group, id: group.id, name: group.name))
             }
-            for trigger in home.triggers where trigger.name.lowercased().contains(needle) {
+            for trigger in home.triggers where nameMatches(terms, name: trigger.name) {
                 matches.append(Match(kind: .trigger, id: trigger.id, name: trigger.name))
             }
             for room in home.rooms {
-                for accessory in room.accessories where accessory.name.lowercased().contains(needle) {
-                    matches.append(Match(kind: .accessory, id: accessory.id, name: accessory.name))
+                for accessory in room.accessories
+                where accessoryMatches(
+                    terms,
+                    name: accessory.name,
+                    roomName: room.name,
+                    serviceTypes: accessory.services.compactMap(\.serviceType)
+                ) {
+                    matches.append(
+                        Match(kind: .accessory, id: accessory.id, name: accessory.name, roomName: room.name)
+                    )
                 }
             }
         }
