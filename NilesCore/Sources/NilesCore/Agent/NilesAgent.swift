@@ -257,11 +257,33 @@ public struct NilesAgent {
         }
         do {
             response = try await session.respond(to: request)
+        } catch let error where Self.isGenerationParseFailure(error) {
+            // A malformed model emission (raw nested JSON for a free-form
+            // argument — PR #58 projects nested objects as GeneratedContent)
+            // is recoverable: retry the SAME respond once on a fresh session.
+            // At most one retry per run; a second failure throws as before.
+            Self.logger.error(
+                "Agent session emitted malformed generation — retrying once: \(AgentRunTrace.reflectedErrorChain(error), privacy: .public)"
+            )
+            await AgentRunTraceStore.shared.recordError(
+                "malformed generation, retrying once: \(AgentRunTrace.reflectedErrorChain(error))"
+            )
+            do {
+                let retrySession = try LanguageModelSession(
+                    model: model,
+                    tools: NilesToolset.tools(dispatcher: dispatcher),
+                    instructions: instructions
+                )
+                response = try await retrySession.respond(to: request)
+                Self.logger.info("Agent retry after malformed generation succeeded")
+                await AgentRunTraceStore.shared.recordRound(
+                    "respond retry after malformed generation succeeded"
+                )
+            } catch {
+                try await Self.failMidRun(error, note: "retry after malformed generation")
+            }
         } catch {
-            Self.logger.error("Agent session failed mid-run: \(AgentRunTrace.reflectedErrorChain(error), privacy: .public)")
-            await AgentRunTraceStore.shared.recordError(AgentRunTrace.reflectedErrorChain(error))
-            await Self.logSessionDiagnostics(for: error)
-            throw AgentRunError.mapped(from: error)
+            try await Self.failMidRun(error)
         }
         let calls = await dispatcher.attemptedCalls
         let budget = dispatcher.budget
@@ -276,6 +298,36 @@ public struct NilesAgent {
             summary: response.content,
             stagedProposalIds: stagedIds
         )
+    }
+
+    /// The failure path for a respond that could not be recovered: the
+    /// full error chain at public privacy, diagnostics, then the mapped
+    /// throw. `note` distinguishes the first attempt from the retry.
+    private static func failMidRun(_ error: Error, note: String? = nil) async throws -> Never {
+        Self.logger.error(
+            "Agent session failed mid-run\(note.map { " (\($0))" } ?? "", privacy: .public): \(AgentRunTrace.reflectedErrorChain(error), privacy: .public)"
+        )
+        await AgentRunTraceStore.shared.recordError(AgentRunTrace.reflectedErrorChain(error))
+        await Self.logSessionDiagnostics(for: error)
+        throw AgentRunError.mapped(from: error)
+    }
+
+    /// True only when the failure is the model emitting malformed content
+    /// into a free-form argument. Kept narrow on purpose: availability and
+    /// constraint-creation failures must NOT retry — they fail the run as
+    /// before. Matches the observed on-device text ("Encountered content
+    /// that cannot be completed into valid JSON") and the SDK's generated
+    /// content parse failure, in both the reflected chain and the
+    /// localized description.
+    private static func isGenerationParseFailure(_ error: Error) -> Bool {
+        let reflected = AgentRunTrace.reflectedErrorChain(error).lowercased()
+        let localized = error.localizedDescription.lowercased()
+        for text in [reflected, localized] {
+            if text.contains("valid json") || text.contains("failed to parse generated content") {
+                return true
+            }
+        }
+        return false
     }
 
     /// Runtime model diagnostics after any session failure. Logs the live

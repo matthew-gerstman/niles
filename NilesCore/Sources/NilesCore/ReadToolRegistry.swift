@@ -111,7 +111,7 @@ public struct ReadToolRegistry: Sendable {
                 "properties": .object([
                     "query": .object([
                         "type": .string("string"),
-                        "description": .string("The name to look for — a room, zone, scene, group, trigger, or accessory."),
+                        "description": .string(NilesAgentSurface.queryDescription),
                     ]),
                 ]),
                 "required": .array([.string("query")]),
@@ -199,7 +199,7 @@ public struct ReadToolRegistry: Sendable {
     /// v9 agent catalog, carried so both projections say the same thing
     /// about the same tool (the MCP server lists it verbatim).
     static let searchDescription =
-        "Find objects by name across the home: rooms, zones, scenes, accessory groups, triggers, and accessories. The user's words may name any of these; when several match, ask which one they mean."
+        "Find objects across the home: rooms, zones, scenes, accessory groups, triggers, and accessories. Queries may be multi-word — every word must match, so prefer simple terms or a room name (e.g. \"office lights\"). Accessories also match their owning room's name and their service type (lights, fans, locks, thermostats, speakers, TVs, cameras, doorbells, garage doors, sensors, switches, outlets). When several match, ask which one they mean."
     static let getDetailsDescription =
         "Read home state. No arguments: a lean whole-home summary — homes with counts, rooms with accessory names, zones, scenes, groups, and triggers, without characteristics. With kind and id: one object in full, including its characteristics. Deep reads are capped; an oversized one comes back explicitly marked truncated, never silently shortened."
 
@@ -243,7 +243,7 @@ public struct ReadToolRegistry: Sendable {
     }
 
     private static func searchView(_ graph: HomeGraph, query: String) -> SearchProjection {
-        let needle = query.lowercased()
+        let terms = NilesAgentSurface.searchTerms(query)
         var hits: [SearchHit] = []
         var overflow = false
         func add(_ hit: SearchHit) {
@@ -254,38 +254,44 @@ public struct ReadToolRegistry: Sendable {
             }
         }
         for home in graph.homes {
-            for room in home.rooms where room.name.lowercased().contains(needle) {
+            for room in home.rooms where NilesAgentSurface.nameMatches(terms, name: room.name) {
                 add(SearchHit(
                     kind: "room", id: room.id, name: room.name, homeId: home.id, homeName: home.name,
                     context: "\(room.accessories.count) accessories"
                 ))
             }
-            for zone in home.zones where zone.name.lowercased().contains(needle) {
+            for zone in home.zones where NilesAgentSurface.nameMatches(terms, name: zone.name) {
                 add(SearchHit(
                     kind: "zone", id: zone.id, name: zone.name, homeId: home.id, homeName: home.name,
                     context: "zone of \(zone.roomIds.count) rooms"
                 ))
             }
-            for scene in home.scenes where scene.name.lowercased().contains(needle) {
+            for scene in home.scenes where NilesAgentSurface.nameMatches(terms, name: scene.name) {
                 add(SearchHit(
                     kind: "scene", id: scene.id, name: scene.name, homeId: home.id, homeName: home.name,
                     context: "scene with \(scene.actions.count) actions"
                 ))
             }
-            for group in home.serviceGroups where group.name.lowercased().contains(needle) {
+            for group in home.serviceGroups where NilesAgentSurface.nameMatches(terms, name: group.name) {
                 add(SearchHit(
                     kind: "group", id: group.id, name: group.name, homeId: home.id, homeName: home.name,
                     context: "group of \(group.services.count) services"
                 ))
             }
-            for trigger in home.triggers where trigger.name.lowercased().contains(needle) {
+            for trigger in home.triggers where NilesAgentSurface.nameMatches(terms, name: trigger.name) {
                 add(SearchHit(
                     kind: "trigger", id: trigger.id, name: trigger.name, homeId: home.id, homeName: home.name,
                     context: trigger.isEnabled ? "enabled automation" : "disabled automation"
                 ))
             }
             for room in home.rooms {
-                for accessory in room.accessories where accessory.name.lowercased().contains(needle) {
+                for accessory in room.accessories
+                where NilesAgentSurface.accessoryMatches(
+                    terms,
+                    name: accessory.name,
+                    roomName: room.name,
+                    serviceTypes: accessory.services.compactMap(\.serviceType)
+                ) {
                     add(SearchHit(
                         kind: "accessory", id: accessory.id, name: accessory.name,
                         homeId: home.id, homeName: home.name,
