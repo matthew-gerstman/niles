@@ -1,5 +1,6 @@
 import Foundation
 import MCP
+import os
 
 /// The in-process proxy between the on-device language model and the tool
 /// registries. Every tool call the model makes goes through exactly one
@@ -102,12 +103,30 @@ public actor NilesToolDispatcher {
     public static let defaultBudget = 12
     public static let defaultResponseCharacterLimit = 4_000
 
-    /// Dispatches one tool call. Never throws and never returns a thrown
-    /// error to the caller: every failure mode — unknown tool, invalid
-    /// arguments, planner rejection, budget exhaustion — comes back as an
-    /// in-band `isError` result, because a thrown error would abort the
-    /// whole session instead of teaching the model what went wrong.
+    /// Dispatches one tool call, logging the run trace around it: the tool
+    /// name and the raw arguments as full public JSON before, and the
+    /// outcome (result head + total length, or the in-band error summary)
+    /// with the duration in ms after. Fires for every entry point — Siri,
+    /// in-app chat, and direct MCP dispatch share this one path.
     public func call(name: String, arguments: [String: Value]? = nil) async -> Outcome {
+        AgentRunTrace.logger.info(
+            "Tool call: \(name, privacy: .public) arguments: \(AgentRunTrace.argumentsJSON(arguments), privacy: .public)"
+        )
+        let clock = ContinuousClock()
+        let startedAt = clock.now
+        let outcome = await performCall(name: name, arguments: arguments)
+        let duration = startedAt.duration(to: clock.now)
+        let durationMs = Double(duration.components.seconds) * 1_000
+            + Double(duration.components.attoseconds) / 1e15
+        AgentRunTrace.logger.info(
+            "Tool call finished: \(name, privacy: .public) isError=\(outcome.isError, privacy: .public) durationMs=\(durationMs, privacy: .public) resultLength=\(outcome.text.count, privacy: .public) result: \(AgentRunTrace.truncated(outcome.text, to: 2_000), privacy: .public)"
+        )
+        return outcome
+    }
+
+    /// The dispatch itself, exactly as before the trace wrapper: budget
+    /// enforcement first, then routing, then in-band outcome flattening.
+    private func performCall(name: String, arguments: [String: Value]? = nil) async -> Outcome {
         if attemptedCalls.count >= budget {
             budgetExhaustions += 1
             attemptedCalls.append(AttemptedCall(tool: name, isError: true, wasBudgetExhausted: true))
