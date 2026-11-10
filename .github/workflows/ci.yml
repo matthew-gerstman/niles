@@ -21,6 +21,15 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Cache SwiftPM checkouts
+        uses: actions/cache@v4
+        with:
+          # Package.resolved is generated (project comes from XcodeGen), so key
+          # on project.yml, which pins the MCP Swift SDK to an exact version.
+          path: ~/Library/Caches/org.swift.swiftpm
+          key: spm-${{ runner.os }}-${{ hashFiles('project.yml') }}
+          restore-keys: spm-${{ runner.os }}-
+
       - name: Generate Xcode project
         run: xcodegen generate
 
@@ -48,13 +57,29 @@ jobs:
       # (-34018) in an unsigned test host, which would skip verification of the
       # Keychain-backed token-store tests. The entitlements and generated
       # Info.plists live in project.yml.
-      - name: Test
+      # UI tests are ~50s of execution plus a third simulator boot; PRs run
+      # unit tests only. Full suite including UI tests runs on main.
+      - name: Test (unit)
         run: |
           set -o pipefail
           xcodebuild test \
             -project Niles.xcodeproj \
             -scheme Niles \
             -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -skip-testing:NilesUITests \
+            CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGN_IDENTITY=- \
+            CODE_SIGNING_REQUIRED=NO
+
+      - name: Test (UI, main only)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -project Niles.xcodeproj \
+            -scheme Niles \
+            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -only-testing:NilesUITests \
             CODE_SIGNING_ALLOWED=YES \
             CODE_SIGN_IDENTITY=- \
             CODE_SIGNING_REQUIRED=NO
