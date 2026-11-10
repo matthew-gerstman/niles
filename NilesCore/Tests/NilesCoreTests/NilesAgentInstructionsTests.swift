@@ -4,11 +4,11 @@ import Testing
 @testable import NilesCore
 
 /// The finalized compact prompt (art_yvbPAfG9): the instructions template
-/// verbatim, plus per-tool one-liners that carry the semantics the staging
-/// contract doesn't — DESTRUCTIVE / DEVICE-IMMEDIATE markers, declarative-
-/// replace wording, created-DISABLED behavior — with schema-derived arg
-/// summaries. The tests keep the compact lines and the agent surface from
-/// drifting.
+/// verbatim, plus per-tool one-liners derived from the registries' own
+/// descriptions (art_34OYtrUm — the single source of truth both projections
+/// read) with the MCP staging boilerplate stripped and schema-derived arg
+/// summaries appended. The tests keep the compact lines and the agent
+/// surface from drifting from the registry text.
 @Suite struct NilesAgentInstructionsTests {
     @Test func templateCarriesTheFullSpecContract() {
         let text = NilesAgentInstructions.text()
@@ -105,7 +105,7 @@ import Testing
         }
     }
 
-    @Test func everyAgentSurfaceToolHasAFinalizedCompactLine() {
+    @Test func everyAgentSurfaceToolCompactsFromTheRegistryText() {
         let tools = agentTools()
         for tool in tools {
             let description = NilesToolCatalog.toolDescription(for: tool)
@@ -113,9 +113,11 @@ import Testing
             // No staging boilerplate per tool — the instructions carry it once.
             #expect(!description.contains("STAGES A PROPOSAL"))
             #expect(!description.contains("Poll get_proposal afterwards"))
+            // The compact line ends with the schema-derived argument summary.
+            #expect(description.contains("args:"), "\(tool.name) carries no args summary")
         }
-        // The compact table covers exactly the surface — no orphan lines, no gaps.
-        #expect(Set(NilesToolCatalog.compactText.keys) == Set(tools.map(\.name)))
+        // Two-sided coherence with the MCP listing is pinned in
+        // ToolSurfaceCoherenceTests — the compact line is the registry text.
     }
 
     @Test func compactLinesKeepTheSafetyMarkersTheSurfaceHas() {
@@ -131,11 +133,13 @@ import Testing
     }
 
     @Test func compactLinesKeepDeclarativeReplaceAndDestructiveSemantics() throws {
-        // v9: no automations on the agent surface, so create carries no
-        // created-DISABLED line (that semantics belongs to the MCP-only
-        // trigger tools).
+        // v9: no automations on the agent surface, but the shared create text
+        // still carries the arming invariant — the registry tool it projects
+        // covers MCP-only automation kinds too.
         let create = try #require(agentTool("create"))
-        #expect(NilesToolCatalog.toolDescription(for: create).contains("accessoryIds"))
+        let createDescription = NilesToolCatalog.toolDescription(for: create)
+        #expect(createDescription.contains("characteristic writes"))
+        #expect(createDescription.lowercased().contains("created disabled"))
 
         let update = try #require(agentTool("update"))
         #expect(NilesToolCatalog.toolDescription(for: update).contains("complete"))
@@ -165,7 +169,7 @@ import Testing
         #expect(!description.contains("STAGES A PROPOSAL"))
     }
 
-    @Test func unknownToolFallsBackToCompactedRegistryDescription() {
+    @Test func customToolDescriptionIsCompactedFromItsOwnText() {
         let verbose = MCP.Tool(
             name: "custom_tool",
             description: "Does a thing. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles, and you cannot execute, approve, or deny anything, ever. Poll get_proposal afterwards.",

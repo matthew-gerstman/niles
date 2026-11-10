@@ -11,6 +11,11 @@ import MCP
 /// groups, entity ids, kind-based creation — onto registry primitives and
 /// never appear in the MCP server's tool list. The registries keep their
 /// full per-type surfaces for MCP clients.
+///
+/// Every adapter description references the owning registry's shared
+/// description static — one plain-language text per tool, both projections
+/// (art_34OYtrUm). Payload vocabulary that differs between the surfaces is
+/// described on each schema's own arguments.
 public enum NilesAgentSurface {
 
     /// Kinds for `get_details` deep reads and search-result typing.
@@ -57,7 +62,7 @@ public enum NilesAgentSurface {
     public static let adapterDefinitions: [Tool] = [
         Tool(
             name: "search",
-            description: "Find objects by name across the home: rooms, zones, scenes, accessory groups, triggers, and accessories. The user's words may name any of these; when several match, ask which one they mean.",
+            description: ReadToolRegistry.searchDescription,
             inputSchema: objectSchema(
                 ["query": stringProperty("The name to look for — a room, zone, scene, group, trigger, or accessory.")],
                 required: ["query"]
@@ -66,7 +71,7 @@ public enum NilesAgentSurface {
         ),
         Tool(
             name: "get_details",
-            description: "Read home state. No arguments: a lean whole-home summary — homes with counts, rooms with accessory names, zones, scenes, groups, and triggers, without characteristics. With kind and id: one object in full, including its characteristics.",
+            description: ReadToolRegistry.getDetailsDescription,
             inputSchema: objectSchema(
                 [
                     "kind": stringProperty("home, room, zone, scene, group, trigger, or accessory — required with id."),
@@ -78,7 +83,7 @@ public enum NilesAgentSurface {
         ),
         Tool(
             name: "create",
-            description: "Create an object: a room, zone, scene, or accessory group. Payload depends on kind: groups take accessoryIds (the members to group); scenes take actions (characteristic writes — Niles never executes scenes). Zone names are unique per home.",
+            description: WriteToolRegistry.createDescription,
             inputSchema: objectSchema(
                 [
                     "kind": stringProperty("room, zone, scene, or group."),
@@ -93,7 +98,7 @@ public enum NilesAgentSurface {
         ),
         Tool(
             name: "update",
-            description: "Replace an object's complete contents: groups take members (accessory ids), zones take rooms, scenes take actions (characteristic writes). Anything absent from the list is removed.",
+            description: WriteToolRegistry.updateDescription,
             inputSchema: objectSchema(
                 [
                     "entityId": stringProperty("The group, zone, or scene to update."),
@@ -107,7 +112,7 @@ public enum NilesAgentSurface {
         ),
         Tool(
             name: "rename",
-            description: "Rename a room, zone, scene, accessory group, or accessory.",
+            description: WriteToolRegistry.renameDescription,
             inputSchema: objectSchema(
                 [
                     "entityId": stringProperty("The object to rename."),
@@ -119,7 +124,7 @@ public enum NilesAgentSurface {
         ),
         Tool(
             name: "delete",
-            description: "DESTRUCTIVE. Remove an object from the home: a room, zone, scene, accessory group, trigger, or an accessory. Per-type consequences — where a room's accessories go, which triggers a deleted scene leaves behind — appear on the review card.",
+            description: WriteToolRegistry.deleteDescription,
             inputSchema: objectSchema(
                 ["entityId": stringProperty("The object to delete.")],
                 required: ["entityId"]
