@@ -27,11 +27,6 @@ struct HomeGraphScreen: View {
                                 }
                             }
                         }
-                        Section {
-                            Text("Actions here stage proposals — nothing runs until you approve them in the Queue.")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
                     }
                 }
             }

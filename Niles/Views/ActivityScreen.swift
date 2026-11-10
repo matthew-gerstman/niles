@@ -77,20 +77,12 @@ struct ActivityScreen: View {
                     Text(group.title)
                         .font(.headline)
                         .foregroundStyle(.primary)
-                    Text(group.state.label)
-                        .font(.caption)
-                        .foregroundStyle(group.state.tint)
                 }
                 Spacer()
                 VStack(alignment: .trailing, spacing: 4) {
                     Text(RelativeTime.label(for: group.latestAt))
                         .font(.footnote)
                         .foregroundStyle(.secondary)
-                    if group.verified {
-                        Label("Verified", systemImage: "checkmark.seal.fill")
-                            .font(.caption2)
-                            .foregroundStyle(.green)
-                    }
                 }
             }
         }

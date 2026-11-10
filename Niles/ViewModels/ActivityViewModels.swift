@@ -89,12 +89,6 @@ enum ActivityTimeline {
         let revertTitle: String?
 
         var id: String { proposalId }
-
-        /// True when the execution re-read the home and everything matched —
-        /// the plain "Verified" badge; never a raw check count.
-        var verified: Bool {
-            !evidence.isEmpty && evidence.allSatisfy(\.confirmed)
-        }
     }
 
     /// A recency bucket of rows, newest first ("Today", "Yesterday", …).
