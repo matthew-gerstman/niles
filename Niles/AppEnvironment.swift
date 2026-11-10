@@ -54,7 +54,9 @@ private struct ChatFixtureRunner: AgentRunning {
     var usage: AgentSessionUsage { AgentSessionUsage() }
 
     func run(_ request: String) async throws -> AgentRunResult {
-        try await Task.sleep(for: .seconds(2))
+        // Hold long enough that the running state is reliably observable
+        // between the user-row wait and the staged-state wait in UI tests.
+        try await Task.sleep(for: .seconds(6))
         let proposal = try await store.stage(
             tool: "create",
             arguments: [
