@@ -3,9 +3,9 @@ import MCP
 
 /// The agent-facing tool surface — the compacted vocabulary the on-device
 /// model sees (spec art_VrC0iUUA §What we should build; catalog draft
-/// art_yvbPAfG9, v7).
+/// art_yvbPAfG9, v9).
 ///
-/// Six of the twelve tools are the registries' own tools passed through;
+/// Two of the eight tools are the registries' own tools passed through;
 /// the six here (search, get_details, create, update, rename, delete) are
 /// adapter-shaped: they translate the agent's vocabulary — accessory
 /// groups, entity ids, kind-based creation — onto registry primitives and
@@ -18,9 +18,9 @@ public enum NilesAgentSurface {
         case home, room, zone, scene, group, trigger, accessory
     }
 
-    /// Kinds for `create`.
+    /// Kinds for `create` (v9: automations are out of the agent's scope).
     public enum CreateKind: String, Sendable, CaseIterable {
-        case room, zone, scene, group, timer, event
+        case room, zone, scene, group
     }
 
     /// An entity id the agent unified surface resolved against the graph.
@@ -51,9 +51,8 @@ public enum NilesAgentSurface {
 
     // MARK: - Adapter tool definitions
 
-    /// The six adapter tools, in catalog order. The other six agent tools
-    /// (get_proposal, execute_scene, write_characteristic, update_event_trigger,
-    /// set_trigger_state, assign_accessory_to_room) pass through with their
+    /// The six adapter tools, in catalog order. The other two agent tools
+    /// (get_proposal, assign_accessory_to_room) pass through with their
     /// registry definitions; the dispatcher assembles the full list.
     public static let adapterDefinitions: [Tool] = [
         Tool(
@@ -79,19 +78,14 @@ public enum NilesAgentSurface {
         ),
         Tool(
             name: "create",
-            description: "Create an object: a room, zone, scene, accessory group, timer automation, or event automation. Payload depends on kind: groups take accessoryIds (the members to group); scenes take actions (characteristic writes — Niles never executes scenes); timer automations take fireDate (ISO-8601) and optional recurrence; event automations take events and optional sceneId and executeOnce. Automations are created DISABLED — arming is a separate set_trigger_state approval. Zone names are unique per home.",
+            description: "Create an object: a room, zone, scene, or accessory group. Payload depends on kind: groups take accessoryIds (the members to group); scenes take actions (characteristic writes — Niles never executes scenes). Zone names are unique per home.",
             inputSchema: objectSchema(
                 [
-                    "kind": stringProperty("room, zone, scene, group, timer, or event."),
+                    "kind": stringProperty("room, zone, scene, or group."),
                     "homeId": stringProperty("The home to create the object in."),
                     "name": stringProperty("The new object's name."),
                     "accessoryIds": stringArrayProperty("Group creation: the accessories to group."),
                     "actions": sceneActionsProperty,
-                    "fireDate": stringProperty("Timer creation: the fire date, ISO-8601."),
-                    "recurrence": recurrenceProperty,
-                    "events": triggerEventsProperty("Event creation: the events that fire the automation."),
-                    "sceneId": stringProperty("Event creation: an optional scene to run."),
-                    "executeOnce": boolProperty("Event creation: true to run the scene only once."),
                 ],
                 required: ["kind", "homeId", "name"]
             ),
@@ -99,7 +93,7 @@ public enum NilesAgentSurface {
         ),
         Tool(
             name: "update",
-            description: "Replace an object's complete contents: groups take members (accessory ids), zones take rooms, scenes take actions (characteristic writes). Anything absent from the list is removed. Trigger edits use their own tools.",
+            description: "Replace an object's complete contents: groups take members (accessory ids), zones take rooms, scenes take actions (characteristic writes). Anything absent from the list is removed.",
             inputSchema: objectSchema(
                 [
                     "entityId": stringProperty("The group, zone, or scene to update."),
@@ -165,6 +159,7 @@ public enum NilesAgentSurface {
     /// scripted disambiguation test sees stable output.
     public static func search(query: String, graph: HomeGraph) -> SearchResults {
         let needle = query.lowercased()
+        typealias Match = SearchResults.Match
         var matches: [Match] = []
         for home in graph.homes {
             for room in home.rooms where room.name.lowercased().contains(needle) {
@@ -208,13 +203,21 @@ public enum NilesAgentSurface {
                     "Unknown kind \(kindRaw) — use home, room, zone, scene, group, trigger, or accessory."
                 )
             }
-            return .fullObject(try fullDetails(kind: kind, id: id, graph: graph))
+            return try fullDetails(kind: kind, id: id, graph: graph)
         }
     }
 
     public enum LeanSummaryOrFull: Encodable, Sendable {
         case leanSummary(LeanSummary)
         case fullObject(any Encodable & Sendable)
+
+        public func encode(to encoder: Encoder) throws {
+            var container = encoder.singleValueContainer()
+            switch self {
+            case .leanSummary(let summary): try container.encode(summary)
+            case .fullObject(let object): try container.encode(object)
+            }
+        }
     }
 
     public struct AgentSurfaceError: Error, Sendable {
@@ -333,7 +336,7 @@ public enum NilesAgentSurface {
         }
     }
 
-    private static func fullDetails(kind: DetailKind, id: String, graph: HomeGraph) throws -> any Encodable & Sendable {
+    private static func fullDetails(kind: DetailKind, id: String, graph: HomeGraph) throws -> LeanSummaryOrFull {
         struct RoomDetail: Encodable, Sendable {
             var id: String
             var homeId: String
@@ -353,27 +356,29 @@ public enum NilesAgentSurface {
         for home in graph.homes {
             if kind == .home, home.id == id { return .leanSummary(LeanSummary(homes: [home])) }
             if let room = home.rooms.first(where: { $0.id == id }), kind == .room {
-                return RoomDetail(
+                return .fullObject(RoomDetail(
                     id: room.id, homeId: home.id, homeName: home.name, name: room.name,
                     zones: home.zones.filter { $0.roomIds.contains(room.id) }.map(\.name),
                     accessories: room.accessories
-                )
+                ))
             }
-            if let zone = home.zones.first(where: { $0.id == id }), kind == .zone { return zone }
-            if let scene = home.scenes.first(where: { $0.id == id }), kind == .scene { return scene }
+            if let zone = home.zones.first(where: { $0.id == id }), kind == .zone { return .fullObject(zone) }
+            if let scene = home.scenes.first(where: { $0.id == id }), kind == .scene { return .fullObject(scene) }
             if let group = home.serviceGroups.first(where: { $0.id == id }), kind == .group {
                 let groupedAccessoryIds = Set(group.services.compactMap(\.accessoryId))
-                return GroupDetail(
+                return .fullObject(GroupDetail(
                     id: group.id, homeId: home.id, homeName: home.name, name: group.name,
                     accessories: home.rooms.flatMap(\.accessories)
                         .filter { groupedAccessoryIds.contains($0.id) }
-                )
+                ))
             }
-            if let trigger = home.triggers.first(where: { $0.id == id }), kind == .trigger { return trigger }
+            if let trigger = home.triggers.first(where: { $0.id == id }), kind == .trigger {
+                return .fullObject(trigger)
+            }
             if let accessory = home.rooms.flatMap(\.accessories).first(where: { $0.id == id }),
                 kind == .accessory
             {
-                return accessory
+                return .fullObject(accessory)
             }
         }
         throw AgentSurfaceError("No \(kind.rawValue) \(id).")
@@ -454,10 +459,6 @@ public enum NilesAgentSurface {
         .object(["type": .string("string"), "description": .string(description)])
     }
 
-    private static func boolProperty(_ description: String) -> Value {
-        .object(["type": .string("boolean"), "description": .string(description)])
-    }
-
     private static func stringArrayProperty(_ description: String) -> Value {
         .object([
             "type": .string("array"),
@@ -495,38 +496,4 @@ public enum NilesAgentSurface {
         "description": .string("Every characteristic write the scene should perform."),
     ])
 
-    private static let recurrenceProperty: Value = .object([
-        "type": .string("object"),
-        "description": .string("Optional recurrence for a timer automation: either {intervalMinutes} or {weekdays: [1-7]} — 1 is Sunday."),
-    ])
-
-    private static func triggerEventsProperty(_ description: String) -> Value {
-        .object([
-            "type": .string("array"),
-            "items": .object([
-                "type": .string("object"),
-                "description": .string(
-                    "Either a characteristic event {accessoryId, characteristic, value?} — value omitted means the event fires on any change — or a presence event {presence: \"atHome\" | \"away\"}."
-                ),
-                "properties": .object([
-                    "accessoryId": .object([
-                        "type": .string("string"),
-                        "description": .string("The accessory whose characteristic is watched."),
-                    ]),
-                    "characteristic": .object([
-                        "type": .string("string"),
-                        "description": .string("The characteristic type to watch, e.g. On or MotionDetected."),
-                    ]),
-                    "value": .object([
-                        "description": .string("Optional threshold value: number, string, or boolean."),
-                    ]),
-                    "presence": .object([
-                        "type": .string("string"),
-                        "description": .string("\"atHome\" or \"away\" — HomeKit evaluates presence itself; Niles never requests location access."),
-                    ]),
-                ]),
-            ]),
-            "description": .string(description),
-        ])
-    }
 }

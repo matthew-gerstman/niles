@@ -53,17 +53,16 @@ public actor NilesToolDispatcher {
     /// without entering the actor.
     public let toolDefinitions: [MCP.Tool]
 
-    /// The agent-facing tool surface (art_yvbPAfG9, v7): twelve tools in
+    /// The agent-facing tool surface (art_yvbPAfG9, v9): eight tools in
     /// catalog order. Six adapter tools translate agent vocabulary onto
-    /// registry primitives; six registry tools pass through unchanged. The
-    /// registries' full per-type surfaces stay MCP-only.
+    /// registry primitives; two registry tools (get_proposal,
+    /// assign_accessory_to_room) pass through unchanged. The registries'
+    /// full per-type surfaces stay MCP-only.
     public let agentToolDefinitions: [MCP.Tool]
 
     public static let agentToolOrder = [
         "search", "get_details", "get_proposal",
-        "create", "update", "rename", "delete", "execute_scene",
-        "write_characteristic", "update_event_trigger", "set_trigger_state",
-        "assign_accessory_to_room",
+        "create", "update", "rename", "delete", "assign_accessory_to_room",
     ]
 
     /// Assembles the agent surface from the six adapter definitions plus
@@ -162,7 +161,7 @@ public actor NilesToolDispatcher {
     /// nothing, so it must not count as a staged write.
     static let proposalPollToolName = "get_proposal"
 
-    // MARK: - Agent-surface routing (art_yvbPAfG9, v7)
+    // MARK: - Agent-surface routing (art_yvbPAfG9, v9)
 
     private static let encoder: JSONEncoder = {
         let encoder = JSONEncoder()
@@ -228,7 +227,7 @@ public actor NilesToolDispatcher {
             let kindRaw = arguments?["kind"]?.stringValue,
             let kind = NilesAgentSurface.CreateKind(rawValue: kindRaw.lowercased())
         else {
-            return (Self.agentError("create needs a kind — room, zone, scene, group, timer, or event."), false)
+            return (Self.agentError("create needs a kind — room, zone, scene, or group."), false)
         }
         switch kind {
         case .room:
@@ -244,18 +243,6 @@ public actor NilesToolDispatcher {
             return (await writes.call(name: "create_scene", arguments: arguments), true)
         case .group:
             return await createGroup(arguments)
-        case .timer:
-            guard arguments?["fireDate"]?.stringValue != nil else {
-                return (Self.agentError("Timer automation creation needs fireDate — an ISO-8601 date."), false)
-            }
-            return (await writes.call(name: "create_timer_trigger", arguments: arguments), true)
-        case .event:
-            guard arguments?["events"]?.arrayValue != nil else {
-                return (Self.agentError(
-                    "Event automation creation needs events — an array of characteristic or presence events."
-                ), false)
-            }
-            return (await writes.call(name: "create_event_trigger", arguments: arguments), true)
         }
     }
 
@@ -337,7 +324,7 @@ public actor NilesToolDispatcher {
             ), true)
         case .trigger:
             return (Self.agentError(
-                "Trigger edits use update_event_trigger; arming or scheduling changes use set_trigger_state."
+                "Triggers are outside the agent's write surface — automation changes happen through MCP."
             ), false)
         case .room, .accessory:
             return (Self.agentError(
@@ -399,8 +386,11 @@ public actor NilesToolDispatcher {
         case .zone: (tool, idKey) = ("delete_zone", "zoneId")
         case .scene: (tool, idKey) = ("delete_scene", "sceneId")
         case .accessoryGroup: (tool, idKey) = ("delete_service_group", "groupId")
-        case .trigger: (tool, idKey) = ("delete_trigger", "triggerId")
         case .accessory: (tool, idKey) = ("remove_accessory", "accessoryId")
+        case .trigger:
+            return (Self.agentError(
+                "Triggers are outside the agent's write surface — automation changes happen through MCP."
+            ), false)
         }
         return (await writes.call(name: tool, arguments: [idKey: .string(entity.id)]), true)
     }

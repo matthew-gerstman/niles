@@ -256,17 +256,21 @@ import Testing
         return (dispatcher, fixture.store)
     }
 
-    @Test func agentSurfaceIsExactlyTheTwelveCompactedToolsInCatalogOrder() async throws {
+    @Test func agentSurfaceIsExactlyTheEightCompactedToolsInCatalogOrder() async throws {
         let (dispatcher, _) = await agentDispatcher()
         let definitions = await dispatcher.agentToolDefinitions
         #expect(definitions.map(\.name) == NilesToolDispatcher.agentToolOrder)
-        #expect(definitions.count == 12)
-        // The registries' full surfaces stay MCP-only.
+        #expect(definitions.count == 8)
+        // The registries' full surfaces stay MCP-only — including every
+        // device-immediate and trigger tool (v9: no control surface, no
+        // automation writes).
         let surface = Set(definitions.map(\.name))
         for excluded in ["get_homes", "get_rooms", "create_room", "create_scene",
                          "create_service_group", "set_zone_rooms", "set_service_group_members",
                          "rename_service_group", "delete_service_group", "delete_trigger",
-                         "identify_accessory", "unblock_accessory", "remove_accessory", "niles_tool"] {
+                         "identify_accessory", "unblock_accessory", "remove_accessory", "niles_tool",
+                         "execute_scene", "write_characteristic", "update_event_trigger",
+                         "set_trigger_state", "create_timer_trigger", "create_event_trigger"] {
             #expect(!surface.contains(excluded), "\(excluded) must stay off the agent surface")
         }
     }
@@ -311,6 +315,17 @@ import Testing
         #expect(proposals.first?.id == outcome.stagedProposalId)
     }
 
+    @Test func deleteOnATriggerIsAnInBandError() async throws {
+        let (dispatcher, store) = await agentDispatcher(graph: AgentFixtures.syracuseShapedGraph())
+        let outcome = await dispatcher.call(name: "delete", arguments: [
+            "entityId": .string("trigger-0"),
+        ])
+        #expect(outcome.isError)
+        let staged = await dispatcher.stagedProposalIds
+        #expect(staged.isEmpty)
+        #expect(await store.allProposals().isEmpty)
+    }
+
     @Test func createRoutesEveryKindToItsRegistryTool() async throws {
         let (dispatcher, store) = await agentDispatcher()
         let cases: [([String: MCP.Value], String)] = [
@@ -324,13 +339,6 @@ import Testing
                   "accessoryId": .string("acc-lr-1"), "characteristic": .string("Brightness"), "value": .double(30),
               ])])],
              "create_scene"),
-            (["homeId": .string("home-1"), "kind": .string("timer"), "name": .string("Sunrise"),
-              "fireDate": .string("2026-11-11T07:30:00Z")], "create_timer_trigger"),
-            (["homeId": .string("home-1"), "kind": .string("event"), "name": .string("Motion Light"),
-              "events": .array([.object([
-                  "accessoryId": .string("acc-office-1"), "characteristic": .string("On"),
-              ])])],
-             "create_event_trigger"),
         ]
         for (arguments, expectedTool) in cases {
             let outcome = await dispatcher.call(name: "create", arguments: arguments)
@@ -338,8 +346,7 @@ import Testing
             #expect(outcome.stagedProposalId != nil, "\(expectedTool)")
         }
         let tools = await store.allProposals().map(\.tool)
-        #expect(tools == ["create_room", "create_zone", "create_service_group", "create_scene",
-                          "create_timer_trigger", "create_event_trigger"])
+        #expect(tools == ["create_room", "create_zone", "create_service_group", "create_scene"])
     }
 
     @Test func createRejectsMismatchedPayloadsInBand() async throws {
@@ -352,10 +359,12 @@ import Testing
             // Group naming an unknown accessory.
             ["homeId": .string("home-1"), "kind": .string("group"), "name": .string("Ghost"),
              "accessoryIds": .array([.string("acc-nope")])],
-            // Timer without a fireDate.
-            ["homeId": .string("home-1"), "kind": .string("timer"), "name": .string("Late")],
-            // Event automation without events.
-            ["homeId": .string("home-1"), "kind": .string("event"), "name": .string("Mystery")],
+            // Automation kinds are off the agent surface entirely (v9) —
+            // they are in-band errors, like any unknown kind.
+            ["homeId": .string("home-1"), "kind": .string("timer"), "name": .string("Late"),
+             "fireDate": .string("2026-11-11T07:30:00Z")],
+            ["homeId": .string("home-1"), "kind": .string("event"), "name": .string("Mystery"),
+             "events": .array([.object(["accessoryId": .string("acc-office-1"), "characteristic": .string("On")])])],
             // Unknown kind.
             ["homeId": .string("home-1"), "kind": .string("castle"), "name": .string("Nope")],
         ]

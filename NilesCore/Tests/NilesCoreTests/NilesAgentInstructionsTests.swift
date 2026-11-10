@@ -21,8 +21,7 @@ import Testing
         #expect(text.contains("ask which one they mean"))
         #expect(text.contains("replace the complete list"))
         #expect(text.contains("stage nothing and explain what you would remove"))
-        // Device-immediate and budget and honesty rules.
-        #expect(text.contains("devices immediately once approved"))
+        // Budget and honesty rules.
         #expect(text.contains("Stay within 12 tool calls"))
         #expect(text.contains("report exactly what remains undone"))
         #expect(text.contains("Answer only from tool results"))
@@ -39,11 +38,12 @@ import Testing
         let text = NilesAgentInstructions.text()
         // Tools travel with their own descriptions now; the instructions must
         // not enumerate the toolset (that's how the old single-catalog design
-        // blew the 4,096-token window). execute_scene and
-        // write_characteristic appear only in the device-immediate rule.
+        // blew the 4,096-token window). No retired tool name may appear.
         #expect(!text.contains("create_scene"))
         #expect(!text.contains("delete_room"))
         #expect(!text.contains("## Tool catalog"))
+        #expect(!text.contains("execute_scene"))
+        #expect(!text.contains("set_trigger_state"))
     }
 
     @Test func templateVariesOnlyByDateLine() {
@@ -87,12 +87,14 @@ import Testing
         "remove_accessory", "identify_accessory", "unblock_accessory",
         "set_zone_rooms", "set_service_group_members", "set_scene_actions",
         "niles_tool",
+        // v9: no control surface, no automation writes on the agent.
+        "execute_scene", "write_characteristic", "update_event_trigger", "set_trigger_state",
     ]
 
-    @Test func agentSurfaceIsExactlyTheTwelveCompactedTools() {
+    @Test func agentSurfaceIsExactlyTheEightCompactedTools() {
         let tools = agentTools()
         #expect(tools.map(\.name) == NilesToolDispatcher.agentToolOrder)
-        #expect(tools.count == 12)
+        #expect(tools.count == 8)
         let surface = Set(tools.map(\.name))
         for excluded in Self.offSurfaceTools {
             #expect(!surface.contains(excluded), "\(excluded) must stay off the agent surface")
@@ -124,17 +126,15 @@ import Testing
         }
     }
 
-    @Test func compactLinesKeepDeclarativeReplaceAndCreatedDisabledSemantics() throws {
+    @Test func compactLinesKeepDeclarativeReplaceAndDestructiveSemantics() throws {
+        // v9: no automations on the agent surface, so create carries no
+        // created-DISABLED line (that semantics belongs to the MCP-only
+        // trigger tools).
         let create = try #require(agentTool("create"))
-        let createDescription = NilesToolCatalog.toolDescription(for: create)
-        #expect(createDescription.contains("Created DISABLED"))
-        #expect(createDescription.contains("arming is a separate set_trigger_state approval"))
+        #expect(NilesToolCatalog.toolDescription(for: create).contains("accessoryIds"))
 
         let update = try #require(agentTool("update"))
         #expect(NilesToolCatalog.toolDescription(for: update).contains("complete"))
-
-        let setTriggerState = try #require(agentTool("set_trigger_state"))
-        #expect(NilesToolCatalog.toolDescription(for: setTriggerState).contains("its own proposal"))
 
         let delete = try #require(agentTool("delete"))
         #expect(NilesToolCatalog.toolDescription(for: delete).contains("DESTRUCTIVE"))
@@ -143,7 +143,7 @@ import Testing
     @Test func schemaSummariesListRequiredThenOptionalArguments() throws {
         let create = try #require(agentTool("create"))
         let summary = NilesToolCatalog.schemaSummary(for: create)
-        #expect(summary == "args: homeId, kind, name, accessoryIds?, actions?, events?, executeOnce?, fireDate?, recurrence?, sceneId?")
+        #expect(summary == "args: homeId, kind, name, accessoryIds?, actions?")
 
         // Optional arguments are suffixed "?" and sorted; required ones come first.
         let getDetails = try #require(agentTool("get_details"))

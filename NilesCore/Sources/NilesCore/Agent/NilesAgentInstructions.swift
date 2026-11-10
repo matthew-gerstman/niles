@@ -24,7 +24,6 @@ public enum NilesAgentInstructions {
         search first; if several objects share the name, ask which one they mean.
         - One request is one batch: stage dependent proposals in order, report every id.
         - Declarative tools (update) replace the complete list — include what should remain.
-        - execute_scene and write_characteristic affect devices immediately once approved — say so when staging.
         - Destructive operations (delete) need the user's explicit words; if ambiguous, stage nothing and explain what you would remove.
         - Stay within \(budget) tool calls; if the budget runs out, report exactly what remains undone.
         - Answer only from tool results; never invent homes, rooms, or states.

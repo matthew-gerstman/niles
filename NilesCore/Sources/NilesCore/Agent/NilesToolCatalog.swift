@@ -2,14 +2,15 @@ import Foundation
 import MCP
 
 /// Emits the session's per-tool descriptions: the finalized compact one-liners
-/// (art_yvbPAfG9, v7) plus an argument summary generated from the tool's own
-/// input schema. The agent surface is the twelve compacted tools — six adapter
-/// tools (search, get_details, create, update, rename, delete) and six
-/// pass-through registry tools — so the compact table covers exactly those;
-/// the registries' full per-type surfaces stay MCP-only. The compact lines
-/// carry the same semantics the tests enforce (staging behavior lives once in
-/// the instructions; DESTRUCTIVE / DEVICE-IMMEDIATE markers, declarative-
-/// replace semantics, and created-DISABLED behavior stay per tool).
+/// (art_yvbPAfG9, v9) plus an argument summary generated from the tool's own
+/// input schema. The agent surface is the eight compacted tools — six adapter
+/// tools (search, get_details, create, update, rename, delete) and two
+/// pass-through registry tools (get_proposal, assign_accessory_to_room) — so
+/// the compact table covers exactly those; the registries' full per-type
+/// surfaces stay MCP-only. The compact lines carry the same semantics the
+/// tests enforce (staging behavior lives once in the instructions;
+/// DESTRUCTIVE markers, declarative-replace semantics, and created-DISABLED
+/// behavior stay per tool).
 public enum NilesToolCatalog {
     /// The finalized compact text per agent-surface tool, keyed by tool name.
     /// Adding an agent-surface tool without a line here fails the catalog tests.
@@ -19,14 +20,10 @@ public enum NilesToolCatalog {
         "get_details": "Read home state. No arguments: a lean whole-home summary — homes with counts, rooms with accessory names, zones, scenes, groups, and triggers, without characteristics. With kind and id: one object in full, including its characteristics.",
         "get_proposal": "Read one proposal's state (staged/approved/executed/denied/expired/failed), its diff, execution evidence, or error. Poll after every write.",
         // Writes
-        "create": "Create an object: a room, zone, scene, accessory group, timer automation, or event automation. Payload depends on kind: groups take accessoryIds (the members to group); scenes take actions (characteristic writes — Niles never executes scenes); timer automations take fireDate (ISO-8601) and optional recurrence; event automations take events and optional sceneId and executeOnce. Automations are created DISABLED — arming is a separate set_trigger_state approval. Zone names are unique per home.",
-        "update": "Replace an object's complete contents: groups take members (accessory ids), zones take rooms, scenes take actions (characteristic writes). Anything absent from the list is removed. Trigger edits use their own tools.",
+        "create": "Create an object: a room, zone, scene, or accessory group. Payload depends on kind: groups take accessoryIds (the members to group); scenes take actions (characteristic writes — Niles never executes scenes). Zone names are unique per home.",
+        "update": "Replace an object's complete contents: groups take members (accessory ids), zones take rooms, scenes take actions (characteristic writes). Anything absent from the list is removed.",
         "rename": "Rename a room, zone, scene, accessory group, or accessory.",
-        "delete": "DESTRUCTIVE. Remove an object from the home: a room, zone, scene, accessory group, trigger, or an accessory. Per-type consequences — where a room's accessories go, which triggers a deleted scene leaves behind — appear on the review card.",
-        "execute_scene": "DEVICE-IMMEDIATE. Run a scene now, on approval. An empty scene cannot run.",
-        "write_characteristic": "DEVICE-IMMEDIATE. Write one characteristic on approval; the value must fit the characteristic's declared metadata.",
-        "update_event_trigger": "Replace an event automation's events (declarative); optionally its end events, recurrences, run-once behavior, or scene. Never changes armed state.",
-        "set_trigger_state": "Arm or disarm an automation — enabling is always its own proposal. Also moves a timer's fire date and recurrence.",
+        "delete": "DESTRUCTIVE. Remove an object from the home: a room, zone, scene, accessory group, or an accessory. Per-type consequences — where a room's accessories go, which triggers a deleted scene leaves behind — appear on the review card.",
         "assign_accessory_to_room": "Move an accessory to a room.",
     ]
 

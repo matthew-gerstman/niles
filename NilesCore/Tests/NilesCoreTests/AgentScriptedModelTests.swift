@@ -110,7 +110,7 @@ final class AgentScriptedModelTests: XCTestCase {
     // MARK: - Living-room lights to 30%
 
     func testLivingRoomLightsTo30PercentStagesOneCreateSceneProposal() async throws {
-        let (agent, store, _) = makeAgent()
+        let (agent, store, _, _) = makeAgent()
 
         let outcome = try await run(
             agent,
@@ -186,37 +186,32 @@ final class AgentScriptedModelTests: XCTestCase {
     // MARK: - One create per kind
 
     func testCreateRoutesOneProposalPerKind() async throws {
-        let (agent, store, dispatcher) = makeAgent()
+        let (agent, store, dispatcher, _) = makeAgent()
 
         let outcome = try await run(
             agent,
             turns: [
                 .call("create", "{\"kind\": \"room\", \"homeId\": \"home-1\", \"name\": \"Sunroom\"}"),
                 .call("create", "{\"kind\": \"zone\", \"homeId\": \"home-1\", \"name\": \"Second Floor\"}"),
-                .call("create", """
-                {"kind": "timer", "homeId": "home-1", "name": "Sunrise",
-                 "fireDate": "2026-11-11T07:30:00Z"}
-                """),
-                .call("create", """
-                {"kind": "event", "homeId": "home-1", "name": "Motion Light",
-                 "events": [{"accessoryId": "acc-office-1", "characteristic": "On"}]}
-                """),
-                .done("I staged four proposals: a room, a zone, and two (disabled) automations."),
+                .call("create", "{\"kind\": \"group\", \"homeId\": \"home-1\", \"name\": \"Hydra\", \"accessoryIds\": [\"acc-lr-1\", \"acc-lr-2\"]}"),
+                .call("create", "{\"kind\": \"scene\", \"homeId\": \"home-1\", \"name\": \"Movie Time\", \"actions\": [{\"accessoryId\": \"acc-lr-1\", \"characteristic\": \"Brightness\", \"value\": 30}]}"),
+                .done("I staged four proposals: a room, a zone, a group, and a scene."),
             ],
-            request: "Set up a Sunroom, a Second Floor zone, a 7:30 automation called Sunrise, and one that turns the fan on."
+            request: "Set up a Sunroom, a Second Floor zone, a Hydra group, and a Movie Time scene."
         )
 
         let proposals = await store.allProposals()
         XCTAssertEqual(proposals.map(\.tool),
-                       ["create_room", "create_zone", "create_timer_trigger", "create_event_trigger"])
+                       ["create_room", "create_zone", "create_service_group", "create_scene"])
         XCTAssertEqual(outcome.stagedProposalIds, proposals.map(\.id))
-        XCTAssertEqual(await dispatcher.stagedProposalIds.count, 4)
+        let staged = await dispatcher.stagedProposalIds
+        XCTAssertEqual(staged.count, 4)
     }
 
     // MARK: - Declarative updates replace the complete list
 
     func testDeclarativeUpdatesStageCompleteListReplacements() async throws {
-        let (agent, store, _) = makeAgent()
+        let (agent, store, _, _) = makeAgent()
 
         let outcome = try await run(
             agent,
@@ -242,7 +237,7 @@ final class AgentScriptedModelTests: XCTestCase {
     // MARK: - Infinite-loop model hits the budget
 
     func testInfiniteLoopModelHitsBudgetAndEndsWithHonestReport() async throws {
-        let (agent, store, dispatcher) = makeAgent(budget: 12)
+        let (agent, store, dispatcher, _) = makeAgent(budget: 12)
 
         // Twenty tool-call turns and a final honest report: the budget cuts
         // the loop at 12, and the turns after that see in-band exhaustion.
@@ -272,7 +267,7 @@ final class AgentScriptedModelTests: XCTestCase {
     // MARK: - Vague destructive request stages nothing
 
     func testVagueDestructiveRequestStagesZeroProposals() async throws {
-        let (agent, store, dispatcher) = makeAgent()
+        let (agent, store, dispatcher, _) = makeAgent()
 
         let outcome = try await run(
             agent,
@@ -305,7 +300,7 @@ final class AgentScriptedModelTests: XCTestCase {
         graph.homes[0].rooms[0].accessories.append(
             AgentFixtures.dimmableLight(id: "acc-chill", name: "Chill Light")
         )
-        let (agent, store, dispatcher) = makeAgent(graph: graph)
+        let (agent, store, dispatcher, _) = makeAgent(graph: graph)
 
         let outcome = try await run(
             agent,
@@ -328,7 +323,7 @@ final class AgentScriptedModelTests: XCTestCase {
     // MARK: - Syracuse-shaped fixture: summary and deep read
 
     func testLeanSummaryAndDeepReadOnSyracuseShapedHome() async throws {
-        let (agent, store, dispatcher) = makeAgent(graph: AgentFixtures.syracuseShapedGraph())
+        let (agent, store, dispatcher, _) = makeAgent(graph: AgentFixtures.syracuseShapedGraph())
 
         // No arguments: the lean whole-home summary.
         _ = try await run(
@@ -345,7 +340,7 @@ final class AgentScriptedModelTests: XCTestCase {
         XCTAssertTrue(await store.allProposals().isEmpty)
 
         // A fresh run: kind + id deep read of one accessory.
-        let (agent2, store2, dispatcher2) = makeAgent(graph: AgentFixtures.syracuseShapedGraph())
+        let (agent2, store2, dispatcher2, _) = makeAgent(graph: AgentFixtures.syracuseShapedGraph())
         _ = try await run(
             agent2,
             turns: [
