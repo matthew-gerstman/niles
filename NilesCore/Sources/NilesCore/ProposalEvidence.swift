@@ -198,15 +198,16 @@ public enum ProposalEvidenceCollector {
                 confirmed: true
             )
 
-        case .addServiceGroup(_, let name):
+        case .addServiceGroup(_, let name, let serviceIds):
             let groups = graph.homes.flatMap(\.serviceGroups)
             let group = createdId.flatMap { id in groups.first { $0.id == id } } ?? groups.first { $0.name == name }
             let noun = group.map { $0.services.count == 1 ? "service" : "services" } ?? ""
+            let expected = serviceIds.isEmpty ? "" : " — expected \(serviceIds.count) \(serviceIds.count == 1 ? "member" : "members")"
             return ProposalEvidence(
                 claim: "Service group “\(name)” exists",
-                observed: group.map { "Group “\($0.name)” holds \($0.services.count) \(noun)" }
+                observed: group.map { "Group “\($0.name)” holds \($0.services.count) \(noun)\(expected)" }
                     ?? "Service group “\(name)” not found after execution",
-                confirmed: group != nil
+                confirmed: group != nil && (serviceIds.isEmpty || group!.services.count == serviceIds.count)
             )
 
         case .setServiceGroupMembers(_, let groupId, let addServiceIds, let removeServiceIds):

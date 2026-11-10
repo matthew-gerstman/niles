@@ -22,6 +22,10 @@ public struct WriteToolRegistry: Sendable {
     /// The names `call` answers: the write tools plus `get_proposal`.
     public var toolNames: Set<String> { Set(Self.toolDefinitions.map(\.name)) }
 
+    /// The full registry tool definitions — the source of truth the agent
+    /// toolset generator projects into session tools.
+    public var toolDefinitions: [Tool] { Self.toolDefinitions }
+
     /// Answers one `tools/call` for a write tool or `get_proposal`. Every
     /// failure — unknown tool, invalid arguments, rejected validation — is an
     /// `isError` result naming what to fix, never a thrown error the agent

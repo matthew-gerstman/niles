@@ -84,8 +84,8 @@ public enum ProposalPlanner {
             return try deleteScene(sceneId: sceneId, deleteLinkedTriggers: deleteLinkedTriggers, graph: graph)
         case .executeScene(let sceneId):
             return try executeScene(sceneId: sceneId, graph: graph)
-        case .createServiceGroup(let homeId, let name):
-            return try createServiceGroup(homeId: homeId, name: name, graph: graph)
+        case .createServiceGroup(let homeId, let name, let serviceIds):
+            return try createServiceGroup(homeId: homeId, name: name, serviceIds: serviceIds, graph: graph)
         case .renameServiceGroup(let groupId, let name):
             return try renameServiceGroup(groupId: groupId, name: name, graph: graph)
         case .setServiceGroupMembers(let groupId, let serviceIds):
@@ -602,23 +602,43 @@ public enum ProposalPlanner {
 
     // MARK: - Service groups
 
-    private static func createServiceGroup(homeId: String, name: String, graph: HomeGraph) throws -> Plan {
+    private static func createServiceGroup(
+        homeId: String, name: String, serviceIds: [String], graph: HomeGraph
+    ) throws -> Plan {
         let trimmed = try requiredHomeKitName(name, kind: "service group")
         let home = try self.home(id: homeId, in: graph)
         try rejectDuplicate(kind: "service group", name: trimmed, in: home.serviceGroups.map(\.name), homeName: home.name)
+        // Members are validated at plan time so a stale id fails here, in
+        // band, instead of mid-execution.
+        let knownServiceIds = Set(
+            home.rooms.flatMap(\.accessories).flatMap(\.services).map(\.id)
+        )
+        let unknown = Set(serviceIds).subtracting(knownServiceIds).sorted()
+        guard unknown.isEmpty else {
+            throw PlannerError.invalidInput(
+                "No service \(unknown.joined(separator: ", ")) in “\(home.name)”."
+            )
+        }
+        let memberAccessories = home.rooms.flatMap(\.accessories)
+            .filter { accessory in accessory.services.contains { serviceIds.contains($0.id) } }
+        let memberNames = memberAccessories.map(\.name)
         return Plan(
             tool: "create_service_group",
             title: "Create service group “\(trimmed)”",
-            summary: "Create service group “\(trimmed)” in “\(home.name)”",
+            summary: memberNames.isEmpty
+                ? "Create service group “\(trimmed)” in “\(home.name)”"
+                : "Create service group “\(trimmed)” in “\(home.name)” with \(memberNames.count) \(memberNames.count == 1 ? "member" : "members")",
             isDestructive: false,
-            operations: [.addServiceGroup(homeId: home.id, name: trimmed)],
+            operations: [.addServiceGroup(homeId: home.id, name: trimmed, serviceIds: serviceIds)],
             entries: [ProposalDiffEntry(
                 object: ProposalObjectRef(kind: .serviceGroup, id: "", name: trimmed),
                 op: .create,
                 before: nil,
                 after: trimmed
             )],
-            card: [ProposalCardLine(.add, "Service group “\(trimmed)” · created")]
+            card: memberNames.isEmpty
+                ? [ProposalCardLine(.add, "Service group “\(trimmed)” · created")]
+                : [ProposalCardLine(.add, "Service group “\(trimmed)” · created with \(memberNames.joined(separator: ", "))")]
         )
     }
 
@@ -651,13 +671,18 @@ public enum ProposalPlanner {
     private static func setServiceGroupMembers(groupId: String, serviceIds: [String], graph: HomeGraph) throws -> Plan {
         let (home, group) = try self.serviceGroup(id: groupId, in: graph)
 
-        // The graph only exposes services through groups, so validate against
-        // every ServiceRef in the home. The real adapter resolves any
-        // HMService; the fake's vocabulary is group-visible services.
-        let known = Dictionary(
-            home.serviceGroups.flatMap(\.services).map { ($0.id, $0) },
+        // Validate against every service visible in the home. Group members
+        // carry richer display names, but a service on a standalone
+        // accessory — not yet in any group — is equally real; rejecting it
+        // would make grouping that accessory impossible.
+        var known = Dictionary(
+            home.serviceGroups.flatMap(\.services).map { ($0.id, $0.name) },
             uniquingKeysWith: { first, _ in first }
         )
+        for service in home.rooms.flatMap(\.accessories).flatMap(\.services)
+        where known[service.id] == nil {
+            known[service.id] = service.name
+        }
         var failures: [String] = []
         for serviceId in serviceIds where known[serviceId] == nil {
             failures.append("Service \(serviceId): \(PlannerError.unknownService(serviceId).message)")
@@ -680,22 +705,22 @@ public enum ProposalPlanner {
             additions.map { serviceId in
                 ProposalDiffEntry(
                     object: groupRef, op: .addMembers,
-                    before: nil, after: known[serviceId]?.name ?? serviceId
+                    before: nil, after: known[serviceId] ?? serviceId
                 )
             }
             + removals.map { serviceId in
                 ProposalDiffEntry(
                     object: groupRef, op: .removeMembers,
-                    before: known[serviceId]?.name ?? serviceId, after: nil
+                    before: known[serviceId] ?? serviceId, after: nil
                 )
             }
 
         var card: [ProposalCardLine] =
             additions.map { serviceId in
-                ProposalCardLine(.add, "“\(group.name)” · add service “\(known[serviceId]?.name ?? serviceId)”")
+                ProposalCardLine(.add, "“\(group.name)” · add service “\(known[serviceId] ?? serviceId)”")
             }
             + removals.map { serviceId in
-                ProposalCardLine(.remove, "“\(group.name)” · remove service “\(known[serviceId]?.name ?? serviceId)”")
+                ProposalCardLine(.remove, "“\(group.name)” · remove service “\(known[serviceId] ?? serviceId)”")
             }
         let unchanged = current.count - removals.count
         if unchanged > 0 {

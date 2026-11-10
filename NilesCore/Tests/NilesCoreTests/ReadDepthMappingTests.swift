@@ -204,7 +204,10 @@ import Testing
         graph.homes[0].rooms[0].accessories[0].firmwareVersion = "2.1.0"
 
         let registry = ReadToolRegistry(service: FakeHomeKitService(graph: graph))
-        let rooms = try decode(await registry.call(name: "get_rooms"), as: ReadToolRegistry.RoomsProjection.self)
+        let rooms = try decode(
+            await registry.call(name: "get_rooms", arguments: ["detail": .string("full")]),
+            as: ReadToolRegistry.RoomsProjection<HomeGraph.Accessory>.self
+        )
         let lamp = try #require(rooms.rooms.first?.accessories.first)
         #expect(lamp.reachable == false)
         #expect(lamp.bridged == true)

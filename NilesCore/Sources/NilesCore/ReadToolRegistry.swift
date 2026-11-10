@@ -22,18 +22,41 @@ public struct ReadToolRegistry: Sendable {
     public var tools: [Tool] { Self.toolDefinitions }
 
     /// The names `call` answers.
-    public var toolNames: Set<String> { Set(Self.projections.keys) }
+    public var toolNames: Set<String> {
+        // get_rooms is special-cased in call() — its optional filters don't
+        // fit the projection table — but it is a served read tool, and the
+        // dispatcher routes by name.
+        var names = Set(Self.projections.keys)
+        names.insert("get_rooms")
+        return names
+    }
+
+    /// The full registry tool definitions — the source of truth the agent
+    /// toolset generator projects into session tools.
+    public var toolDefinitions: [Tool] { Self.toolDefinitions }
 
     /// Answers one `tools/call` for a read tool. Unknown tool names and graph
     /// read failures return `isError` results rather than throwing, so the
     /// agent sees the failure in-band.
     public func call(name: String, arguments: [String: Value]? = nil) async -> CallTool.Result {
-        guard let project = Self.projections[name] else {
-            let known = Self.projections.keys.sorted().joined(separator: ", ")
-            return Self.errorResult("Unknown tool \(name). Available read tools: \(known)")
-        }
         do {
             let graph = try await service.snapshot()
+            if name == "get_rooms" {
+                let detail = arguments?["detail"]?.stringValue ?? Self.leanDetail
+                guard detail == Self.leanDetail || detail == Self.fullDetail else {
+                    return Self.errorResult("Invalid arguments: detail must be \"\(Self.leanDetail)\" or \"\(Self.fullDetail)\".")
+                }
+                return try Self.result(Self.roomsView(
+                    graph,
+                    detail: detail,
+                    roomId: arguments?["roomId"]?.stringValue,
+                    accessoryId: arguments?["accessoryId"]?.stringValue
+                ))
+            }
+            guard let project = Self.projections[name] else {
+                let known = Self.projections.keys.sorted().joined(separator: ", ")
+                return Self.errorResult("Unknown tool \(name). Available read tools: \(known), get_rooms")
+            }
             return try Self.result(project(graph))
         } catch {
             return Self.errorResult("Failed to read the home graph: \(error)")
@@ -51,8 +74,24 @@ public struct ReadToolRegistry: Sendable {
         ),
         Tool(
             name: "get_rooms",
-            description: "List rooms across all homes with their assigned accessories and zone membership. Each accessory names its services and the characteristics each service supports — each characteristic shows its current value and declared metadata (format, units, min/max/step, validValues), and each accessory shows reachability, bridging, category, and firmware. Check this before staging a characteristic write. Rooms group accessories; zones (see get_zones) group rooms.",
-            inputSchema: emptyObjectSchema,
+            description: "List rooms with their accessories. Default output is LEAN — rooms, zones, and accessories as names and ids only (the on-device model's context window cannot hold a whole home in full detail). Pass detail \"full\" to include each accessory's services and characteristics (values and metadata) plus reachability state — check that before staging a characteristic write. Rooms group accessories; zones (see get_zones) group rooms.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "roomId": .object([
+                        "type": .string("string"),
+                        "description": .string("Optional: return only the room with this id (from a previous lean get_rooms)."),
+                    ]),
+                    "accessoryId": .object([
+                        "type": .string("string"),
+                        "description": .string("Optional: return only rooms that contain this accessory."),
+                    ]),
+                    "detail": .object([
+                        "type": .string("string"),
+                        "description": .string("Optional: \"lean\" (default) or \"full\". Full adds each accessory's services, characteristics, and state."),
+                    ]),
+                ]),
+            ]),
             annotations: Tool.Annotations(readOnlyHint: true)
         ),
         Tool(
@@ -88,7 +127,6 @@ public struct ReadToolRegistry: Sendable {
 
     private static let projections: [String: @Sendable (HomeGraph) throws -> any Codable & Sendable] = [
         "get_homes": homesView,
-        "get_rooms": roomsView,
         "get_zones": zonesView,
         "get_scenes": scenesView,
         "get_service_groups": serviceGroupsView,
@@ -121,18 +159,26 @@ public struct ReadToolRegistry: Sendable {
         var triggers: Int
     }
 
-    struct RoomsProjection: Codable, Sendable, Equatable {
-        var rooms: [RoomSummary]
+    struct RoomsProjection<Accessory: Codable & Sendable & Equatable>: Codable, Sendable, Equatable {
+        var rooms: [RoomSummary<Accessory>]
     }
 
-    struct RoomSummary: Codable, Sendable, Equatable {
+    struct RoomSummary<Accessory: Codable & Sendable & Equatable>: Codable, Sendable, Equatable {
         var id: String
         var homeId: String
         var homeName: String
         var name: String
         var zoneId: String?
         var zoneName: String?
-        var accessories: [HomeGraph.Accessory]
+        var accessories: [Accessory]
+    }
+
+    /// The lean accessory shape: names and ids only. The default `get_rooms`
+    /// depth — a whole home in full detail does not fit the on-device model's
+    /// context window.
+    struct AccessoryRef: Codable, Sendable, Equatable {
+        var id: String
+        var name: String
     }
 
     struct ZonesProjection: Codable, Sendable, Equatable {
@@ -217,26 +263,41 @@ public struct ReadToolRegistry: Sendable {
         )
     }
 
-    private static func roomsView(_ graph: HomeGraph) -> RoomsProjection {
-        RoomsProjection(rooms: graph.homes.flatMap { home -> [RoomSummary] in
-            let zoneByRoomId = Dictionary(
-                home.zones.flatMap { zone in zone.roomIds.map { ($0, zone) } },
-                uniquingKeysWith: { first, _ in first }
-            )
-            return home.rooms.map { room in
-                let zone = zoneByRoomId[room.id]
-                return RoomSummary(
-                    id: room.id,
-                    homeId: home.id,
-                    homeName: home.name,
-                    name: room.name,
-                    zoneId: zone?.id,
-                    zoneName: zone?.name,
-                    accessories: room.accessories
+    private static func roomsView(
+        _ graph: HomeGraph, detail: String, roomId: String?, accessoryId: String?
+    ) -> any Codable & Sendable {
+        func summary<A: Codable & Sendable & Equatable>(
+            _ makeAccessory: (HomeGraph.Accessory) -> A
+        ) -> RoomsProjection<A> {
+            RoomsProjection(rooms: graph.homes.flatMap { home -> [RoomSummary<A>] in
+                let zoneByRoomId = Dictionary(
+                    home.zones.flatMap { zone in zone.roomIds.map { ($0, zone) } },
+                    uniquingKeysWith: { first, _ in first }
                 )
-            }
-        })
+                return home.rooms
+                    .filter { roomId == nil || $0.id == roomId }
+                    .filter { accessoryId == nil || $0.accessories.contains { $0.id == accessoryId } }
+                    .map { room in
+                        let zone = zoneByRoomId[room.id]
+                        return RoomSummary(
+                            id: room.id,
+                            homeId: home.id,
+                            homeName: home.name,
+                            name: room.name,
+                            zoneId: zone?.id,
+                            zoneName: zone?.name,
+                            accessories: room.accessories.map(makeAccessory)
+                        )
+                    }
+            })
+        }
+        return detail == Self.fullDetail
+            ? summary { $0 }
+            : summary { AccessoryRef(id: $0.id, name: $0.name) }
     }
+
+    private static let leanDetail = "lean"
+    private static let fullDetail = "full"
 
     private static func zonesView(_ graph: HomeGraph) -> ZonesProjection {
         ZonesProjection(zones: graph.homes.flatMap { home -> [ZoneSummary] in

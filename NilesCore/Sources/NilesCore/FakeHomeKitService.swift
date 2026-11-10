@@ -151,10 +151,17 @@ public actor FakeHomeKitService: HomeKitWriting {
             graph.homes[h].scenes[s].lastExecutionDate = Date()
             return nil
 
-        case .addServiceGroup(_, let name):
+        case .addServiceGroup(_, let name, let serviceIds):
             let h = try indexOfHome(havingServiceGroupNamed: name)
             let id = nextId(prefix: "group", existing: graph.homes[h].serviceGroups.map(\.id))
-            graph.homes[h].serviceGroups.append(HomeGraph.ServiceGroup(id: id, name: name))
+            var group = HomeGraph.ServiceGroup(id: id, name: name)
+            for serviceId in serviceIds {
+                guard let ref = knownService(id: serviceId) else {
+                    throw HomeKitWriteError.objectMissing("No service \(serviceId) to add to service group \(id).")
+                }
+                group.services.append(ref)
+            }
+            graph.homes[h].serviceGroups.append(group)
             return id
 
         case .setServiceGroupMembers(_, let groupId, let addServiceIds, let removeServiceIds):
@@ -378,10 +385,24 @@ public actor FakeHomeKitService: HomeKitWriting {
     /// The graph is a value type — mutations always go through
     /// `graph.homes[index]` subscripts, never through struct copies.
 
-    /// Services are only reachable through groups (the graph's one service
-    /// vocabulary); membership changes look refs up across all of them.
+    /// Service-ref lookup across the whole home: group members first, then
+    /// every accessory's own services.
     private func knownService(id: String) -> HomeGraph.ServiceRef? {
-        graph.homes.flatMap(\.serviceGroups).flatMap(\.services).first { $0.id == id }
+        // Group members carry full ServiceRefs; a service on a standalone
+        // accessory is equally valid as a group member, so fall back to the
+        // accessory's own services.
+        if let ref = graph.homes.flatMap(\.serviceGroups).flatMap(\.services).first(where: { $0.id == id }) {
+            return ref
+        }
+        for accessory in graph.homes.flatMap(\.rooms).flatMap(\.accessories) {
+            if let service = accessory.services.first(where: { $0.id == id }) {
+                return HomeGraph.ServiceRef(
+                    id: service.id, name: service.name, serviceType: service.serviceType,
+                    accessoryId: accessory.id, accessoryName: accessory.name
+                )
+            }
+        }
+        return nil
     }
 
     /// Graph projection of a proposed event, mirroring the real adapter's

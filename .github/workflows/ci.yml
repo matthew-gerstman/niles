@@ -9,7 +9,11 @@ on:
 jobs:
   build-and-test:
     name: build-and-test
-    runs-on: macos-15
+    # The agent core (NilesCore/Agent) uses FoundationModels APIs that only
+    # exist in the iOS 27 SDK — building with Xcode 26.x fails with "cannot
+    # find type 'LanguageModel' in scope". The xcode-27 image (public
+    # preview) ships Xcode 27.0-27.2; "Select newest Xcode" below picks 27.2.
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@v4
 
@@ -39,7 +43,7 @@ jobs:
           xcodebuild build \
             -project Niles.xcodeproj \
             -scheme Niles \
-            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -destination 'platform=iOS Simulator,name=iPhone 18 Pro,OS=27.2' \
             CODE_SIGNING_ALLOWED=YES \
             CODE_SIGN_IDENTITY=- \
             CODE_SIGNING_REQUIRED=NO
@@ -54,7 +58,7 @@ jobs:
           xcodebuild test \
             -project Niles.xcodeproj \
             -scheme Niles \
-            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -destination 'platform=iOS Simulator,name=iPhone 18 Pro,OS=27.2' \
             CODE_SIGNING_ALLOWED=YES \
             CODE_SIGN_IDENTITY=- \
             CODE_SIGNING_REQUIRED=NO

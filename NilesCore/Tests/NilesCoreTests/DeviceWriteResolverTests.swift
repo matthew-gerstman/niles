@@ -570,11 +570,17 @@ import Testing
     // MARK: Service groups
 
     @Test func addServiceGroupRejectsDuplicateName() throws {
-        let steps = try resolve(.addServiceGroup(homeId: "home-1", name: "Media"))
-        #expect(steps == [.addServiceGroup(homeId: "home-1", name: "Media")])
+        let steps = try resolve(.addServiceGroup(homeId: "home-1", name: "Media", serviceIds: []))
+        #expect(steps == [.addServiceGroup(homeId: "home-1", name: "Media", serviceIds: [])])
         #expect(error {
-            _ = try self.resolve(.addServiceGroup(homeId: "home-1", name: "everything"))
+            _ = try self.resolve(.addServiceGroup(homeId: "home-1", name: "everything", serviceIds: []))
         } == .duplicateName("Home already has a service group named “everything”."))
+    }
+
+    @Test func addServiceGroupRejectsUnknownService() {
+        #expect(error {
+            _ = try self.resolve(.addServiceGroup(homeId: "home-1", name: "Media", serviceIds: ["svc-nope"]))
+        } == .objectMissing("No service svc-nope in “Townhouse”."))
     }
 
     @Test func setServiceGroupMembersResolvesServices() throws {
