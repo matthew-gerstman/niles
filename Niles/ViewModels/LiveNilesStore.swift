@@ -36,7 +36,7 @@ struct DeviceHomeKitService: HomeKitWriting {
 /// polls on a short interval; every read is in-memory and cheap.
 @MainActor
 @Observable
-final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewModel, HomeGraphViewModel, PairingViewModel {
+final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewModel, HomeGraphViewModel, PairingViewModel, AgentStatusViewModel {
 
     // MARK: - DashboardViewModel
 

@@ -7,7 +7,7 @@ import NilesCore
 /// machinery and token reveal are gone: the bearer token never renders in UI;
 /// agents pair with the code instead.
 struct SettingsScreen: View {
-    var model: any DashboardViewModel & PairingViewModel
+    var model: any DashboardViewModel & PairingViewModel & AgentStatusViewModel
 
     /// The paired agent whose revoke confirmation is showing, if any.
     @State private var pendingRevoke: PairedAgentRow?
