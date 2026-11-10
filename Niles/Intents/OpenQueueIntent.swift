@@ -25,10 +25,16 @@ struct OpenQueueIntent: AppIntent {
 
     static let openAppWhenRun = true
 
+    /// Injectable for tests: the unit-test bundle runs hosted inside the real
+    /// app, where the live ContentView consumes the shared signal mid-test —
+    /// the UI doing its job makes a test that asserts on `.shared` fail. A
+    /// fresh instance keeps the assertion hermetic. Production uses `.shared`.
+    @MainActor static var navigationTarget = AppNavigation.shared
+
     func perform() async throws -> some IntentResult & ProvidesDialog {
         // AppNavigation is MainActor-isolated; the intent hops over to set the
         // flag, then returns.
-        await AppNavigation.shared.requestQueue()
+        await Self.navigationTarget.requestQueue()
         return .result(dialog: "Opening the Queue — staged proposals are waiting for your approval.")
     }
 }

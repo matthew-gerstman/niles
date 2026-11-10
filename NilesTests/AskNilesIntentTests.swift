@@ -122,9 +122,17 @@ struct AskNilesIntentTests {
 
     @Test
     func openQueueIntentRequestsTheQueueTab() async throws {
-        AppNavigation.shared.consumeQueueSelection()
+        // The bundle runs hosted in the real app, where the live ContentView
+        // observes and consumes `AppNavigation.shared` — performing against
+        // the shared singleton races the UI. A fresh target nothing observes
+        // makes the assertion hermetic.
+        let navigation = AppNavigation()
+        let original = OpenQueueIntent.navigationTarget
+        OpenQueueIntent.navigationTarget = navigation
+        defer { OpenQueueIntent.navigationTarget = original }
+
         _ = try await OpenQueueIntent().perform()
-        #expect(AppNavigation.shared.queueSelectionPending)
-        AppNavigation.shared.consumeQueueSelection()
+
+        #expect(navigation.queueSelectionPending)
     }
 }
