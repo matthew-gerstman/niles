@@ -95,6 +95,25 @@ final class HomeActionsUITests: XCTestCase {
         capture("settings-consolidated", in: app)
     }
 
+    /// SwiftUI List rows intermittently report an invalid activation point
+    /// while the list settles — the frame then re-resolves to {{inf, inf},
+    /// {0,0}} — which fails plain element taps on slow CI runners. Tap the
+    /// row's center by coordinate, re-resolving until the frame is valid.
+    @MainActor
+    private func tapCenter(of element: XCUIElement, in app: XCUIApplication) {
+        for _ in 0..<10 {
+            let frame = element.frame
+            if frame.origin.x.isFinite, frame.width > 1, frame.height > 1 {
+                app.coordinate(withNormalizedOffset: .zero)
+                    .withOffset(CGPoint(x: frame.midX, y: frame.midY))
+                    .tap()
+                return
+            }
+            Thread.sleep(forTimeInterval: 0.3)
+        }
+        element.tap() // last resort: the normal tap path
+    }
+
     @MainActor
     private func capture(_ name: String, in app: XCUIApplication) {
         let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
