@@ -36,11 +36,13 @@ final class AgentChatUITests: XCTestCase {
         )
         capture("chat-empty", in: app)
 
-        // Send: optimistic user row, then the running turn.
+        // Send: optimistic user row, then the running turn. The composer's
+        // element type changes when focused, so type through the app's
+        // focused element rather than a captured query.
         let composer = composerField(in: app)
         XCTAssertTrue(composer.waitForExistence(timeout: 10), "The composer text field is present")
         composer.tap()
-        composer.typeText("Dim the living room lights tonight at 8")
+        app.typeText("Dim the living room lights tonight at 8")
         app.buttons["Send"].tap()
 
         XCTAssertTrue(
