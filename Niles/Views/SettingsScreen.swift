@@ -1,4 +1,5 @@
 import SwiftUI
+import NilesCore
 
 /// Settings: the server kill switch and endpoint info, the pairing challenge
 /// (six-digit code, countdown, on-demand mint), paired agents with swipe-to
