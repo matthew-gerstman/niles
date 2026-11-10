@@ -46,6 +46,34 @@ public struct WriteToolRegistry: Sendable {
         }
     }
 
+    // MARK: - Shared descriptions (art_34OYtrUm: one text per tool, both projections)
+
+    /// Plain-language descriptions for the tools both consumers see — the
+    /// agent surface projects these six plus the two reads held in
+    /// `ReadToolRegistry`. The MCP listing appends `stagingSuffix` so each
+    /// write tool states the approval contract; the on-device agent's
+    /// session instructions state it once instead, so the agent consumes
+    /// the plain text verbatim. Concept-oriented: payload vocabulary that
+    /// differs between the surfaces (group members as service ids for MCP
+    /// clients, accessory ids for the agent) is described on each schema's
+    /// own arguments, never in the shared text.
+    static let createDescription =
+        "Create an object: a room, zone, scene, group, or automation (timer or event trigger). Payload depends on kind — groups take a member list, scenes take actions (characteristic writes — Niles never executes scenes), timers take a fire date and optional recurrence, event triggers take events. Automations are created DISABLED — arming one requires a separate set_trigger_state approval. Zone names are unique per home."
+    static let updateDescription =
+        "Replace an object's complete contents — declarative: anything absent from the list is removed. Groups take members, zones take rooms, scenes take actions (characteristic writes), and event triggers take events (plus optional endEvents, recurrences, executeOnce, or a new sceneId). Timer triggers have no event list — set_trigger_state moves their schedule, and arming is always its own proposal. Editing never changes a trigger's armed state."
+    static let renameDescription =
+        "Rename a room, zone, scene, accessory group, or accessory by id — resolve the id with search or get_details first."
+    static let deleteDescription =
+        "DESTRUCTIVE. Delete an object by id: a room, zone, scene, accessory group, accessory, or automation trigger. Per-type consequences — where a room's accessories go, which triggers a deleted scene leaves behind — appear on the review card; for a scene, pass deleteLinkedTriggers to delete those too."
+    static let getProposalDescription =
+        "Read one proposal's current state: staged/approved/executed/denied/expired/failed, its diff, the recorded evidence after execution, or the error if execution failed. Poll after every write to learn the outcome."
+    static let assignAccessoryToRoomDescription = "Move an accessory to a different room."
+
+    /// The staging contract carried on every MCP write listing. The agent
+    /// catalog strips exactly this suffix to recover the plain text.
+    static let stagingSuffix =
+        " STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards."
+
     // MARK: - Tool definitions
 
     private static let toolDefinitions: [Tool] = [
@@ -55,7 +83,7 @@ public struct WriteToolRegistry: Sendable {
         // below stay registered and functional, marked DEPRECATED.
         Tool(
             name: "rename",
-            description: "Rename a room, zone, scene, accessory group, or accessory by id — resolve the id with search or get_details first. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            description: Self.renameDescription + Self.stagingSuffix,
             inputSchema: objectSchema(
                 [
                     "entityId": stringProperty("The object to rename (from search or get_details)."),
@@ -67,7 +95,7 @@ public struct WriteToolRegistry: Sendable {
         ),
         Tool(
             name: "delete",
-            description: "Delete an object by id: a room, zone, scene, accessory group, accessory, or automation trigger. Per-type consequences — where a room's accessories go, which triggers a deleted scene leaves behind — appear on the review card; for a scene, pass deleteLinkedTriggers to delete those too. DESTRUCTIVE. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            description: Self.deleteDescription + Self.stagingSuffix,
             inputSchema: objectSchema(
                 [
                     "entityId": stringProperty("The object to delete (from search or get_details)."),
@@ -82,7 +110,7 @@ public struct WriteToolRegistry: Sendable {
         ),
         Tool(
             name: "create",
-            description: "Create an object: kind is room, zone, scene, group, timer, or event. Groups contain services (serviceIds); scenes take actions — characteristic writes (Niles never executes scenes); timer and event create automations, which are created DISABLED — arming one requires a separate set_trigger_state approval. Zone names are unique within a home. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            description: Self.createDescription + Self.stagingSuffix,
             inputSchema: objectSchema(
                 [
                     "kind": .object([
@@ -118,7 +146,7 @@ public struct WriteToolRegistry: Sendable {
         ),
         Tool(
             name: "update",
-            description: "Replace an object's complete contents — declarative: anything absent from the list is removed. Groups take members (service ids); zones take rooms (room ids); scenes take actions (characteristic writes); event triggers take events (plus optional endEvents, recurrences, executeOnce, or a new sceneId). Timer triggers have no event list — set_trigger_state moves their schedule, and arming is always its own proposal. Editing never changes a trigger's armed state. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            description: Self.updateDescription + Self.stagingSuffix,
             inputSchema: objectSchema(
                 [
                     "entityId": stringProperty("The group, zone, scene, or event trigger to update (from search or get_details)."),
@@ -481,7 +509,7 @@ public struct WriteToolRegistry: Sendable {
         ),
         Tool(
             name: "assign_accessory_to_room",
-            description: "Move an accessory to a different room. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
+            description: Self.assignAccessoryToRoomDescription + Self.stagingSuffix,
             inputSchema: objectSchema(
                 [
                     "accessoryId": stringProperty("The accessory to move (from get_rooms)."),
@@ -511,7 +539,7 @@ public struct WriteToolRegistry: Sendable {
         ),
         Tool(
             name: "get_proposal",
-            description: "Read one proposal's current state: staged/approved/executed/denied/expired/failed, its diff, the recorded evidence after execution, or the error if execution failed. Call this after staging any write to learn the outcome.",
+            description: Self.getProposalDescription,
             inputSchema: objectSchema(
                 ["proposalId": stringProperty("The proposal id returned by the write tool.")],
                 required: ["proposalId"]
