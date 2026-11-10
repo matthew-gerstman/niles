@@ -205,13 +205,15 @@ import Testing
 
     @Test func roomsToolCarriesAccessoryAndZoneMembership() async throws {
         let registry = makeRegistry(graph: makeGraph())
-        let rooms = try decode(await registry.call(name: "get_rooms"), as: ReadToolRegistry.RoomsProjection.self)
+        // Default depth is lean: names and ids only, no services or state.
+        let rooms = try decode(await registry.call(name: "get_rooms"), as: ReadToolRegistry.RoomsProjection<ReadToolRegistry.AccessoryRef>.self)
 
         let office = try #require(rooms.rooms.first { $0.id == "room-office" })
         #expect(office.homeName == "Main House")
         #expect(office.zoneId == "zone-upstairs")
         #expect(office.zoneName == "Upstairs")
         #expect(office.accessories.map(\.name) == ["Desk Lamp", "Ceiling Fan"])
+        #expect(office.accessories.map(\.id) == ["acc-desk-lamp", "acc-office-fan"])
 
         // The Kitchen is in no zone; membership must stay nil, not empty-string.
         let kitchen = try #require(rooms.rooms.first { $0.id == "room-kitchen" })
@@ -220,9 +222,37 @@ import Testing
         #expect(kitchen.accessories.map(\.name) == ["Kitchen Lamp"])
     }
 
+    @Test func roomsToolFiltersByIdAndRejectsBadDetail() async throws {
+        let registry = makeRegistry(graph: makeGraph())
+
+        let byRoom = try decode(
+            await registry.call(name: "get_rooms", arguments: ["roomId": .string("room-kitchen")]),
+            as: ReadToolRegistry.RoomsProjection<ReadToolRegistry.AccessoryRef>.self
+        )
+        #expect(byRoom.rooms.map(\.id) == ["room-kitchen"])
+
+        let byAccessory = try decode(
+            await registry.call(name: "get_rooms", arguments: ["accessoryId": .string("acc-office-fan")]),
+            as: ReadToolRegistry.RoomsProjection<ReadToolRegistry.AccessoryRef>.self
+        )
+        #expect(byAccessory.rooms.map(\.id) == ["room-office"])
+
+        let unknownRoom = try decode(
+            await registry.call(name: "get_rooms", arguments: ["roomId": .string("room-nowhere")]),
+            as: ReadToolRegistry.RoomsProjection<ReadToolRegistry.AccessoryRef>.self
+        )
+        #expect(unknownRoom.rooms.isEmpty)
+
+        let badDetail = await registry.call(name: "get_rooms", arguments: ["detail": .string("everything")])
+        #expect(badDetail.isError == true)
+    }
+
     @Test func roomsToolExposesServiceCapabilitiesPerAccessory() async throws {
         let registry = makeRegistry(graph: makeGraph())
-        let rooms = try decode(await registry.call(name: "get_rooms"), as: ReadToolRegistry.RoomsProjection.self)
+        let rooms = try decode(
+            await registry.call(name: "get_rooms", arguments: ["detail": .string("full")]),
+            as: ReadToolRegistry.RoomsProjection<HomeGraph.Accessory>.self
+        )
 
         // The dimmable bulb: its lightbulb service lists Brightness.
         let kitchen = try #require(rooms.rooms.first { $0.id == "room-kitchen" })
