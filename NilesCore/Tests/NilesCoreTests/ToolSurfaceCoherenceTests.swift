@@ -37,7 +37,7 @@ import Testing
         // The full registered surface, in order. Consolidated tools first
         // within each registry, then the deprecated per-type predecessors.
         #expect(
-            mcpListing.map(\\.name)
+            mcpListing.map(\.name)
                 == [
                     // Reads
                     "search", "get_details",
@@ -62,12 +62,12 @@ import Testing
     @Test func everyRegisteredToolHasPlainLanguageDescription() {
         for tool in mcpListing {
             let description = tool.description
-            #expect(description != nil, "\\(tool.name) must ship a description — the registries are the single source of truth for tool text")
+            #expect(description != nil, "\(tool.name) must ship a description — the registries are the single source of truth for tool text")
             guard let description, !description.isEmpty else { continue }
             // No truncated configuration meta-language ("STAG…"-style
             // fragments) — the text must read to a human, in full.
-            #expect(!description.contains("STAG…"), "\\(tool.name) carries truncated meta-language")
-            #expect(!description.lowercased().contains("lean by default"), "\\(tool.name) carries configuration meta-language")
+            #expect(!description.contains("STAG…"), "\(tool.name) carries truncated meta-language")
+            #expect(!description.lowercased().contains("lean by default"), "\(tool.name) carries configuration meta-language")
         }
     }
 
@@ -88,7 +88,7 @@ import Testing
             let deprecated = tool.description?.contains("DEPRECATED") == true
             #expect(
                 deprecated == expectedDeprecated.contains(tool.name),
-                "\\(tool.name): DEPRECATED marker \\(deprecated ? "unexpected" : "missing")"
+                "\(tool.name): DEPRECATED marker \(deprecated ? "unexpected" : "missing")"
             )
         }
         #expect(expectedDeprecated.count == 27)
@@ -104,14 +104,14 @@ import Testing
         for name in ["update", "set_zone_rooms", "set_scene_actions", "set_service_group_members"] {
             #expect(
                 description(name).contains("absent from the list is removed"),
-                "\\(name) must state the declarative-replace consequence"
+                "\(name) must state the declarative-replace consequence"
             )
         }
         // Device-immediate markers on the two control tools.
         for name in ["execute_scene", "write_characteristic"] {
             #expect(
                 description(name).contains("device-immediate"),
-                "\\(name) must carry the device-immediate marker"
+                "\(name) must carry the device-immediate marker"
             )
         }
         // The automation-arming invariant on the trigger tools.
@@ -141,13 +141,13 @@ import Testing
         let registry = listingByName
         for tool in agentSurfaceTools {
             guard let registryTool = registry[tool.name] else {
-                Issue.record("\\(tool.name) has no registry twin — the agent surface must project registered tools")
+                Issue.record("\(tool.name) has no registry twin — the agent surface must project registered tools")
                 continue
             }
             let compacted = NilesToolCatalog.compactedRegistryDescription(for: registryTool)
             #expect(
                 tool.description == compacted,
-                "\\(tool.name): agent description diverges from the registry text"
+                "\(tool.name): agent description diverges from the registry text"
             )
         }
     }
