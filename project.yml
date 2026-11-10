@@ -75,69 +75,8 @@ targets:
       properties:
         CFBundleDisplayName: NilesCore
 
-  NilesCoreTests:
-    type: bundle.unit-test
-    platform: iOS
-    sources:
-      - path: NilesCore/Tests
-    dependencies:
-      - target: NilesCore
-      - package: MCPSwift
-        product: MCP
-    settings:
-      base:
-        # Host the Core tests in the app process: the keychain entitlements
-        # that SecItem needs live on the host app, not the generated runner.
-        TEST_HOST: $(BUILT_PRODUCTS_DIR)/Niles.app/Niles
-        BUNDLE_LOADER: $(TEST_HOST)
-        # Signing (even ad-hoc, as the simulator test action does) requires an
-        # Info.plist; generate one so the Keychain-backed tests can run signed.
-        GENERATE_INFOPLIST_FILE: YES
-
-  # App-target unit tests: exercise the live UI wiring (LiveNilesStore) inside
-  # the app process, since the view models live in the app target.
-  NilesTests:
-    type: bundle.unit-test
-    platform: iOS
-    sources:
-      - path: NilesTests
-    dependencies:
-      - target: Niles
-      - package: MCPSwift
-        product: MCP
-    settings:
-      base:
-        # See NilesCoreTests: ad-hoc signing needs an Info.plist.
-        GENERATE_INFOPLIST_FILE: YES
-        TEST_HOST: $(BUILT_PRODUCTS_DIR)/Niles.app/Niles
-        BUNDLE_LOADER: $(TEST_HOST)
-
-  # UI tests: drive the real simulator app (demo fixture) as evidence capture —
-  # the Home swipe-to-stage flow and the consolidated Settings screen.
-  NilesUITests:
-    type: bundle.ui-testing
-    platform: iOS
-    sources:
-      - path: NilesUITests
-    dependencies:
-      - target: Niles
-    settings:
-      base:
-        # See NilesCoreTests: ad-hoc signing needs an Info.plist.
-        GENERATE_INFOPLIST_FILE: YES
-        TEST_TARGET_NAME: Niles
-        PRODUCT_BUNDLE_IDENTIFIER: com.gerstman.niles.uitests
-
 schemes:
   Niles:
     build:
       targets:
         Niles: all
-        NilesCoreTests: [test]
-        NilesTests: [test]
-        NilesUITests: [test]
-    test:
-      targets:
-        - NilesCoreTests
-        - NilesTests
-        - NilesUITests

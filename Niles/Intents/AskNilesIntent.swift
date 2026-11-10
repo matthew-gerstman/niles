@@ -29,8 +29,15 @@ struct AskNilesRouter {
 
     /// The one session-failure copy, shared by the Siri dialog and the
     /// in-app chat's failed turns — one wording, one source of truth.
+    /// The typed asset-unavailable case gets the retry-oriented wording:
+    /// the gate passed when the run was accepted but the on-device model
+    /// asset was missing at generation time — a state that resolves on
+    /// its own, not a request the agent misunderstood.
     static func failureMessage(for error: Error) -> String {
-        "Niles couldn't complete that request: \(error.localizedDescription)"
+        if case AgentRunError.assetUnavailable = error {
+            return "The on-device model isn't ready yet — try again in a few minutes."
+        }
+        return "Niles couldn't complete that request: \(error.localizedDescription)"
     }
 
     /// One request to completion. Tool-level failures are already in-band in

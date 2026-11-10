@@ -1,5 +1,6 @@
 import Foundation
 import MCP
+import os
 #if canImport(FoundationModels)
 import FoundationModels
 
@@ -171,6 +172,12 @@ public enum NilesToolset {
 /// the shared dispatcher.
 @available(iOS 27.0, *)
 public struct NilesAgent {
+    /// Session-failure diagnostics: the full underlying error at public
+    /// privacy, so device Console capture shows the real failure (the
+    /// availability gate can read `.available` while the asset is missing
+    /// at generation time) instead of an os_log privacy redaction.
+    private static let logger = Logger(subsystem: "com.gerstman.niles", category: "agent")
+
     public struct Outcome: Sendable, Equatable {
         public var summary: String
         public var stagedProposalIds: [String]
@@ -204,16 +211,52 @@ public struct NilesAgent {
     /// The runner seam: the scripted-model tests drive this with a custom
     /// `LanguageModel` and get the production instructions and toolset.
     public func run(_ request: String, using model: any LanguageModel) async throws -> Outcome {
-        let session = try LanguageModelSession(
-            model: model,
-            tools: NilesToolset.tools(dispatcher: dispatcher),
-            instructions: instructions
-        )
-        let response = try await session.respond(to: request)
+        let session: LanguageModelSession
+        let response: LanguageModelSession.Response<String>
+        do {
+            session = try LanguageModelSession(
+                model: model,
+                tools: NilesToolset.tools(dispatcher: dispatcher),
+                instructions: instructions
+            )
+            response = try await session.respond(to: request)
+        } catch {
+            // One line at the one session-failure catch site — the full
+            // underlying error, public (see the logger's comment).
+            Self.logger.error("Agent session failed: \(String(describing: error), privacy: .public)")
+            await Self.logAssetDiagnostics(for: error)
+            throw AgentRunError.mapped(from: error)
+        }
         return Outcome(
             summary: response.content,
             stagedProposalIds: await dispatcher.stagedProposalIds
         )
+    }
+
+    /// Runtime model diagnostics for the asset-unavailable bisect. Logs the
+    /// live system-model availability and en_US support (what the gate reads
+    /// between runs), and — when the failure mapped to `.assetUnavailable` —
+    /// runs a one-shot minimal probe session: no tools, no instructions, one
+    /// short prompt. A passing probe points at the Niles session surface
+    /// (tools/schema/instructions); a failing one at the device asset itself.
+    private static func logAssetDiagnostics(for error: Error) async {
+        let system = SystemLanguageModel.default
+        let supportsEnUS = system.supportsLocale(Locale(identifier: "en_US"))
+        Self.logger.error(
+            "Agent asset diagnostics: availability=\(String(describing: system.availability), privacy: .public) supportsEnUS=\(supportsEnUS, privacy: .public)"
+        )
+        guard case AgentRunError.assetUnavailable = AgentRunError.mapped(from: error) else { return }
+        do {
+            let probe = try LanguageModelSession()
+            let reply = try await probe.respond(to: "Reply with OK.")
+            Self.logger.error(
+                "Agent asset probe: minimal session succeeded (\(reply.content, privacy: .public)) — failure likely from the Niles session surface (tools/schema/instructions), not the device asset"
+            )
+        } catch {
+            Self.logger.error(
+                "Agent asset probe: minimal session failed: \(String(describing: error), privacy: .public) — the device asset itself is unavailable"
+            )
+        }
     }
 }
 #endif
