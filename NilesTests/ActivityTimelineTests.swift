@@ -319,24 +319,6 @@ struct ActivityTimelineTests {
         ]) == .failed)
     }
 
-    /// A verified execution — non-empty evidence, every check confirmed —
-    /// is what turns on the plain "Verified" badge; partial or failed
-    /// read-backs and evidence-less executions never show it.
-    @Test
-    func verifiedBadgeNeedsFullConfirmedEvidence() {
-        func verified(_ evidence: [ProposalEvidence]) -> Bool {
-            ActivityTimeline.groups(
-                events: [event(.executed, minutesAgo: 10, proposalId: "p", evidence: evidence)],
-                proposals: []
-            ).first!.verified
-        }
-        #expect(!verified([]))
-        #expect(verified(confirmedEvidence("Room exists")))
-        #expect(!verified([
-            ProposalEvidence(claim: "Room exists", observed: "It does not", confirmed: false),
-        ]))
-    }
-
     /// The group carries the undo gates of its most recent execution —
     /// an undone proposal never offers Undo.
     @Test

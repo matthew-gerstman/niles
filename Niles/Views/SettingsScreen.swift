@@ -52,7 +52,7 @@ struct SettingsScreen: View {
         } header: {
             Text("Server")
         } footer: {
-            Text(model.serverIsRunning ? "Serving · foreground only" : "Stopped")
+            Text(model.serverIsRunning ? "Serving" : "Stopped")
         }
     }
 
@@ -79,8 +79,6 @@ struct SettingsScreen: View {
             }
         } header: {
             Text("Pairing")
-        } footer: {
-            Text("A fresh code mints at the next refresh once one expires.")
         }
     }
 
