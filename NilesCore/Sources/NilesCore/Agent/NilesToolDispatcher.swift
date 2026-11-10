@@ -51,8 +51,8 @@ public actor NilesToolDispatcher {
     public init(
         reads: ReadToolRegistry,
         writes: WriteToolRegistry,
-        budget: Int = Self.defaultBudget,
-        responseCharacterLimit: Int = Self.defaultResponseCharacterLimit
+        budget: Int = NilesToolDispatcher.defaultBudget,
+        responseCharacterLimit: Int = NilesToolDispatcher.defaultResponseCharacterLimit
     ) {
         self.reads = reads
         self.writes = writes

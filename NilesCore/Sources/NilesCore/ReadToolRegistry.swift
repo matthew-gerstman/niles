@@ -120,7 +120,6 @@ public struct ReadToolRegistry: Sendable {
 
     private static let projections: [String: @Sendable (HomeGraph) throws -> any Codable & Sendable] = [
         "get_homes": homesView,
-        "get_rooms": roomsView,
         "get_zones": zonesView,
         "get_scenes": scenesView,
         "get_service_groups": serviceGroupsView,

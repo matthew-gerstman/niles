@@ -9,7 +9,7 @@ import FoundationModels
 /// Tool protocol availability starts at iOS 26; building the toolset needs
 /// nothing newer, so context-budget counting works on iOS 26 runtimes.
 @available(iOS 26.0, *)
-public struct NilesAgentTool: Tool {
+public struct NilesAgentTool: FoundationModels.Tool {
     public let name: String
     public let description: String
 
@@ -20,7 +20,7 @@ public struct NilesAgentTool: Tool {
     private let parametersSchema: GenerationSchema
     private let dispatcher: NilesToolDispatcher
 
-    public init(for tool: Tool, dispatcher: NilesToolDispatcher) {
+    public init(for tool: MCP.Tool, dispatcher: NilesToolDispatcher) {
         self.name = tool.name
         // One compacted definition per tool: staging boilerplate lives in the
         // session instructions, so it is stripped here, and the input schema
@@ -155,7 +155,7 @@ public struct NilesAgentTool: Tool {
 public enum NilesToolset {
     /// One `NilesAgentTool` per registry tool — all of them, reads and writes
     /// alike — backed by the shared dispatcher that owns the budget.
-    public static func tools(dispatcher: NilesToolDispatcher) -> [any Tool] {
+    public static func tools(dispatcher: NilesToolDispatcher) -> [any FoundationModels.Tool] {
         dispatcher.toolDefinitions
             .map { NilesAgentTool(for: $0, dispatcher: dispatcher) }
     }
@@ -185,7 +185,7 @@ public struct NilesAgent {
         self.instructions = NilesAgentInstructions.text()
     }
 
-    public func tools() -> [any Tool] {
+    public func tools() -> [any FoundationModels.Tool] {
         NilesToolset.tools(dispatcher: dispatcher)
     }
 
