@@ -9,6 +9,10 @@ final class AppNavigation {
     static let shared = AppNavigation()
 
     private(set) var queueSelectionPending = false
+    /// Retarget of the deep link onto the three-tab IA: the Queue now lives
+    /// as a section inside Home, so a queue request also asks HomeScreen to
+    /// scroll to that section and briefly highlight it.
+    private(set) var scrollToQueuePending = false
     /// Optional proposal context riding the same signal: the chat's proposal
     /// chips request the Queue with the tapped proposal, so the Queue can
     /// open that proposal's detail directly. Siri and the tab bar never set
@@ -17,6 +21,7 @@ final class AppNavigation {
 
     func requestQueue(proposalId: String? = nil) {
         queueSelectionPending = true
+        scrollToQueuePending = true
         pendingProposalId = proposalId
     }
 
@@ -24,6 +29,11 @@ final class AppNavigation {
     /// at cold launch; the proposal context is consumed by the Queue itself
     /// (it may need the store's next poll to have loaded the proposal).
     func consumeQueueSelection() { queueSelectionPending = false }
+
+    /// Clears the scroll-to-Queue-section signal once HomeScreen has
+    /// scrolled there. Survives a cold launch's tab selection so the Home
+    /// screen consumes it on appear.
+    func consumeScrollToQueue() { scrollToQueuePending = false }
 
     /// Clears the proposal context once the Queue has opened the proposal.
     func consumePendingProposal() { pendingProposalId = nil }

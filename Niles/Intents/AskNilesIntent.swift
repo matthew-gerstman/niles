@@ -29,7 +29,7 @@ struct AskNilesRouter {
     /// Why the agent can't take requests here, stated once — a pure-background
     /// intent has no conversational channel beyond the dialog.
     static let unavailableOutcome = AskNilesOutcome(
-        dialog: "Niles' agent isn't available on this device. The Settings tab explains why.",
+        dialog: "Niles' agent isn't available on this device. The Home tab explains why.",
         stagedProposalIds: []
     )
 

@@ -1,28 +1,76 @@
 import SwiftUI
 import NilesCore
 
-/// Settings: the server kill switch and endpoint info, the pairing challenge
-/// (six-digit code, countdown, on-demand mint), paired agents with swipe-to
-/// revoke, and connection info — all standard `Form` rows. The former QR code
-/// machinery and token reveal are gone: the bearer token never renders in UI;
-/// agents pair with the code instead.
-struct SettingsScreen: View {
-    var model: any DashboardViewModel & PairingViewModel & AgentStatusViewModel
+/// The Home tab root (three-tab IA, spec art_t2KGKOy3): the proposal Queue
+/// first, then the former Settings sections — Server, Pairing, Paired
+/// Agents, On-Device Agent, Diagnostics, Connection — moved verbatim (same
+/// bindings, same revoke confirm flow, same static helpers), and one quiet
+/// footer row into the home-graph browser. Everything is a native List
+/// section; nothing shipped by QueueScreen or SettingsScreen is lost.
+struct HomeScreen: View {
+    var model: any DashboardViewModel & PairingViewModel & AgentStatusViewModel & QueueViewModel & HomeGraphViewModel
 
+    /// The shared navigation signal: proposal deep links from the chat open
+    /// the detail sheet here, and the queue request scrolls to the Queue
+    /// section (the deep link used to land on the Queue tab).
+    @State private var navigation = AppNavigation.shared
+    @State private var openDetail: NilesProposal?
+    @State private var confirmApproveAll = false
+    /// The collapsed empty state: one quiet row that expands the explainer
+    /// on tap — never a hero card.
+    @State private var showEmptyExplainer = false
     /// The paired agent whose revoke confirmation is showing, if any.
     @State private var pendingRevoke: PairedAgentRow?
+    /// Brief highlight of the Queue section when a deep link lands on it.
+    @State private var queueHighlight = false
+
+    /// Scroll target for the Queue section — attached to the section so a
+    /// deep link can scroll it into view.
+    private enum ScrollTarget { case queue }
+
+    /// Approve all batches every staged proposal — destructive included.
+    private var stagedCount: Int { model.pendingProposals.count }
 
     var body: some View {
         NavigationStack {
-            Form {
-                serverSection
-                pairingSection
-                pairedAgentsSection
-                agentSection
-                traceSection
-                connectionSection
+            ScrollViewReader { proxy in
+                List {
+                    queueSection
+                    serverSection
+                    pairingSection
+                    pairedAgentsSection
+                    agentSection
+                    traceSection
+                    connectionSection
+                    browseSection
+                }
+                .listStyle(.insetGrouped)
+                .navigationTitle("Home")
+                .onAppear {
+                    consumeScrollRequest(proxy)
+                    openPendingProposalIfRequested()
+                }
+                // The chat's chip tap can land here before the store's poll
+                // has surfaced the proposal; retry on the next refresh.
+                .onChange(of: model.proposals) { _, _ in openPendingProposalIfRequested() }
+                // Deep link from OpenQueueIntent while the app is already
+                // running: ContentView selects this tab; this scrolls to the
+                // Queue section (and opens a riding proposal, if any).
+                .onChange(of: navigation.scrollToQueuePending) { _, pending in
+                    if pending { consumeScrollRequest(proxy) }
+                    openPendingProposalIfRequested()
+                }
             }
-            .navigationTitle("Settings")
+            .confirmationDialog(
+                "Approve all staged proposals?",
+                isPresented: $confirmApproveAll,
+                titleVisibility: .visible
+            ) {
+                Button("Approve all \(stagedCount)") { model.approveAll() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Every staged proposal is approved and executed — destructive ones included.")
+            }
             .confirmationDialog(
                 revokeTitle,
                 isPresented: Binding(get: { pendingRevoke != nil }, set: { if !$0 { pendingRevoke = nil } }),
@@ -38,8 +86,103 @@ struct SettingsScreen: View {
             } message: {
                 Text("The agent will immediately lose access to this home. Its live session closes and it cannot reconnect without pairing again.")
             }
+            .sheet(item: $openDetail) { snapshot in
+                // Re-read from the model so the sheet reflects decisions made on the row.
+                if let proposal = model.proposals.first(where: { $0.id == snapshot.id }) {
+                    ProposalDetailSheet(
+                        proposal: proposal,
+                        undoState: model.undoStates[proposal.id],
+                        onApprove: { model.approve(proposal.id) },
+                        onDeny: { model.deny(proposal.id) },
+                        onUndo: { model.undo(proposal.id) }
+                    )
+                }
+            }
         }
     }
+
+    // MARK: - Queue
+
+    private var queueSection: some View {
+        Section {
+            if model.proposals.isEmpty {
+                emptyQueueState
+            } else {
+                ForEach(model.proposals) { proposal in
+                    QueueListRow(proposal: proposal, model: model) {
+                        openDetail = proposal
+                    }
+                }
+            }
+        } header: {
+            Text("Queue")
+                .foregroundStyle(queueHighlight ? Color.accentColor : Color.secondary)
+        } footer: {
+            if stagedCount > 0 {
+                Button {
+                    confirmApproveAll = true
+                } label: {
+                    Label("Approve All", systemImage: "checkmark.seal")
+                }
+                .disabled(model.isApprovingAll)
+                .padding(.top, 4)
+            }
+        }
+        .id(ScrollTarget.queue)
+    }
+
+    /// The collapsed empty state: one quiet row that expands the explainer
+    /// on tap. No proposal has ever needed a hero card here.
+    private var emptyQueueState: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                withAnimation { showEmptyExplainer.toggle() }
+            } label: {
+                HStack {
+                    Text("No proposals yet")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Image(systemName: showEmptyExplainer ? "chevron.down" : "chevron.right")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .buttonStyle(.plain)
+            if showEmptyExplainer {
+                Text("When an agent wants to change your home — via Siri or Ask Niles — its request shows up here for your approval.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// The chat's proposal deep link: open the tapped proposal's detail once
+    /// it is visible, then clear the pending context. A nil or unknown id is
+    /// a no-op — the flag stays until the proposal shows up.
+    private func openPendingProposalIfRequested() {
+        guard let id = navigation.pendingProposalId else { return }
+        guard let proposal = model.proposals.first(where: { $0.id == id }) else { return }
+        openDetail = proposal
+        navigation.consumePendingProposal()
+    }
+
+    /// A queue request arrived (Siri deep link or a chat chip): scroll the
+    /// Queue section into view and flash its header, then clear the signal.
+    private func consumeScrollRequest(_ proxy: ScrollViewProxy) {
+        guard navigation.scrollToQueuePending else { return }
+        withAnimation {
+            proxy.scrollTo(ScrollTarget.queue, anchor: .top)
+            queueHighlight = true
+        }
+        navigation.consumeScrollToQueue()
+        // The flash lasts a beat, then the header returns to its quiet color.
+        Task {
+            try? await Task.sleep(for: .seconds(1.2)) // cancellation of a flash is a no-op
+            withAnimation { queueHighlight = false }
+        }
+    }
+
+    // MARK: - Settings sections (moved verbatim from SettingsScreen)
 
     /// Serving state as the kill-switch row; endpoint/sessions as value rows.
     private var serverSection: some View {
@@ -143,8 +286,8 @@ struct SettingsScreen: View {
     }
 
     /// Diagnostics entry: the on-device run-trace viewer (in-memory twin of
-    /// the AgentRunTrace log stream). Always present — the screen's empty
-    /// state explains itself when no run has happened yet.
+    /// the AgentRunTrace log stream). Always present — the empty state
+    /// explains itself when no run has happened yet.
     private var traceSection: some View {
         Section {
             NavigationLink {
@@ -202,12 +345,25 @@ struct SettingsScreen: View {
         }
     }
 
+    /// The home-graph browser, kept via a quiet footer row: the mockup has
+    /// no tab for it, but nothing it holds was deleted — rooms, zones,
+    /// scenes, and triggers keep their detail pushes.
+    private var browseSection: some View {
+        Section {
+            NavigationLink {
+                HomeGraphScreen(model: model)
+            } label: {
+                Label("Browse home graph", systemImage: "square.grid.3x3")
+            }
+        }
+    }
+
     private var revokeTitle: String {
         guard let name = pendingRevoke?.name else { return "" }
         return "Revoke \(name)?"
     }
 }
 
-#Preview("Settings") {
-    SettingsScreen(model: InMemoryNilesStore())
+#Preview("Home") {
+    HomeScreen(model: InMemoryNilesStore())
 }

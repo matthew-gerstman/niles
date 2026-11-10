@@ -1,99 +1,23 @@
 import SwiftUI
 import NilesCore
 
-/// Queue: the vertical proposal list, newest first — one native list row per
-/// proposal with severity carried by a warning glyph, a one-line diff, and
-/// relative time. Decisions arrive as swipe actions (leading Approve on the
+/// One queue row, shared by the Home tab's Queue section — severity glyph,
+/// title, one-line diff, evidence tally, and a trailing status (a spinner
+/// while a decision or undo is in flight, otherwise the settled SF Symbol
+/// status label). Decisions arrive as swipe actions (leading Approve on the
 /// right, trailing Deny on the left, row tap for the detail sheet); Undo is
-/// a trailing swipe on executed rows that still offer it. Approve-all lives
-/// in the toolbar behind a confirmation dialog. Destructive rows approve
-/// with a standard tap everywhere (user decision Nov 9); severity is
-/// signaled by the red warning symbol plus its label, never by color alone.
-struct QueueScreen: View {
+/// a trailing swipe on executed rows that still offer it. Extracted from the
+/// former QueueScreen so the Home section renders the exact same rows and
+/// semantics instead of duplicating them (spec art_t2KGKOy3: reuse, don't
+/// re-implement).
+struct QueueListRow: View {
+    let proposal: NilesProposal
     var model: any QueueViewModel
-    /// Injection seam for the chat's proposal deep link (same hermeticity
-    /// pattern as `OpenQueueIntent.navigationTarget`): nil in previews — the
-    /// consumption no-ops.
-    var navigation: AppNavigation? = nil
-
-    @State private var openDetail: NilesProposal?
-    @State private var confirmApproveAll = false
-
-    /// Approve all batches every staged proposal — destructive included.
-    private var stagedCount: Int { model.proposals.filter(\.isPending).count }
+    /// Opens the proposal's detail sheet — the row itself never decides
+    /// where the detail lives, so the Home tab can present it as its own.
+    let onOpen: () -> Void
 
     var body: some View {
-        NavigationStack {
-            List {
-                if model.proposals.isEmpty {
-                    emptyState
-                } else {
-                    Section {
-                        ForEach(model.proposals) { proposal in
-                            row(for: proposal)
-                        }
-                    }
-                }
-            }
-            .listStyle(.insetGrouped)
-            .navigationTitle("Queue")
-            .toolbar {
-                if stagedCount > 0 {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button {
-                            confirmApproveAll = true
-                        } label: {
-                            Label("Approve All", systemImage: "checkmark.seal")
-                        }
-                        .disabled(model.isApprovingAll)
-                    }
-                }
-            }
-            .confirmationDialog(
-                "Approve all staged proposals?",
-                isPresented: $confirmApproveAll,
-                titleVisibility: .visible
-            ) {
-                Button("Approve all \(stagedCount)") { model.approveAll() }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("Every staged proposal is approved and executed — destructive ones included.")
-            }
-            .onAppear { openPendingProposalIfRequested() }
-            // The chat's chip tap can land here before the store's poll has
-            // surfaced the proposal; retry on the next refresh.
-            .onChange(of: model.proposals) { _, _ in openPendingProposalIfRequested() }
-        }
-        .sheet(item: $openDetail) { snapshot in
-            // Re-read from the model so the sheet reflects decisions made on the row.
-            if let proposal = model.proposals.first(where: { $0.id == snapshot.id }) {
-                ProposalDetailSheet(
-                    proposal: proposal,
-                    undoState: model.undoStates[proposal.id],
-                    onApprove: { model.approve(proposal.id) },
-                    onDeny: { model.deny(proposal.id) },
-                    onUndo: { model.undo(proposal.id) }
-                )
-            }
-        }
-    }
-
-    // MARK: - Rows
-
-    /// The chat's proposal deep link: open the tapped proposal's detail once
-    /// it is visible, then clear the pending context. A nil or unknown id is
-    /// a no-op — the flag stays until the proposal shows up.
-    private func openPendingProposalIfRequested() {
-        guard let navigation, let id = navigation.pendingProposalId else { return }
-        guard let proposal = model.proposals.first(where: { $0.id == id }) else { return }
-        openDetail = proposal
-        navigation.consumePendingProposal()
-    }
-
-    /// One standard list row: severity glyph, title, one-line diff, evidence
-    /// tally, and a trailing status — a spinner while a decision or undo is
-    /// in flight, otherwise the settled SF Symbol status label.
-    private func row(for proposal: NilesProposal) -> some View {
         HStack(alignment: .firstTextBaseline) {
             Image(systemName: proposal.isDestructive ? "exclamationmark.triangle" : "doc.text")
                 .foregroundStyle(proposal.isDestructive ? Color.red : Color.accentColor)
@@ -116,7 +40,7 @@ struct QueueScreen: View {
             }
         }
         .contentShape(Rectangle())
-        .onTapGesture { openDetail = proposal }
+        .onTapGesture { onOpen() }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             trailingActions(for: proposal)
         }
@@ -124,6 +48,8 @@ struct QueueScreen: View {
             leadingActions(for: proposal)
         }
     }
+
+    // MARK: - Swipes
 
     /// Trailing (left) swipes: Deny (destructive role) on staged rows and
     /// Undo on executed rows that still offer it. Full swipe is disabled so
@@ -149,9 +75,8 @@ struct QueueScreen: View {
         }
     }
 
-    /// Leading (right) swipes: Approve (green tint) on staged rows. The
-    /// former leading Details action is gone — the row tap already opens
-    /// the detail sheet.
+    /// Leading (right) swipes: Approve (green tint) on staged rows. The row
+    /// tap opens the detail sheet — nothing else rides the leading edge.
     @ViewBuilder
     private func leadingActions(for proposal: NilesProposal) -> some View {
         let decision = model.decisionsInFlight[proposal.id]
@@ -165,6 +90,8 @@ struct QueueScreen: View {
             .disabled(decision != nil)
         }
     }
+
+    // MARK: - Row pieces
 
     /// Severity label, evidence tally, and no-revert note as caption text —
     /// the words carry the meaning, the colors only reinforce it.
@@ -212,8 +139,6 @@ struct QueueScreen: View {
         }
     }
 
-    // MARK: - Row pieces
-
     /// The first diff line stands in for the row's one-line summary; a
     /// proposal without diff lines falls back to its title.
     private func oneLineDiff(of proposal: NilesProposal) -> String {
@@ -244,42 +169,4 @@ struct QueueScreen: View {
             allConfirmed ? Color.green : Color.orange
         )
     }
-
-    private var emptyState: some View {
-        ContentUnavailableView {
-            Label("No proposals yet", systemImage: "tray")
-        } description: {
-            Text("When an agent wants to change your home, its request shows up here.")
-        }
-    }
-}
-
-#Preview("Queue") {
-    QueueScreen(model: InMemoryNilesStore())
-}
-
-#Preview("Queue — conflicted undo") {
-    let store = InMemoryNilesStore()
-    store.undoStates["prop_8f50"] = .conflict([
-        ProposalEvidence(
-            claim: "Room “Studio” exists",
-            observed: "No room named “Studio” exists — it was deleted after execution",
-            confirmed: false
-        ),
-    ])
-    return QueueScreen(model: store)
-}
-
-#Preview("Queue — empty") {
-    struct EmptyStore: QueueViewModel {
-        var proposals: [NilesProposal] { [] }
-        var decisionsInFlight: [String: ProposalDecision] { [:] }
-        var undoStates: [String: UndoState] { [:] }
-        var isApprovingAll: Bool { false }
-        func approve(_ id: String) {}
-        func deny(_ id: String) {}
-        func approveAll() {}
-        func undo(_ id: String) {}
-    }
-    return QueueScreen(model: EmptyStore())
 }
