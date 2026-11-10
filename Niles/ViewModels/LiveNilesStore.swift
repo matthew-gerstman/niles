@@ -89,6 +89,20 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
         proposals.filter(\.isPending)
     }
 
+    // MARK: - AgentStatusViewModel
+
+    /// Evaluated once at feature entry (spec art_VrC0iUUA §Availability
+    /// gate): the agent is either fully available or states why not — never
+    /// a degraded mode.
+    private(set) var agentAvailability = AgentAvailability.unavailable(.needsIOS27)
+    /// Session usage, refreshed with the poll from the runner when one
+    /// exists. Zero until the first request runs.
+    private(set) var agentUsage = AgentSessionUsage()
+    /// The on-device agent's runner, non-nil only when the gate passed. No
+    /// agent path is enterable when this is nil — Settings states the
+    /// reason instead.
+    private(set) var agentRunner: (any AgentRunning)?
+
     private let coordinator: ServerCoordinator
     private let notifier: ProposalNotifier
     private let tokenStore: any TokenStoring
@@ -130,6 +144,23 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
         self.activityLog = activityLog ?? ActivityLog()
         let host = LANAddress.primaryIPv4 ?? "127.0.0.1"
         endpoint = "http://\(host):\(LANServer.defaultPort)/mcp"
+
+        agentAvailability = Self.evaluateAgentAvailability()
+        if case .available = agentAvailability,
+           #available(iOS 27.0, *),
+           let proposalStore = coordinator.proposalStore {
+            agentRunner = AgentService(store: proposalStore)
+        }
+    }
+
+    /// The one availability check, at the one feature entry this app has.
+    /// The gate itself is iOS 26+ (Foundation Models); below that the OS
+    /// bar already fails the agent core's iOS 27 requirement.
+    private static func evaluateAgentAvailability() -> AgentAvailability {
+        if #available(iOS 26.0, *) {
+            return AgentAvailabilityGate.evaluate()
+        }
+        return .unavailable(.needsIOS27)
     }
 
     // MARK: - Lifecycle
@@ -638,6 +669,10 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
             )
         }
         await refreshPairingState(sessions: sessions)
+
+        if let runner = agentRunner {
+            agentUsage = await runner.usage
+        }
 
         guard let store = coordinator.proposalStore else { return }
         let live = await store.allProposals()

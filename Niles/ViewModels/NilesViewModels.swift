@@ -98,11 +98,20 @@ protocol PairingViewModel: Observable {
     func revokeAgent(_ id: UUID) async
 }
 
+/// The on-device agent's Settings status: availability (stating the reason
+/// when unavailable) and session usage. No run entry here — requests arrive
+/// via Siri; this surface states whether the agent can run at all.
+@MainActor
+protocol AgentStatusViewModel: Observable {
+    var agentAvailability: AgentAvailability { get }
+    var agentUsage: AgentSessionUsage { get }
+}
+
 /// Preview-ready in-memory store with the mockup's fixture data. Presentational
 /// only: approving transitions the local state machine, nothing more.
 @MainActor
 @Observable
-final class InMemoryNilesStore: DashboardViewModel, QueueViewModel, HomeGraphViewModel, PairingViewModel {
+final class InMemoryNilesStore: DashboardViewModel, QueueViewModel, HomeGraphViewModel, PairingViewModel, AgentStatusViewModel {
     private(set) var serverIsRunning = true
     let homeName = "Gerstman Home"
     let endpoint = "http://192.168.1.24:8901/mcp"
@@ -122,6 +131,10 @@ final class InMemoryNilesStore: DashboardViewModel, QueueViewModel, HomeGraphVie
     private(set) var sections: [HomeSection] = []
 
     let transportName = "Streamable HTTP"
+    /// Previews render the available state; the live store evaluates the
+    /// gate for real (spec art_VrC0iUUA §Availability gate).
+    var agentAvailability: AgentAvailability = .available
+    var agentUsage = AgentSessionUsage()
     private(set) var pairingCode: String?
     private(set) var codeExpiresAt: Date?
     private(set) var pairedAgents: [PairedAgentRow] = []

@@ -10,85 +10,8 @@ import FoundationModels
 /// so the acceptance scenarios run deterministically with no on-device model,
 /// through the production runner (`NilesAgent.run(_:using:)`).
 ///
-/// The custom LanguageModel/executor conformance is iOS 27+; on older
-/// runtimes these tests report skipped rather than failing.
-@available(iOS 27.0, *)
-private struct ScriptedTurn: Hashable, Sendable {
-    /// One tool call per turn: name plus arguments as JSON.
-    var toolName: String?
-    var argumentsJSON: String?
-    var finalText: String
-
-    static func call(_ tool: String, _ argumentsJSON: String) -> ScriptedTurn {
-        ScriptedTurn(toolName: tool, argumentsJSON: argumentsJSON, finalText: "")
-    }
-    static func done(_ text: String) -> ScriptedTurn {
-        ScriptedTurn(toolName: nil, argumentsJSON: nil, finalText: text)
-    }
-}
-
-@available(iOS 27.0, *)
-private struct ScriptedExecutorConfiguration: Hashable, Sendable {
-    var turns: [ScriptedTurn]
-}
-
-@available(iOS 27.0, *)
-private struct ScriptedLanguageModel: LanguageModel {
-    typealias Executor = ScriptedExecutor
-    var configuration: ScriptedExecutorConfiguration
-
-    var capabilities: LanguageModelCapabilities {
-        LanguageModelCapabilities([.toolCalling])
-    }
-
-    var executorConfiguration: ScriptedExecutorConfiguration { configuration }
-}
-
-@available(iOS 27.0, *)
-private struct ScriptedExecutor: LanguageModelExecutor {
-    typealias Model = ScriptedLanguageModel
-
-    let configuration: ScriptedExecutorConfiguration
-
-    init(configuration: ScriptedExecutorConfiguration) throws {
-        self.configuration = configuration
-    }
-
-    func prewarm(model: ScriptedLanguageModel, transcript: Transcript) {}
-
-    func respond(
-        to request: LanguageModelExecutorGenerationRequest,
-        model: ScriptedLanguageModel,
-        streamingInto channel: LanguageModelExecutorGenerationChannel
-    ) async throws {
-        // Each generation corresponds to one tool-call turn or the final
-        // response; count the ones already in the transcript. One tool call
-        // per scripted turn keeps this indexing exact. Transcript is a
-        // RandomAccessCollection, not an `entries` property.
-        let completed = request.transcript.filter { entry in
-            switch entry {
-            case .toolCalls, .response: return true
-            default: return false
-            }
-        }.count
-        let turns = model.configuration.turns
-        guard completed < turns.count else {
-            // Script exhausted: emit nothing further rather than loop forever.
-            await channel.send(.response(action: .appendText("", tokenCount: 0)))
-            return
-        }
-        let turn = turns[completed]
-        if let name = turn.toolName, let argumentsJSON = turn.argumentsJSON {
-            await channel.send(.toolCalls(action: .toolCall(
-                id: UUID().uuidString,
-                name: name,
-                action: .appendArguments(argumentsJSON, tokenCount: argumentsJSON.count / 4)
-            )))
-        } else {
-            await channel.send(.response(action: .appendText(turn.finalText, tokenCount: turn.finalText.count / 4)))
-        }
-    }
-}
+/// The scripted model itself lives in AgentFixtures so the service-level
+/// tests drive it too.
 
 @available(iOS 27.0, *)
 final class AgentScriptedModelTests: XCTestCase {
