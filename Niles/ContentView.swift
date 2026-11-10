@@ -47,7 +47,7 @@ struct ContentView: View {
 
     var body: some View {
         TabView(selection: $selectedTab) {
-            QueueScreen(model: store)
+            QueueScreen(model: store, navigation: navigation)
                 .tabItem { Label("Queue", systemImage: "list.bullet.rectangle") }
                 .badge(pendingCount)
                 .tag(NilesTab.queue)
@@ -60,7 +60,7 @@ struct ContentView: View {
                     .tabItem { Label("Activity", systemImage: "clock.arrow.circlepath") }
                     .tag(NilesTab.activity)
             }
-            HomeGraphScreen(model: store)
+            HomeGraphScreen(model: store, chat: store)
                 .tabItem { Label("Home", systemImage: "square.grid.3x3") }
                 .tag(NilesTab.home)
             SettingsScreen(model: store)

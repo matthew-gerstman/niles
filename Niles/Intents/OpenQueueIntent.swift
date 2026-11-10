@@ -9,9 +9,24 @@ final class AppNavigation {
     static let shared = AppNavigation()
 
     private(set) var queueSelectionPending = false
+    /// Optional proposal context riding the same signal: the chat's proposal
+    /// chips request the Queue with the tapped proposal, so the Queue can
+    /// open that proposal's detail directly. Siri and the tab bar never set
+    /// it — plain `requestQueue()` keeps its old shape.
+    private(set) var pendingProposalId: String?
 
-    func requestQueue() { queueSelectionPending = true }
+    func requestQueue(proposalId: String? = nil) {
+        queueSelectionPending = true
+        pendingProposalId = proposalId
+    }
+
+    /// Clears the tab-level signal. ContentView consumes this on change and
+    /// at cold launch; the proposal context is consumed by the Queue itself
+    /// (it may need the store's next poll to have loaded the proposal).
     func consumeQueueSelection() { queueSelectionPending = false }
+
+    /// Clears the proposal context once the Queue has opened the proposal.
+    func consumePendingProposal() { pendingProposalId = nil }
 }
 
 /// The deep link into the Queue, where staged proposals wait for human
