@@ -47,9 +47,19 @@ final class HomeActionsUITests: XCTestCase {
         ).firstMatch
         XCTAssertTrue(sceneRow.waitForExistence(timeout: 10))
         sleep(1)
-        tapCenter(of: sceneRow, in: app)
+        // The Home row tap is flaky right after the Queue→Home tab
+        // transition: XCUITest sometimes cannot compute the row button's
+        // hit point (element taps then abort the test), and a coordinate
+        // tap can land on a frame the settling list has already moved.
+        // Coordinate taps never abort the test, so retry until the detail
+        // page actually pushes, re-resolving the row's frame each attempt.
+        let detailNavBar = app.navigationBars["Good Morning"]
+        for _ in 0..<5 where !detailNavBar.exists {
+            tapCenter(of: sceneRow, in: app)
+            detailNavBar.waitForExistence(timeout: 3)
+        }
         XCTAssertTrue(
-            app.navigationBars["Good Morning"].waitForExistence(timeout: 10),
+            detailNavBar.waitForExistence(timeout: 10),
             "Tapping the scene row should push its detail page"
         )
         let detailRun = app.buttons["Run"].firstMatch
