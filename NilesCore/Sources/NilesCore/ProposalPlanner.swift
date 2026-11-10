@@ -671,13 +671,18 @@ public enum ProposalPlanner {
     private static func setServiceGroupMembers(groupId: String, serviceIds: [String], graph: HomeGraph) throws -> Plan {
         let (home, group) = try self.serviceGroup(id: groupId, in: graph)
 
-        // The graph only exposes services through groups, so validate against
-        // every ServiceRef in the home. The real adapter resolves any
-        // HMService; the fake's vocabulary is group-visible services.
-        let known = Dictionary(
-            home.serviceGroups.flatMap(\.services).map { ($0.id, $0) },
+        // Validate against every service visible in the home. Group members
+        // carry richer display names, but a service on a standalone
+        // accessory — not yet in any group — is equally real; rejecting it
+        // would make grouping that accessory impossible.
+        var known = Dictionary(
+            home.serviceGroups.flatMap(\.services).map { ($0.id, $0.name) },
             uniquingKeysWith: { first, _ in first }
         )
+        for service in home.rooms.flatMap(\.accessories).flatMap(\.services)
+        where known[service.id] == nil {
+            known[service.id] = service.name
+        }
         var failures: [String] = []
         for serviceId in serviceIds where known[serviceId] == nil {
             failures.append("Service \(serviceId): \(PlannerError.unknownService(serviceId).message)")
@@ -700,22 +705,22 @@ public enum ProposalPlanner {
             additions.map { serviceId in
                 ProposalDiffEntry(
                     object: groupRef, op: .addMembers,
-                    before: nil, after: known[serviceId]?.name ?? serviceId
+                    before: nil, after: known[serviceId] ?? serviceId
                 )
             }
             + removals.map { serviceId in
                 ProposalDiffEntry(
                     object: groupRef, op: .removeMembers,
-                    before: known[serviceId]?.name ?? serviceId, after: nil
+                    before: known[serviceId] ?? serviceId, after: nil
                 )
             }
 
         var card: [ProposalCardLine] =
             additions.map { serviceId in
-                ProposalCardLine(.add, "“\(group.name)” · add service “\(known[serviceId]?.name ?? serviceId)”")
+                ProposalCardLine(.add, "“\(group.name)” · add service “\(known[serviceId] ?? serviceId)”")
             }
             + removals.map { serviceId in
-                ProposalCardLine(.remove, "“\(group.name)” · remove service “\(known[serviceId]?.name ?? serviceId)”")
+                ProposalCardLine(.remove, "“\(group.name)” · remove service “\(known[serviceId] ?? serviceId)”")
             }
         let unchanged = current.count - removals.count
         if unchanged > 0 {

@@ -15,6 +15,16 @@ import Testing
         }.joined(separator: "\n")
     }
 
+    /// Replaces the randomly minted `prop_xxxxxxxxxxxx` id so two staging
+    /// runs compare equal on everything the proxy could have altered.
+    private func maskingProposalId(_ text: String) -> String {
+        text.replacingOccurrences(
+            of: #"prop_[0-9a-f]{12}"#,
+            with: "prop_ID",
+            options: .regularExpression
+        )
+    }
+
     // MARK: - Parity: proxy == direct registry call
 
     @Test func validReadCallIsByteIdenticalToDirectRegistry() async throws {
@@ -49,7 +59,9 @@ import Testing
         let secondDispatcher = NilesToolDispatcher(reads: fresh.reads, writes: fresh.writes)
         let proxied = await secondDispatcher.call(name: "create_scene", arguments: arguments)
 
-        #expect(proxied.text == text(of: direct))
+        // Staging mints a random proposal id into the result text; mask it so
+        // the comparison isolates what the proxy itself does (nothing).
+        #expect(maskingProposalId(proxied.text) == maskingProposalId(text(of: direct)))
         #expect(proxied.isError == (direct.isError == true))
     }
 
@@ -289,7 +301,8 @@ import Testing
             #expect(!outcome.isError, "\(entityId)")
             #expect(outcome.stagedProposalId != nil, "\(entityId)")
         }
-        let tools = await store.allProposals().map(\.tool)
+        // The store lists proposals newest first; compare in staging order.
+        let tools = Array((await store.allProposals()).reversed()).map(\.tool)
         #expect(tools == ["rename_scene", "rename_room", "rename_accessory"])
     }
 
@@ -345,7 +358,8 @@ import Testing
             #expect(!outcome.isError, "\(expectedTool)")
             #expect(outcome.stagedProposalId != nil, "\(expectedTool)")
         }
-        let tools = await store.allProposals().map(\.tool)
+        // The store lists proposals newest first; compare in staging order.
+        let tools = Array((await store.allProposals()).reversed()).map(\.tool)
         #expect(tools == ["create_room", "create_zone", "create_service_group", "create_scene"])
     }
 
@@ -395,7 +409,8 @@ import Testing
             #expect(!outcome.isError, "\(expectedTool)")
             #expect(outcome.stagedProposalId != nil, "\(expectedTool)")
         }
-        let tools = await store.allProposals().map(\.tool)
+        // The store lists proposals newest first; compare in staging order.
+        let tools = Array((await store.allProposals()).reversed()).map(\.tool)
         #expect(tools == ["set_service_group_members", "set_zone_rooms", "set_scene_actions"])
 
         // update on an entity type with no declarative replacement is an
@@ -467,7 +482,7 @@ import Testing
             "serviceIds": .array([.string("acc-lr-1-svc"), .string("acc-lr-2-svc"), .string("acc-lr-3-svc")]),
         ])
 
-        #expect(proxied.text == text(of: direct))
+        #expect(maskingProposalId(proxied.text) == maskingProposalId(text(of: direct)))
         #expect(proxied.isError == (direct.isError == true))
     }
 }

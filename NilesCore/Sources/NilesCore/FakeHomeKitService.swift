@@ -385,10 +385,24 @@ public actor FakeHomeKitService: HomeKitWriting {
     /// The graph is a value type — mutations always go through
     /// `graph.homes[index]` subscripts, never through struct copies.
 
-    /// Services are only reachable through groups (the graph's one service
-    /// vocabulary); membership changes look refs up across all of them.
+    /// Service-ref lookup across the whole home: group members first, then
+    /// every accessory's own services.
     private func knownService(id: String) -> HomeGraph.ServiceRef? {
-        graph.homes.flatMap(\.serviceGroups).flatMap(\.services).first { $0.id == id }
+        // Group members carry full ServiceRefs; a service on a standalone
+        // accessory is equally valid as a group member, so fall back to the
+        // accessory's own services.
+        if let ref = graph.homes.flatMap(\.serviceGroups).flatMap(\.services).first(where: { $0.id == id }) {
+            return ref
+        }
+        for accessory in graph.homes.flatMap(\.rooms).flatMap(\.accessories) {
+            if let service = accessory.services.first(where: { $0.id == id }) {
+                return HomeGraph.ServiceRef(
+                    id: service.id, name: service.name, serviceType: service.serviceType,
+                    accessoryId: accessory.id, accessoryName: accessory.name
+                )
+            }
+        }
+        return nil
     }
 
     /// Graph projection of a proposed event, mirroring the real adapter's

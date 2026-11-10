@@ -48,7 +48,9 @@ import Testing
 
     @Test func templateVariesOnlyByDateLine() {
         let morning = NilesAgentInstructions.text(date: Date(timeIntervalSince1970: 1_762_592_000))
-        let evening = NilesAgentInstructions.text(date: Date(timeIntervalSince1970: 1_762_628_000))
+        // Exactly one day later — one hour apart would render the same date
+        // and the two templates would be identical.
+        let evening = NilesAgentInstructions.text(date: Date(timeIntervalSince1970: 1_762_592_000 + 86_400))
         #expect(morning != evening)
 
         // Everything around the date must be identical: compare the text

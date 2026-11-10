@@ -165,7 +165,10 @@ public actor NilesToolDispatcher {
 
     private static let encoder: JSONEncoder = {
         let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        // Compact and key-sorted: every token a read spends on whitespace is
+        // a token of the model's 4,096-token window, and pretty-printed JSON
+        // once pushed the home's own name past the response cap.
+        encoder.outputFormatting = [.sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         return encoder
     }()

@@ -22,7 +22,14 @@ public struct ReadToolRegistry: Sendable {
     public var tools: [Tool] { Self.toolDefinitions }
 
     /// The names `call` answers.
-    public var toolNames: Set<String> { Set(Self.projections.keys) }
+    public var toolNames: Set<String> {
+        // get_rooms is special-cased in call() — its optional filters don't
+        // fit the projection table — but it is a served read tool, and the
+        // dispatcher routes by name.
+        var names = Set(Self.projections.keys)
+        names.insert("get_rooms")
+        return names
+    }
 
     /// The full registry tool definitions — the source of truth the agent
     /// toolset generator projects into session tools.

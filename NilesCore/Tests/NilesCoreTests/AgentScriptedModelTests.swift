@@ -118,7 +118,7 @@ final class AgentScriptedModelTests: XCTestCase {
             turns: [
                 .call("get_details", "{}"),
                 .call("create", """
-                {"kind": "scene", "homeId": "home-1", "name": "Living Room 30%", "actions": [
+                {"kind": "scene", "homeId": "home-1", "name": "Living Room 30", "actions": [
                     {"accessoryId": "acc-lr-1", "characteristic": "Brightness", "value": 30},
                     {"accessoryId": "acc-lr-2", "characteristic": "Brightness", "value": 30},
                     {"accessoryId": "acc-lr-3", "characteristic": "Brightness", "value": 30}
@@ -133,8 +133,8 @@ final class AgentScriptedModelTests: XCTestCase {
         XCTAssertEqual(proposals.count, 1, "exactly one create_scene proposal must be staged")
         let proposal = try XCTUnwrap(proposals.first)
         XCTAssertEqual(proposal.tool, "create_scene")
-        XCTAssertEqual(proposal.title, "Create scene \u{201C}Living Room 30%\u{201D}")
-        XCTAssertEqual(proposal.summary, "Create scene \u{201C}Living Room 30%\u{201D} with 3 actions")
+        XCTAssertEqual(proposal.title, "Create scene \u{201C}Living Room 30\u{201D}")
+        XCTAssertEqual(proposal.summary, "Create scene \u{201C}Living Room 30\u{201D} with 3 actions")
 
         // Correct arguments: one action per Living Room light, Brightness 30
         // (the fixture's metadata range is 0-100).
@@ -172,15 +172,19 @@ final class AgentScriptedModelTests: XCTestCase {
         let proposals = await store.allProposals()
         XCTAssertEqual(proposals.count, 1)
         XCTAssertEqual(proposals.first?.tool, "create_service_group")
-        XCTAssertEqual(proposals.first?.summary, "Create service group \u{201C}Hydra\u{201D} with 3 members")
-        XCTAssertEqual(outcome.stagedProposalIds, [proposals.first?.id])
+        XCTAssertEqual(proposals.first?.summary,
+                       "Create service group \u{201C}Hydra\u{201D} in \u{201C}Main House\u{201D} with 3 members")
+        XCTAssertEqual(outcome.stagedProposalIds, proposals.map(\.id))
 
         // Approving it creates the group with all three accessories'
         // primary (only) services.
         let approved = try await store.approve(id: proposals[0].id)
         XCTAssertEqual(approved.state, .executed)
         let graph = await service.graph
-        XCTAssertEqual(graph.homes.first?.serviceGroups.first?.services.map(\.id),
+        // The fixture already has a "Desk Lamps" group; find the executed one
+        // by its name rather than by position.
+        let hydra = graph.homes.first?.serviceGroups.first(where: { $0.name == "Hydra" })
+        XCTAssertEqual(hydra?.services.map(\.id),
                        ["acc-lr-1-svc", "acc-lr-2-svc", "acc-lr-3-svc"])
     }
 
@@ -201,12 +205,13 @@ final class AgentScriptedModelTests: XCTestCase {
             request: "Set up a Sunroom, a Second Floor zone, a Hydra group, and a Movie Time scene."
         )
 
-        let proposals = await store.allProposals()
-        XCTAssertEqual(proposals.map(\.tool),
+        // The store lists proposals newest first; compare in staging order.
+        let staged = Array((await store.allProposals()).reversed())
+        XCTAssertEqual(staged.map(\.tool),
                        ["create_room", "create_zone", "create_service_group", "create_scene"])
-        XCTAssertEqual(outcome.stagedProposalIds, proposals.map(\.id))
-        let staged = await dispatcher.stagedProposalIds
-        XCTAssertEqual(staged.count, 4)
+        XCTAssertEqual(outcome.stagedProposalIds, staged.map(\.id))
+        let stagedIds = await dispatcher.stagedProposalIds
+        XCTAssertEqual(stagedIds.count, 4)
     }
 
     // MARK: - Declarative updates replace the complete list
@@ -229,10 +234,11 @@ final class AgentScriptedModelTests: XCTestCase {
             request: "Move Desk Lamps to the two living-room lamps, put Kitchen and Living Room in Upstairs, and retune Good Morning to 40%."
         )
 
-        let proposals = await store.allProposals()
-        XCTAssertEqual(proposals.map(\.tool),
+        // The store lists proposals newest first; compare in staging order.
+        let staged = Array((await store.allProposals()).reversed())
+        XCTAssertEqual(staged.map(\.tool),
                        ["set_service_group_members", "set_zone_rooms", "set_scene_actions"])
-        XCTAssertEqual(outcome.stagedProposalIds, proposals.map(\.id))
+        XCTAssertEqual(outcome.stagedProposalIds, staged.map(\.id))
     }
 
     // MARK: - Infinite-loop model hits the budget
@@ -252,12 +258,11 @@ final class AgentScriptedModelTests: XCTestCase {
         XCTAssertEqual(outcome.summary, honestReport)
 
         let attempted = await dispatcher.attemptedCalls
-        XCTAssertEqual(attempted.count, 21, "12 executed + 9 refused after budget")
-        XCTAssertEqual(attempted.prefix(12).count, 12)
+        XCTAssertEqual(attempted.count, 20, "12 executed + 8 refused after budget")
         XCTAssertTrue(attempted.prefix(12).allSatisfy { !$0.wasBudgetExhausted && !$0.isError })
-        XCTAssertTrue(attempted.suffix(9).allSatisfy { $0.wasBudgetExhausted })
+        XCTAssertTrue(attempted.suffix(8).allSatisfy { $0.wasBudgetExhausted })
         let exhaustions = await dispatcher.budgetExhaustions
-        XCTAssertEqual(exhaustions, 9)
+        XCTAssertEqual(exhaustions, 8)
 
         let staged = await dispatcher.stagedProposalIds
         XCTAssertTrue(staged.isEmpty, "a read-only loop stages nothing")

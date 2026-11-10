@@ -24,8 +24,25 @@ final class AgentContextBudgetTests: XCTestCase {
             throw XCTSkip("Apple Intelligence is unavailable on this runtime; token counting needs the system model")
         }
 
-        let toolTokens = try await model.tokenCount(for: tools)
-        let instructionTokens = try await model.tokenCount(for: Instructions(NilesAgentInstructions.text()))
+        // Some runtimes (headless CI, simulators) report .availability as
+        // .available yet ship no model-catalog assets; tokenCount then
+        // fails with a ModelManager asset error. The gate is only
+        // meaningful where the model's assets exist — skip with the
+        // underlying error rather than fail. Anything else rethrows.
+        func counted(_ body: () async throws -> Int) async throws -> Int {
+            do {
+                return try await body()
+            } catch {
+                let nsError = error as NSError
+                if nsError.domain.contains("LanguageModelError") || nsError.domain.contains("ModelManager") {
+                    throw XCTSkip("model-catalog assets unavailable for token counting: \(error)")
+                }
+                throw error
+            }
+        }
+
+        let toolTokens = try await counted { try await model.tokenCount(for: tools) }
+        let instructionTokens = try await counted { try await model.tokenCount(for: Instructions(NilesAgentInstructions.text())) }
         let fixedSurface = toolTokens + instructionTokens
 
         // The measured budget: instructions + tools ≈ 1,600 tokens, well
