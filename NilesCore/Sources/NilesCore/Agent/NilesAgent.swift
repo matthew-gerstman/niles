@@ -93,7 +93,7 @@ public struct NilesAgentTool: FoundationModels.Tool {
     /// The Foundation Models dynamic-schema surface: build a
     /// `DynamicGenerationSchema` tree from the registry's JSON schema, then
     /// root a GenerationSchema on it.
-    private static func dynamicSchema(_ schema: MCP.Value) -> DynamicGenerationSchema {
+    private static func dynamicSchema(_ schema: MCP.Value, isRoot: Bool = true) -> DynamicGenerationSchema {
         guard case .object(let fields) = schema else {
             return DynamicGenerationSchema(type: String.self)
         }
@@ -101,6 +101,17 @@ public struct NilesAgentTool: FoundationModels.Tool {
         if case .string(let type)? = fields["type"] { typeString = type } else { typeString = nil }
         switch typeString {
         case "object":
+            // Nested dynamic objects (any object that is a property or array
+            // item) must not build a named DynamicGenerationSchema — the
+            // on-device constraint compiler fails on them at respond time
+            // ("Reference to undefined symbol: #"). Only the root object
+            // may be a named schema. Free-form GeneratedContent is the
+            // SDK's documented representation, and registryArguments
+            // forwards the raw structure verbatim to the registry's
+            // argument parser, which validates the payload.
+            if !isRoot {
+                return DynamicGenerationSchema(type: GeneratedContent.self)
+            }
             guard case .object(let definitions)? = fields["properties"], !definitions.isEmpty else {
                 // A property-less object (emptyObjectSchema read tools, the
                 // free-form 'recurrence' payload, 'recurrences' items) must not
@@ -125,14 +136,14 @@ public struct NilesAgentTool: FoundationModels.Tool {
                     DynamicGenerationSchema.Property(
                         name: name,
                         description: Self.description(of: definition),
-                        schema: Self.dynamicSchema(definition),
+                        schema: Self.dynamicSchema(definition, isRoot: false),
                         isOptional: !required.contains(name)
                     )
                 }
             return DynamicGenerationSchema(name: "object", properties: properties)
         case "array":
             if case .object(let itemSchema)? = fields["items"] {
-                return DynamicGenerationSchema(arrayOf: Self.dynamicSchema(.object(itemSchema)))
+                return DynamicGenerationSchema(arrayOf: Self.dynamicSchema(.object(itemSchema), isRoot: false))
             }
             return DynamicGenerationSchema(arrayOf: DynamicGenerationSchema(type: String.self))
         case "string":
@@ -239,13 +250,6 @@ public struct NilesAgent {
         } catch {
             Self.logger.error("Agent session failed mid-run: \(String(describing: error), privacy: .public)")
             await Self.logSessionDiagnostics(for: error)
-            // Session creation just succeeded, so this is a run-level
-            // failure — where guided-generation constraints are built
-            // lazily. Diagnose per tool before mapping and rethrowing.
-            Self.logger.error(
-                "Agent mid-run failure signature: constraint-creation pattern \(Self.isConstraintCreationFailure(error) ? "MATCHED" : "not matched", privacy: .public) (ToolAwareGuidedGenerationConstraints / inferenceFailed / undefined symbol)"
-            )
-            await bisectRespondLevel(using: model)
             throw AgentRunError.mapped(from: error)
         }
         return Outcome(
@@ -280,71 +284,6 @@ public struct NilesAgent {
                 "Agent asset probe: minimal session failed: \(String(describing: error), privacy: .public) — the device asset itself is unavailable"
             )
         }
-    }
-
-    /// True when the error chain carries the guided-generation
-    /// constraint-creation signature — the SDK builds
-    /// `ToolAwareGuidedGenerationConstraints` lazily inside `respond`, and
-    /// its failures surface as inferenceFailed / "Reference to undefined
-    /// symbol" beneath a mislabeled asset-unavailable wrapper (the
-    /// localized description cannot be trusted as a filter, so this is a
-    /// log hint, never a gate).
-    static func isConstraintCreationFailure(_ error: Error) -> Bool {
-        let description = String(describing: error).lowercased()
-        let markers = [
-            "toolawareguidedgenerationconstraints",
-            "inferencefailed",
-            "undefined symbol",
-        ]
-        return markers.contains { description.contains($0) }
-    }
-
-    /// Run-level per-tool bisect: the session-creation bisect above never
-    /// fires when creation succeeds but the lazy constraint build inside
-    /// `respond` fails. For each registry tool, build a fresh session with
-    /// ONLY that tool attached (same instructions) and run a trivial prompt;
-    /// then one full-toolset respond probe as the baseline. Runs only after
-    /// a mid-run failure, so the happy path is untouched. The trivial prompt
-    /// gives the model nothing to act on, and a stray write would still
-    /// stage into the reviewable Queue, never execute.
-    private func bisectRespondLevel(using model: any LanguageModel) async {
-        let tools = NilesToolset.tools(dispatcher: dispatcher)
-        let prompt = "Reply with OK."
-        for tool in tools {
-            do {
-                let session = try LanguageModelSession(
-                    model: model,
-                    tools: [tool],
-                    instructions: instructions
-                )
-                let reply: LanguageModelSession.Response<String> = try await session.respond(to: prompt)
-                Self.logger.error(
-                    "Agent tool bisect: \(tool.name, privacy: .public) — session+respond ok (\(reply.content, privacy: .public))"
-                )
-            } catch {
-                Self.logger.error(
-                    "Agent tool bisect: \(tool.name, privacy: .public) — FAILED: \(String(describing: error), privacy: .public)"
-                )
-            }
-        }
-        do {
-            let session = try LanguageModelSession(
-                model: model,
-                tools: tools,
-                instructions: instructions
-            )
-            let reply: LanguageModelSession.Response<String> = try await session.respond(to: prompt)
-            Self.logger.error(
-                "Agent tool bisect: full toolset — session+respond ok (\(reply.content, privacy: .public))"
-            )
-        } catch {
-            Self.logger.error(
-                "Agent tool bisect: full toolset — FAILED: \(String(describing: error), privacy: .public)"
-            )
-        }
-        Self.logger.error(
-            "Agent tool bisect: complete — every tool named above fails alone; none logged means every tool responds alone and the failure needs the full toolset (or the instructions)"
-        )
     }
 
     /// Per-tool schema bisect: rebuild a session with one tool at a time and
