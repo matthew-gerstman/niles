@@ -8,6 +8,7 @@ import NilesCore
 /// store; previews substitute the in-memory one behind the same protocols.
 struct ContentView: View {
     @State private var store: LiveNilesStore
+    @State private var navigation = AppNavigation.shared
     /// Screenshot/preview hook: `-UIActivityFixtures` renders the Activity tab
     /// on the fixture store instead of the live one, so a fresh simulator has
     /// a populated timeline to capture.
@@ -29,6 +30,11 @@ struct ContentView: View {
     let args = ProcessInfo.processInfo.arguments
     if let i = args.firstIndex(of: "-UITabSelect"), i + 1 < args.count {
         return NilesTab(rawValue: args[i + 1]) ?? .queue
+    }
+    // Deep link from OpenQueueIntent: a cold launch lands on the Queue, where
+    // staged proposals wait for approval.
+    if AppNavigation.shared.queueSelectionPending {
+        AppNavigation.shared.consumeQueueSelection()
     }
     return .queue
 }()
@@ -64,6 +70,12 @@ struct ContentView: View {
         .task {
             store.start()
             await store.seedQueueFixtureIfRequested()
+        }
+        // Deep link from OpenQueueIntent while the app is already running.
+        .onChange(of: navigation.queueSelectionPending) { _, pending in
+            guard pending else { return }
+            selectedTab = .queue
+            navigation.consumeQueueSelection()
         }
     }
 }

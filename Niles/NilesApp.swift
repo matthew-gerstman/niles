@@ -13,8 +13,10 @@ struct NilesApp: App {
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
             ProposalNotifier.shared.requestPermissionIfNeeded()
         }
-        let coordinator = ServerCoordinator(homeKitService: Self.homeKitService)
-        _store = State(initialValue: LiveNilesStore(coordinator: coordinator, notifier: .shared))
+        // The shared environment: a background Siri intent launches this
+        // process without foregrounding the UI, so both entry points must
+        // observe the same store.
+        _store = State(initialValue: AppEnvironment.shared)
     }
 
     var body: some Scene {
@@ -27,18 +29,5 @@ struct NilesApp: App {
                     Task { await store.handleScene(isActive: phase == .active) }
                 }
         }
-    }
-
-    /// The service the pipeline stages and executes against. The simulator has
-    /// no HomeKit database, so it runs the fake executor over the demo fixture;
-    /// a real device reads the shared home database. (Device-side execution of
-    /// staged operations is not implemented yet — approvals record an explicit
-    /// failure there until the adapter's write half lands.)
-    private static var homeKitService: any HomeKitWriting {
-        #if targetEnvironment(simulator)
-        FakeHomeKitService(graph: .demoFixture)
-        #else
-        DeviceHomeKitService()
-        #endif
     }
 }
