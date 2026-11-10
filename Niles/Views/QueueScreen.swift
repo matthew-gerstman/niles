@@ -11,6 +11,10 @@ import NilesCore
 /// signaled by the red warning symbol plus its label, never by color alone.
 struct QueueScreen: View {
     var model: any QueueViewModel
+    /// Injection seam for the chat's proposal deep link (same hermeticity
+    /// pattern as `OpenQueueIntent.navigationTarget`): nil in previews — the
+    /// consumption no-ops.
+    var navigation: AppNavigation? = nil
 
     @State private var openDetail: NilesProposal?
     @State private var confirmApproveAll = false
@@ -55,6 +59,10 @@ struct QueueScreen: View {
             } message: {
                 Text("Every staged proposal is approved and executed — destructive ones included.")
             }
+            .onAppear { openPendingProposalIfRequested() }
+            // The chat's chip tap can land here before the store's poll has
+            // surfaced the proposal; retry on the next refresh.
+            .onChange(of: model.proposals) { _, _ in openPendingProposalIfRequested() }
         }
         .sheet(item: $openDetail) { snapshot in
             // Re-read from the model so the sheet reflects decisions made on the row.
@@ -71,6 +79,16 @@ struct QueueScreen: View {
     }
 
     // MARK: - Rows
+
+    /// The chat's proposal deep link: open the tapped proposal's detail once
+    /// it is visible, then clear the pending context. A nil or unknown id is
+    /// a no-op — the flag stays until the proposal shows up.
+    private func openPendingProposalIfRequested() {
+        guard let navigation, let id = navigation.pendingProposalId else { return }
+        guard let proposal = model.proposals.first(where: { $0.id == id }) else { return }
+        openDetail = proposal
+        navigation.consumePendingProposal()
+    }
 
     /// One standard list row: severity glyph, title, one-line diff, evidence
     /// tally, and a trailing status — a spinner while a decision or undo is

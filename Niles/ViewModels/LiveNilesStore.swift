@@ -36,7 +36,7 @@ struct DeviceHomeKitService: HomeKitWriting {
 /// polls on a short interval; every read is in-memory and cheap.
 @MainActor
 @Observable
-final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewModel, HomeGraphViewModel, PairingViewModel, AgentStatusViewModel {
+final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewModel, HomeGraphViewModel, PairingViewModel, AgentStatusViewModel, ChatViewModel {
 
     // MARK: - DashboardViewModel
 
@@ -103,6 +103,16 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
     /// reason instead.
     private(set) var agentRunner: (any AgentRunning)?
 
+    // MARK: - ChatViewModel
+
+    /// The in-app chat transcript, oldest first (spec art_AL0RolQe).
+    /// Session-scoped by design: no durable chat log in v1 — durable
+    /// outcomes already live in Queue + Activity.
+    private(set) var entries: [ChatEntry] = []
+    /// Set from the send until the run resolves — the in-flight half of
+    /// `canSend`, so the composer disables and a concurrent send is ignored.
+    private(set) var isChatRunInFlight = false
+
     private let coordinator: ServerCoordinator
     private let notifier: ProposalNotifier
     private let tokenStore: any TokenStoring
@@ -135,7 +145,9 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
         notifier: ProposalNotifier,
         tokenStore: any TokenStoring = KeychainTokenStore(),
         pollInterval: Duration = .seconds(1),
-        activityLog: ActivityLog? = nil
+        activityLog: ActivityLog? = nil,
+        agentRunner: (any AgentRunning)? = nil,
+        agentAvailability: AgentAvailability? = nil
     ) {
         self.coordinator = coordinator
         self.notifier = notifier
@@ -145,11 +157,22 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
         let host = LANAddress.primaryIPv4 ?? "127.0.0.1"
         endpoint = "http://\(host):\(LANServer.defaultPort)/mcp"
 
-        agentAvailability = Self.evaluateAgentAvailability()
-        if case .available = agentAvailability,
-           #available(iOS 27.0, *),
-           let proposalStore = coordinator.proposalStore {
-            agentRunner = AgentService(store: proposalStore)
+        // Test seams: an injected runner is available by definition (chat
+        // tests drive the live store without Apple Intelligence hardware);
+        // production callers take the defaults and the gate decides.
+        if let injected = agentAvailability {
+            self.agentAvailability = injected
+        } else if agentRunner != nil {
+            self.agentAvailability = .available
+        } else {
+            self.agentAvailability = Self.evaluateAgentAvailability()
+        }
+        if let runner = agentRunner {
+            self.agentRunner = runner
+        } else if case .available = self.agentAvailability,
+                  #available(iOS 27.0, *),
+                  let proposalStore = coordinator.proposalStore {
+            self.agentRunner = AgentService(store: proposalStore)
         }
     }
 
@@ -556,6 +579,34 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
             // Staging rejections (validation, HomeKit state) surface here;
             // nothing was applied either way — the queue stays authoritative.
             logger.error("Staging \(request.tool, privacy: .public) for “\(row.name, privacy: .public)” failed: \(String(describing: error))")
+        }
+    }
+
+    // MARK: - ChatViewModel
+
+    /// True when the runner is available and no run is in flight — the
+    /// composer's enabled state.
+    var canSend: Bool {
+        agentRunner != nil && !isChatRunInFlight
+    }
+
+    /// One message, one `run(_:)` — identical to Siri. The user row lands
+    /// optimistically; the agent row runs until the summary resolves (and
+    /// staged ids ride the result verbatim) or the session throws, which
+    /// renders a failed turn and re-enables the composer. Concurrent sends
+    /// are ignored: `canSend` is false from before the first await.
+    func send(_ text: String) async {
+        guard canSend, let runner = agentRunner else { return }
+        entries.append(ChatEntry(id: UUID(), role: .user, text: text))
+        let pending = ChatEntry(id: UUID(), role: .agent, text: "", state: .running)
+        entries.append(pending)
+        isChatRunInFlight = true
+        defer { isChatRunInFlight = false }
+        do {
+            let result = try await runner.run(text)
+            ChatTranscript.resolve(pending.id, in: &entries, result: result)
+        } catch {
+            ChatTranscript.fail(pending.id, in: &entries, with: error)
         }
     }
 

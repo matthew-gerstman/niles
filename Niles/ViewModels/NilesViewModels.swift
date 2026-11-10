@@ -111,7 +111,7 @@ protocol AgentStatusViewModel: Observable {
 /// only: approving transitions the local state machine, nothing more.
 @MainActor
 @Observable
-final class InMemoryNilesStore: DashboardViewModel, QueueViewModel, HomeGraphViewModel, PairingViewModel, AgentStatusViewModel {
+final class InMemoryNilesStore: DashboardViewModel, QueueViewModel, HomeGraphViewModel, PairingViewModel, AgentStatusViewModel, ChatViewModel {
     private(set) var serverIsRunning = true
     let homeName = "Gerstman Home"
     let endpoint = "http://192.168.1.24:8901/mcp"
@@ -135,12 +135,51 @@ final class InMemoryNilesStore: DashboardViewModel, QueueViewModel, HomeGraphVie
     /// gate for real (spec art_VrC0iUUA §Availability gate).
     var agentAvailability: AgentAvailability = .available
     var agentUsage = AgentSessionUsage()
+    // MARK: ChatViewModel — transcript storage; the send path lives in
+    // ChatViewModel.swift as the presentational fixture.
+    private(set) var entries: [ChatEntry] = []
+    private(set) var isChatRunInFlight = false
     private(set) var pairingCode: String?
     private(set) var codeExpiresAt: Date?
     private(set) var pairedAgents: [PairedAgentRow] = []
 
     var pendingProposals: [NilesProposal] {
         proposals.filter(\.isPending)
+    }
+
+    /// Presentational: the fixture always has somewhere to send from.
+    var canSend: Bool {
+        !isChatRunInFlight
+    }
+
+    /// Presentational chat for previews: a send replays a canned staged
+    /// turn — optimistic user row, resolved agent row, and a proposal chip
+    /// linking into the seeded Queue — so every transcript state renders
+    /// without the agent core.
+    func send(_ text: String) async {
+        guard !isChatRunInFlight else { return }
+        entries.append(ChatEntry(id: UUID(), role: .user, text: text))
+        let pending = ChatEntry(id: UUID(), role: .agent, text: "", state: .running)
+        entries.append(pending)
+        isChatRunInFlight = true
+        defer { isChatRunInFlight = false }
+
+        let proposal = NilesProposal(
+            id: "prop_chat_\(proposals.count + 1)",
+            tool: "create_timer_trigger",
+            title: "Living Room evening dim",
+            agentName: "Niles",
+            createdAt: Date(),
+            isDestructive: false,
+            evidence: [],
+            diff: [ProposalDiffLine(.add, "+ Timer “Living Room evening dim” · 20:00")],
+            context: []
+        )
+        proposals.append(proposal)
+        ChatTranscript.resolve(pending.id, in: &entries, result: AgentRunResult(
+            summary: "I found the Living Room and staged a trigger that sets its lights to 40% at 8:00 PM. Review it in the Queue.",
+            stagedProposalIds: [proposal.id]
+        ))
     }
 
     init(now: Date = Date()) {
