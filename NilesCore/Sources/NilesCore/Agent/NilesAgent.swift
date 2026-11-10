@@ -101,15 +101,23 @@ public struct NilesAgentTool: FoundationModels.Tool {
         if case .string(let type)? = fields["type"] { typeString = type } else { typeString = nil }
         switch typeString {
         case "object":
+            guard case .object(let definitions)? = fields["properties"], !definitions.isEmpty else {
+                // A property-less object (emptyObjectSchema read tools, the
+                // free-form 'recurrence' payload, 'recurrences' items) must not
+                // project to DynamicGenerationSchema(name:, properties: []) —
+                // an empty grammar rule the on-device constraint compiler
+                // rejects ("Reference to undefined symbol: #"). GeneratedContent
+                // is the SDK's documented free-form Generable: the model may
+                // emit any object, and registryArguments already forwards the
+                // raw structure verbatim to the registry's argument parser.
+                return DynamicGenerationSchema(type: GeneratedContent.self)
+            }
             var required: Set<String> = []
             if case .array(let values)? = fields["required"] {
                 required = Set(values.compactMap { value in
                     if case .string(let name) = value { return name }
                     return nil
                 })
-            }
-            guard case .object(let definitions)? = fields["properties"] else {
-                return DynamicGenerationSchema(name: "object", properties: [])
             }
             let properties = definitions
                 .sorted { $0.key < $1.key }
@@ -219,12 +227,18 @@ public struct NilesAgent {
                 tools: NilesToolset.tools(dispatcher: dispatcher),
                 instructions: instructions
             )
+        } catch {
+            // The full underlying error, public (see the logger's comment).
+            Self.logger.error("Agent session creation failed with the full toolset: \(String(describing: error), privacy: .public)")
+            await Self.logSessionDiagnostics(for: error)
+            await bisectToolSchemas(using: model)
+            throw AgentRunError.mapped(from: error)
+        }
+        do {
             response = try await session.respond(to: request)
         } catch {
-            // One line at the one session-failure catch site — the full
-            // underlying error, public (see the logger's comment).
-            Self.logger.error("Agent session failed: \(String(describing: error), privacy: .public)")
-            await Self.logAssetDiagnostics(for: error)
+            Self.logger.error("Agent session failed mid-run: \(String(describing: error), privacy: .public)")
+            await Self.logSessionDiagnostics(for: error)
             throw AgentRunError.mapped(from: error)
         }
         return Outcome(
@@ -233,19 +247,21 @@ public struct NilesAgent {
         )
     }
 
-    /// Runtime model diagnostics for the asset-unavailable bisect. Logs the
-    /// live system-model availability and en_US support (what the gate reads
-    /// between runs), and — when the failure mapped to `.assetUnavailable` —
-    /// runs a one-shot minimal probe session: no tools, no instructions, one
-    /// short prompt. A passing probe points at the Niles session surface
-    /// (tools/schema/instructions); a failing one at the device asset itself.
-    private static func logAssetDiagnostics(for error: Error) async {
+    /// Runtime model diagnostics after any session failure. Logs the live
+    /// system-model availability and en_US support (what the gate reads
+    /// between runs), then always runs a one-shot minimal probe session: no
+    /// tools, no instructions, one short prompt. The probe is NOT gated on
+    /// the error mapping to `.assetUnavailable` — the SDK's localized
+    /// description mislabels constraint-creation failures as asset-unavailable,
+    /// so that mapping cannot be trusted as a filter. A passing probe points
+    /// at the Niles session surface (tools/schema/instructions); a failing
+    /// one at the device asset itself.
+    private static func logSessionDiagnostics(for error: Error) async {
         let system = SystemLanguageModel.default
         let supportsEnUS = system.supportsLocale(Locale(identifier: "en_US"))
         Self.logger.error(
-            "Agent asset diagnostics: availability=\(String(describing: system.availability), privacy: .public) supportsEnUS=\(supportsEnUS, privacy: .public)"
+            "Agent session diagnostics: availability=\(String(describing: system.availability), privacy: .public) supportsEnUS=\(supportsEnUS, privacy: .public)"
         )
-        guard case AgentRunError.assetUnavailable = AgentRunError.mapped(from: error) else { return }
         do {
             let probe = try LanguageModelSession()
             let reply = try await probe.respond(to: "Reply with OK.")
@@ -257,6 +273,27 @@ public struct NilesAgent {
                 "Agent asset probe: minimal session failed: \(String(describing: error), privacy: .public) — the device asset itself is unavailable"
             )
         }
+    }
+
+    /// Per-tool schema bisect: rebuild a session with one tool at a time and
+    /// log which tool's schema fails to compile into a grammar. Runs only
+    /// after a full-toolset session-creation failure, so the next on-device
+    /// QA round names the offending tool even when the free-form projection
+    /// fix is not the whole story. Sessions are created with bare
+    /// instructions — schema compilation is independent of them.
+    private func bisectToolSchemas(using model: any LanguageModel) async {
+        for tool in NilesToolset.tools(dispatcher: dispatcher) {
+            do {
+                _ = try LanguageModelSession(model: model, tools: [tool], instructions: "")
+            } catch {
+                Self.logger.error(
+                    "Agent schema bisect: tool '\(tool.name, privacy: .public)' failed to build a session: \(String(describing: error), privacy: .public)"
+                )
+            }
+        }
+        Self.logger.error(
+            "Agent schema bisect: complete — every tool named above fails alone; none logged means every tool builds alone and the failure needs the full toolset (or the instructions)"
+        )
     }
 }
 #endif
