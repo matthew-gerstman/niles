@@ -93,7 +93,7 @@ public struct NilesAgentTool: FoundationModels.Tool {
     /// The Foundation Models dynamic-schema surface: build a
     /// `DynamicGenerationSchema` tree from the registry's JSON schema, then
     /// root a GenerationSchema on it.
-    private static func dynamicSchema(_ schema: MCP.Value) -> DynamicGenerationSchema {
+    private static func dynamicSchema(_ schema: MCP.Value, isRoot: Bool = true) -> DynamicGenerationSchema {
         guard case .object(let fields) = schema else {
             return DynamicGenerationSchema(type: String.self)
         }
@@ -101,6 +101,17 @@ public struct NilesAgentTool: FoundationModels.Tool {
         if case .string(let type)? = fields["type"] { typeString = type } else { typeString = nil }
         switch typeString {
         case "object":
+            // Nested dynamic objects (any object that is a property or array
+            // item) must not build a named DynamicGenerationSchema — the
+            // on-device constraint compiler fails on them at respond time
+            // ("Reference to undefined symbol: #"). Only the root object
+            // may be a named schema. Free-form GeneratedContent is the
+            // SDK's documented representation, and registryArguments
+            // forwards the raw structure verbatim to the registry's
+            // argument parser, which validates the payload.
+            if !isRoot {
+                return DynamicGenerationSchema(type: GeneratedContent.self)
+            }
             guard case .object(let definitions)? = fields["properties"], !definitions.isEmpty else {
                 // A property-less object (emptyObjectSchema read tools, the
                 // free-form 'recurrence' payload, 'recurrences' items) must not
@@ -125,14 +136,14 @@ public struct NilesAgentTool: FoundationModels.Tool {
                     DynamicGenerationSchema.Property(
                         name: name,
                         description: Self.description(of: definition),
-                        schema: Self.dynamicSchema(definition),
+                        schema: Self.dynamicSchema(definition, isRoot: false),
                         isOptional: !required.contains(name)
                     )
                 }
             return DynamicGenerationSchema(name: "object", properties: properties)
         case "array":
             if case .object(let itemSchema)? = fields["items"] {
-                return DynamicGenerationSchema(arrayOf: Self.dynamicSchema(.object(itemSchema)))
+                return DynamicGenerationSchema(arrayOf: Self.dynamicSchema(.object(itemSchema), isRoot: false))
             }
             return DynamicGenerationSchema(arrayOf: DynamicGenerationSchema(type: String.self))
         case "string":
