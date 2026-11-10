@@ -93,7 +93,9 @@ struct ActivityTimelineTests {
         #expect(rows.map { $0.event.kind } == [.executed, .decided, .staged])
     }
 
-    /// Events group into recency buckets, newest bucket first.
+    /// Events group into recency buckets, newest bucket first. Each fixture
+    /// date is anchored to a midnight boundary so the expected buckets hold
+    /// no matter what time of day the suite runs.
     @Test
     func timelineGroupsByRecency() {
         // Anchor fixture events to calendar days, not fixed offsets from
