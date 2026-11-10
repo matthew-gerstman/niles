@@ -483,7 +483,7 @@ public struct ReadToolRegistry: Sendable {
             return Self.errorResult("Invalid arguments: provide kind and id together, or neither.")
         case (let kindRaw?, let id?):
             guard let kind = DetailKind(rawValue: kindRaw) else {
-                let known = DetailKind.allCases.map(\\.rawValue).joined(separator: ", ")
+                let known = DetailKind.allCases.map(\.rawValue).joined(separator: ", ")
                 return Self.errorResult("Unknown kind \\(kindRaw) — use \\(known).")
             }
             return Self.objectDetails(graph, kind: kind, id: id)
