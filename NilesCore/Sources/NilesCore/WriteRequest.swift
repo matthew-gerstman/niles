@@ -19,7 +19,7 @@ public enum WriteRequest: Sendable, Equatable {
     case renameScene(sceneId: String, name: String)
     case deleteScene(sceneId: String, deleteLinkedTriggers: Bool)
     case executeScene(sceneId: String)
-    case createServiceGroup(homeId: String, name: String)
+    case createServiceGroup(homeId: String, name: String, serviceIds: [String])
     case renameServiceGroup(groupId: String, name: String)
     case setServiceGroupMembers(groupId: String, serviceIds: [String])
     case deleteServiceGroup(groupId: String)
@@ -79,7 +79,11 @@ public enum WriteRequest: Sendable, Equatable {
         case "execute_scene":
             return .executeScene(sceneId: try args.string("sceneId"))
         case "create_service_group":
-            return .createServiceGroup(homeId: try args.string("homeId"), name: try args.string("name"))
+            return .createServiceGroup(
+                homeId: try args.string("homeId"),
+                name: try args.string("name"),
+                serviceIds: try args.optionalStringArray("serviceIds") ?? []
+            )
         case "rename_service_group":
             return .renameServiceGroup(groupId: try args.string("groupId"), name: try args.string("name"))
         case "set_service_group_members":
@@ -172,6 +176,21 @@ private struct Args {
         guard let value = raw?[name] else {
             throw ProposalStoreError.invalidArguments("Missing required argument “\(name)”.")
         }
+        guard let array = value.arrayValue else {
+            throw ProposalStoreError.invalidArguments("Argument “\(name)” must be an array of strings.")
+        }
+        return try array.enumerated().map { index, element in
+            guard let string = element.stringValue else {
+                throw ProposalStoreError.invalidArguments(
+                    "Argument “\(name)”: element \(index) must be a string."
+                )
+            }
+            return string
+        }
+    }
+
+    func optionalStringArray(_ name: String) throws -> [String]? {
+        guard let value = raw?[name] else { return nil }
         guard let array = value.arrayValue else {
             throw ProposalStoreError.invalidArguments("Argument “\(name)” must be an array of strings.")
         }

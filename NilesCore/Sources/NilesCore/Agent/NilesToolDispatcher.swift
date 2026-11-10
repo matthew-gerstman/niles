@@ -48,10 +48,38 @@ public actor NilesToolDispatcher {
     private let writeNames: Set<String>
     private let proposalIdExtraction: @Sendable (CallTool.Result) -> String?
 
-    /// Every registry tool definition, in registry order — the toolset
-    /// generator's source of truth. A fixed snapshot, so the toolset can be
-    /// built without entering the actor.
+    /// Every registry tool definition, in registry order — the source of
+    /// truth for MCP clients. A fixed snapshot, so the toolset can be built
+    /// without entering the actor.
     public let toolDefinitions: [MCP.Tool]
+
+    /// The agent-facing tool surface (art_yvbPAfG9, v7): twelve tools in
+    /// catalog order. Six adapter tools translate agent vocabulary onto
+    /// registry primitives; six registry tools pass through unchanged. The
+    /// registries' full per-type surfaces stay MCP-only.
+    public let agentToolDefinitions: [MCP.Tool]
+
+    public static let agentToolOrder = [
+        "search", "get_details", "get_proposal",
+        "create", "update", "rename", "delete", "execute_scene",
+        "write_characteristic", "update_event_trigger", "set_trigger_state",
+        "assign_accessory_to_room",
+    ]
+
+    /// Assembles the agent surface from the six adapter definitions plus
+    /// the pass-through registry tools, in catalog order.
+    static func assembleAgentTools(reads: [MCP.Tool], writes: [MCP.Tool]) -> [MCP.Tool] {
+        let registry = Dictionary(uniqueKeysWithValues: (reads + writes).map { ($0.name, $0) })
+        return agentToolOrder.map { name in
+            if let adapter = NilesAgentSurface.adapterDefinitions.first(where: { $0.name == name }) {
+                return adapter
+            }
+            guard let passthrough = registry[name] else {
+                fatalError("Agent tool \(name) is neither an adapter tool nor a registry tool.")
+            }
+            return passthrough
+        }
+    }
 
     public init(
         reads: ReadToolRegistry,
@@ -67,6 +95,9 @@ public actor NilesToolDispatcher {
         self.responseCharacterLimit = responseCharacterLimit
         self.proposalIdExtraction = Self.proposalId(in:)
         self.toolDefinitions = reads.toolDefinitions + writes.toolDefinitions
+        self.agentToolDefinitions = Self.assembleAgentTools(
+            reads: reads.toolDefinitions, writes: writes.toolDefinitions
+        )
     }
 
     public static let defaultBudget = 12
@@ -88,21 +119,37 @@ public actor NilesToolDispatcher {
             )
         }
 
-        let result: CallTool.Result
-        // Read tools first; the two registries' name sets do not overlap.
-        // An unknown name routes to the write registry so the caller sees
-        // exactly the error a direct write-registry call would produce.
-        if readNames.contains(name) {
-            result = await reads.call(name: name, arguments: arguments)
-        } else {
-            result = await writes.call(name: name, arguments: arguments)
+        let routed: (result: CallTool.Result, stages: Bool)
+        switch name {
+        case "search":
+            routed = (await Self.searchResult(arguments, reads: reads), false)
+        case "get_details":
+            routed = (await Self.detailsResult(arguments, reads: reads), false)
+        case "create":
+            routed = await create(arguments)
+        case "update":
+            routed = await update(arguments)
+        case "rename":
+            routed = await rename(arguments)
+        case "delete":
+            routed = await delete(arguments)
+        default:
+            // Registry pass-through. Read tools first; the two registries'
+            // name sets do not overlap. An unknown name routes to the write
+            // registry so the caller sees exactly the error a direct
+            // write-registry call would produce.
+            if readNames.contains(name) {
+                routed = (await reads.call(name: name, arguments: arguments), false)
+            } else {
+                routed = (await writes.call(name: name, arguments: arguments), true)
+            }
         }
 
-        let text = Self.serializedText(of: result, limit: responseCharacterLimit)
-        let isError = result.isError == true
-        let stagedId: String?
-        if !isError, writeNames.contains(name), name != Self.proposalPollToolName {
-            stagedId = proposalIdExtraction(result)
+        let text = Self.serializedText(of: routed.result, limit: responseCharacterLimit)
+        let isError = routed.result.isError == true
+        var stagedId: String?
+        if routed.stages, !isError {
+            stagedId = proposalIdExtraction(routed.result)
             if let stagedId { stagedProposalIds.append(stagedId) }
         } else {
             stagedId = nil
@@ -114,6 +161,254 @@ public actor NilesToolDispatcher {
     /// `get_proposal` lives in the write registry but reads state — it stages
     /// nothing, so it must not count as a staged write.
     static let proposalPollToolName = "get_proposal"
+
+    // MARK: - Agent-surface routing (art_yvbPAfG9, v7)
+
+    private static let encoder: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        return encoder
+    }()
+
+    private static func jsonResult(_ object: some Encodable) -> CallTool.Result {
+        do {
+            let data = try encoder.encode(object)
+            return CallTool.Result(
+                content: [.text(text: String(decoding: data, as: UTF8.self), annotations: nil, _meta: nil)],
+                isError: false
+            )
+        } catch {
+            // A read result that cannot be serialized is surfaced, never
+            // silently replaced with empty output.
+            return agentError("Failed to serialize the read result: \(error)")
+        }
+    }
+
+    static func agentError(_ message: String) -> CallTool.Result {
+        CallTool.Result(
+            content: [.text(text: message, annotations: nil, _meta: nil)],
+            isError: true
+        )
+    }
+
+    private static func searchResult(_ arguments: [String: Value]?, reads: ReadToolRegistry) async -> CallTool.Result {
+        guard let query = arguments?["query"]?.stringValue, !query.isEmpty else {
+            return agentError("search needs a query — the name to look for.")
+        }
+        do {
+            let graph = try await reads.service.snapshot()
+            return jsonResult(NilesAgentSurface.search(query: query, graph: graph))
+        } catch {
+            return agentError("Failed to read the home graph: \(error)")
+        }
+    }
+
+    private static func detailsResult(_ arguments: [String: Value]?, reads: ReadToolRegistry) async -> CallTool.Result {
+        do {
+            let graph = try await reads.service.snapshot()
+            let details = try NilesAgentSurface.details(
+                kind: arguments?["kind"]?.stringValue,
+                id: arguments?["id"]?.stringValue,
+                graph: graph
+            )
+            switch details {
+            case .leanSummary(let summary): return jsonResult(summary)
+            case .fullObject(let object): return jsonResult(object)
+            }
+        } catch let error as NilesAgentSurface.AgentSurfaceError {
+            return agentError(error.message)
+        } catch {
+            return agentError("Failed to read the home graph: \(error)")
+        }
+    }
+
+    private func create(_ arguments: [String: Value]?) async -> (CallTool.Result, Bool) {
+        guard
+            let kindRaw = arguments?["kind"]?.stringValue,
+            let kind = NilesAgentSurface.CreateKind(rawValue: kindRaw.lowercased())
+        else {
+            return (Self.agentError("create needs a kind — room, zone, scene, group, timer, or event."), false)
+        }
+        switch kind {
+        case .room:
+            return (await writes.call(name: "create_room", arguments: arguments), true)
+        case .zone:
+            return (await writes.call(name: "create_zone", arguments: arguments), true)
+        case .scene:
+            guard arguments?["actions"]?.arrayValue != nil else {
+                return (Self.agentError(
+                    "Scene creation needs actions — an array of characteristic writes (accessoryId, characteristic, value)."
+                ), false)
+            }
+            return (await writes.call(name: "create_scene", arguments: arguments), true)
+        case .group:
+            return await createGroup(arguments)
+        case .timer:
+            guard arguments?["fireDate"]?.stringValue != nil else {
+                return (Self.agentError("Timer automation creation needs fireDate — an ISO-8601 date."), false)
+            }
+            return (await writes.call(name: "create_timer_trigger", arguments: arguments), true)
+        case .event:
+            guard arguments?["events"]?.arrayValue != nil else {
+                return (Self.agentError(
+                    "Event automation creation needs events — an array of characteristic or presence events."
+                ), false)
+            }
+            return (await writes.call(name: "create_event_trigger", arguments: arguments), true)
+        }
+    }
+
+    /// Group creation speaks accessories; the registry speaks services. The
+    /// adapter maps each accessory to its controllable (primary) service and
+    /// creates the group with its members in one proposal.
+    private func createGroup(_ arguments: [String: Value]?) async -> (CallTool.Result, Bool) {
+        guard
+            let accessoryIds = NilesAgentSurface.stringList(arguments?["accessoryIds"]),
+            !accessoryIds.isEmpty
+        else {
+            return (Self.agentError("Accessory group creation needs accessoryIds — the accessories to group."), false)
+        }
+        do {
+            let graph = try await reads.service.snapshot()
+            let mapping = NilesAgentSurface.controllableServices(for: accessoryIds, graph: graph)
+            guard mapping.missing.isEmpty else {
+                return (Self.agentError(
+                    "No accessory \(mapping.missing.joined(separator: ", ")) — search or get_details for the right id."
+                ), false)
+            }
+            let memberArgs: [String: Value] = [
+                "homeId": arguments?["homeId"] ?? .null,
+                "name": arguments?["name"] ?? .null,
+                "serviceIds": .array(mapping.resolved.map { .string($0) }),
+            ]
+            return (await writes.call(name: "create_service_group", arguments: memberArgs), true)
+        } catch {
+            return (Self.agentError("Failed to read the home graph: \(error)"), false)
+        }
+    }
+
+    private func update(_ arguments: [String: Value]?) async -> (CallTool.Result, Bool) {
+        guard let entityId = arguments?["entityId"]?.stringValue, !entityId.isEmpty else {
+            return (Self.agentError("update needs entityId."), false)
+        }
+        let entity: NilesAgentSurface.ResolvedEntity
+        let graph: HomeGraph
+        do {
+            graph = try await reads.service.snapshot()
+            guard let resolved = NilesAgentSurface.resolve(entityId: entityId, graph: graph) else {
+                return (Self.agentError("No object \(entityId) — use search to find ids."), false)
+            }
+            entity = resolved
+        } catch {
+            return (Self.agentError("Failed to read the home graph: \(error)"), false)
+        }
+        switch entity {
+        case .accessoryGroup(_, let groupId, _):
+            guard let members = NilesAgentSurface.stringList(arguments?["members"]) else {
+                return (Self.agentError("Group update needs members — the complete accessory list."), false)
+            }
+            let mapping = NilesAgentSurface.controllableServices(for: members, graph: graph)
+            guard mapping.missing.isEmpty else {
+                return (Self.agentError(
+                    "No accessory \(mapping.missing.joined(separator: ", ")) — search or get_details for the right id."
+                ), false)
+            }
+            let memberArgs: [String: Value] = [
+                "groupId": .string(groupId),
+                "serviceIds": .array(mapping.resolved.map { .string($0) }),
+            ]
+            return (await writes.call(name: "set_service_group_members", arguments: memberArgs), true)
+        case .zone(_, let zoneId, _):
+            guard let rooms = NilesAgentSurface.stringList(arguments?["rooms"]) else {
+                return (Self.agentError("Zone update needs rooms — the complete room list."), false)
+            }
+            return (await writes.call(
+                name: "set_zone_rooms",
+                arguments: ["zoneId": .string(zoneId), "roomIds": .array(rooms.map { .string($0) })]
+            ), true)
+        case .scene(_, let sceneId, _):
+            guard let actions = arguments?["actions"]?.arrayValue else {
+                return (Self.agentError("Scene update needs actions — the complete list of characteristic writes."), false)
+            }
+            return (await writes.call(
+                name: "set_scene_actions",
+                arguments: ["sceneId": .string(sceneId), "actions": .array(actions)]
+            ), true)
+        case .trigger:
+            return (Self.agentError(
+                "Trigger edits use update_event_trigger; arming or scheduling changes use set_trigger_state."
+            ), false)
+        case .room, .accessory:
+            return (Self.agentError(
+                "update applies to groups, zones, and scenes — nothing to replace on this object."
+            ), false)
+        }
+    }
+
+    private func rename(_ arguments: [String: Value]?) async -> (CallTool.Result, Bool) {
+        guard
+            let entityId = arguments?["entityId"]?.stringValue, !entityId.isEmpty,
+            let newName = arguments?["newName"]?.stringValue, !newName.isEmpty
+        else {
+            return (Self.agentError("rename needs entityId and newName."), false)
+        }
+        let entity: NilesAgentSurface.ResolvedEntity
+        do {
+            guard let resolved = try await resolve(entityId: entityId) else {
+                return (Self.agentError("No object \(entityId) — use search to find ids."), false)
+            }
+            entity = resolved
+        } catch {
+            return (Self.agentError("Failed to read the home graph: \(error)"), false)
+        }
+        let (tool, idKey): (String, String)
+        switch entity {
+        case .room: (tool, idKey) = ("rename_room", "roomId")
+        case .zone: (tool, idKey) = ("rename_zone", "zoneId")
+        case .scene: (tool, idKey) = ("rename_scene", "sceneId")
+        case .accessoryGroup: (tool, idKey) = ("rename_service_group", "groupId")
+        case .accessory: (tool, idKey) = ("rename_accessory", "accessoryId")
+        case .trigger:
+            return (Self.agentError(
+                "A trigger's name cannot be changed — HomeKit triggers have no mutable name."
+            ), false)
+        }
+        return (await writes.call(
+            name: tool,
+            arguments: [idKey: .string(entity.id), "name": .string(newName)]
+        ), true)
+    }
+
+    private func delete(_ arguments: [String: Value]?) async -> (CallTool.Result, Bool) {
+        guard let entityId = arguments?["entityId"]?.stringValue, !entityId.isEmpty else {
+            return (Self.agentError("delete needs entityId."), false)
+        }
+        let entity: NilesAgentSurface.ResolvedEntity
+        do {
+            guard let resolved = try await resolve(entityId: entityId) else {
+                return (Self.agentError("No object \(entityId) — use search to find ids."), false)
+            }
+            entity = resolved
+        } catch {
+            return (Self.agentError("Failed to read the home graph: \(error)"), false)
+        }
+        let (tool, idKey): (String, String)
+        switch entity {
+        case .room: (tool, idKey) = ("delete_room", "roomId")
+        case .zone: (tool, idKey) = ("delete_zone", "zoneId")
+        case .scene: (tool, idKey) = ("delete_scene", "sceneId")
+        case .accessoryGroup: (tool, idKey) = ("delete_service_group", "groupId")
+        case .trigger: (tool, idKey) = ("delete_trigger", "triggerId")
+        case .accessory: (tool, idKey) = ("remove_accessory", "accessoryId")
+        }
+        return (await writes.call(name: tool, arguments: [idKey: .string(entity.id)]), true)
+    }
+
+    private func resolve(entityId: String) async throws -> NilesAgentSurface.ResolvedEntity? {
+        let graph = try await reads.service.snapshot()
+        return NilesAgentSurface.resolve(entityId: entityId, graph: graph)
+    }
 
     public static func budgetExhaustedMessage(tool: String, budget: Int) -> String {
         "Budget exhausted: the per-request tool budget of \(budget) calls is spent, so \"\(tool)\" was not run. Stop calling tools and report to the user exactly what you completed, what you did not, and why."

@@ -84,8 +84,8 @@ public enum ProposalPlanner {
             return try deleteScene(sceneId: sceneId, deleteLinkedTriggers: deleteLinkedTriggers, graph: graph)
         case .executeScene(let sceneId):
             return try executeScene(sceneId: sceneId, graph: graph)
-        case .createServiceGroup(let homeId, let name):
-            return try createServiceGroup(homeId: homeId, name: name, graph: graph)
+        case .createServiceGroup(let homeId, let name, let serviceIds):
+            return try createServiceGroup(homeId: homeId, name: name, serviceIds: serviceIds, graph: graph)
         case .renameServiceGroup(let groupId, let name):
             return try renameServiceGroup(groupId: groupId, name: name, graph: graph)
         case .setServiceGroupMembers(let groupId, let serviceIds):
@@ -602,23 +602,43 @@ public enum ProposalPlanner {
 
     // MARK: - Service groups
 
-    private static func createServiceGroup(homeId: String, name: String, graph: HomeGraph) throws -> Plan {
+    private static func createServiceGroup(
+        homeId: String, name: String, serviceIds: [String], graph: HomeGraph
+    ) throws -> Plan {
         let trimmed = try requiredHomeKitName(name, kind: "service group")
         let home = try self.home(id: homeId, in: graph)
         try rejectDuplicate(kind: "service group", name: trimmed, in: home.serviceGroups.map(\.name), homeName: home.name)
+        // Members are validated at plan time so a stale id fails here, in
+        // band, instead of mid-execution.
+        let knownServiceIds = Set(
+            home.rooms.flatMap(\.accessories).flatMap(\.services).map(\.id)
+        )
+        let unknown = Set(serviceIds).subtracting(knownServiceIds).sorted()
+        guard unknown.isEmpty else {
+            throw PlannerError.invalidInput(
+                "No service \(unknown.joined(separator: ", ")) in “\(home.name)”."
+            )
+        }
+        let memberAccessories = home.rooms.flatMap(\.accessories)
+            .filter { accessory in accessory.services.contains { serviceIds.contains($0.id) } }
+        let memberNames = memberAccessories.map(\.name)
         return Plan(
             tool: "create_service_group",
             title: "Create service group “\(trimmed)”",
-            summary: "Create service group “\(trimmed)” in “\(home.name)”",
+            summary: memberNames.isEmpty
+                ? "Create service group “\(trimmed)” in “\(home.name)”"
+                : "Create service group “\(trimmed)” in “\(home.name)” with \(memberNames.count) \(memberNames.count == 1 ? "member" : "members")",
             isDestructive: false,
-            operations: [.addServiceGroup(homeId: home.id, name: trimmed)],
+            operations: [.addServiceGroup(homeId: home.id, name: trimmed, serviceIds: serviceIds)],
             entries: [ProposalDiffEntry(
                 object: ProposalObjectRef(kind: .serviceGroup, id: "", name: trimmed),
                 op: .create,
                 before: nil,
                 after: trimmed
             )],
-            card: [ProposalCardLine(.add, "Service group “\(trimmed)” · created")]
+            card: memberNames.isEmpty
+                ? [ProposalCardLine(.add, "Service group “\(trimmed)” · created")]
+                : [ProposalCardLine(.add, "Service group “\(trimmed)” · created with \(memberNames.joined(separator: ", "))")]
         )
     }
 

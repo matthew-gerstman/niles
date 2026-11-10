@@ -7,8 +7,8 @@ import Testing
 /// verbatim, plus per-tool one-liners that carry the semantics the staging
 /// contract doesn't — DESTRUCTIVE / DEVICE-IMMEDIATE markers, declarative-
 /// replace wording, created-DISABLED behavior — with schema-derived arg
-/// summaries and source hints. The tests keep the compact lines and the
-/// registries from drifting.
+/// summaries. The tests keep the compact lines and the agent surface from
+/// drifting.
 @Suite struct NilesAgentInstructionsTests {
     @Test func templateCarriesTheFullSpecContract() {
         let text = NilesAgentInstructions.text()
@@ -17,6 +17,8 @@ import Testing
         #expect(text.contains("stage a proposal"))
         // Name discipline, declarative-replace, destructive ambiguity.
         #expect(text.contains("Resolve ids from reads, never from guesses"))
+        #expect(text.contains("search first"))
+        #expect(text.contains("ask which one they mean"))
         #expect(text.contains("replace the complete list"))
         #expect(text.contains("stage nothing and explain what you would remove"))
         // Device-immediate and budget and honesty rules.
@@ -64,77 +66,103 @@ import Testing
         #expect(a.after == b.after)
     }
 
-    // MARK: - Catalog compaction
+    // MARK: - Catalog compaction (agent surface)
 
-    private func allRegistryTools() -> [Tool] {
+    private func agentTools() -> [MCP.Tool] {
         let fixture = AgentFixtures.registries()
-        return fixture.reads.toolDefinitions + fixture.writes.toolDefinitions
+        return NilesToolDispatcher.assembleAgentTools(reads: fixture.reads, writes: fixture.writes)
     }
 
-    private func writeTool(_ name: String) -> Tool? {
-        allRegistryTools().first { $0.name == name }
+    private func agentTool(_ name: String) -> MCP.Tool? {
+        agentTools().first { $0.name == name }
     }
 
-    @Test func everyRegistryToolHasAFinalizedCompactLine() {
-        let all = allRegistryTools()
-        #expect(all.count == 34)
-        for tool in all {
+    /// Tools that must stay off the agent surface (registry-only, MCP-facing).
+    private static let offSurfaceTools = [
+        "get_homes", "get_rooms", "get_zones", "get_scenes", "get_service_groups", "get_triggers",
+        "create_room", "create_zone", "create_scene", "create_service_group",
+        "create_timer_trigger", "create_event_trigger",
+        "rename_room", "rename_zone", "rename_scene", "rename_service_group", "rename_accessory",
+        "delete_room", "delete_zone", "delete_scene", "delete_service_group", "delete_trigger",
+        "remove_accessory", "identify_accessory", "unblock_accessory",
+        "set_zone_rooms", "set_service_group_members", "set_scene_actions",
+        "niles_tool",
+    ]
+
+    @Test func agentSurfaceIsExactlyTheTwelveCompactedTools() {
+        let tools = agentTools()
+        #expect(tools.map(\.name) == NilesToolDispatcher.agentToolOrder)
+        #expect(tools.count == 12)
+        let surface = Set(tools.map(\.name))
+        for excluded in Self.offSurfaceTools {
+            #expect(!surface.contains(excluded), "\(excluded) must stay off the agent surface")
+        }
+    }
+
+    @Test func everyAgentSurfaceToolHasAFinalizedCompactLine() {
+        let tools = agentTools()
+        for tool in tools {
             let description = NilesToolCatalog.toolDescription(for: tool)
             #expect(!description.isEmpty)
             // No staging boilerplate per tool — the instructions carry it once.
             #expect(!description.contains("STAGES A PROPOSAL"))
             #expect(!description.contains("Poll get_proposal afterwards"))
         }
-        for name in NilesToolCatalog.compactText.keys {
-            #expect(all.contains { $0.name == name }, "compact line without a registry tool: \(name)")
-        }
+        // The compact table covers exactly the surface — no orphan lines, no gaps.
+        #expect(Set(NilesToolCatalog.compactText.keys) == Set(tools.map(\.name)))
     }
 
-    @Test func compactLinesKeepTheSafetyMarkersTheRegistryHas() {
-        // Marker parity in both directions: nothing lost, nothing invented.
-        for tool in allRegistryTools() {
+    @Test func compactLinesKeepTheSafetyMarkersTheSurfaceHas() {
+        // Marker parity in both directions (registry text spells it lowercase;
+        // compare case-insensitively): nothing lost, nothing invented.
+        for tool in agentTools() {
             let description = NilesToolCatalog.toolDescription(for: tool)
-            for marker in ["DESTRUCTIVE", "DEVICE-IMMEDIATE"] {
-                #expect(tool.description.contains(marker) == description.contains(marker),
+            for marker in ["destructive", "device-immediate"] {
+                #expect(tool.description?.lowercased().contains(marker) == description.lowercased().contains(marker),
                         "marker drift on \(tool.name): \(marker)")
             }
         }
     }
 
     @Test func compactLinesKeepDeclarativeReplaceAndCreatedDisabledSemantics() throws {
-        let setZoneRooms = try #require(writeTool("set_zone_rooms"))
-        #expect(NilesToolCatalog.toolDescription(for: setZoneRooms).contains("complete room list"))
-        let createdDisabled = try #require(writeTool("create_timer_trigger"))
-        #expect(NilesToolCatalog.toolDescription(for: createdDisabled).contains("Created DISABLED"))
+        let create = try #require(agentTool("create"))
+        let createDescription = NilesToolCatalog.toolDescription(for: create)
+        #expect(createDescription.contains("Created DISABLED"))
+        #expect(createDescription.contains("arming is a separate set_trigger_state approval"))
+
+        let update = try #require(agentTool("update"))
+        #expect(NilesToolCatalog.toolDescription(for: update).contains("complete"))
+
+        let setTriggerState = try #require(agentTool("set_trigger_state"))
+        #expect(NilesToolCatalog.toolDescription(for: setTriggerState).contains("its own proposal"))
+
+        let delete = try #require(agentTool("delete"))
+        #expect(NilesToolCatalog.toolDescription(for: delete).contains("DESTRUCTIVE"))
     }
 
-    @Test func schemaSummaryUsesDraftFormatWithSourceHintsAndOptionals() throws {
-        let createRoom = try #require(writeTool("create_room"))
-        let summary = NilesToolCatalog.schemaSummary(for: createRoom)
-        #expect(summary == "args: homeId (from get_homes), name")
+    @Test func schemaSummariesListRequiredThenOptionalArguments() throws {
+        let create = try #require(agentTool("create"))
+        let summary = NilesToolCatalog.schemaSummary(for: create)
+        #expect(summary == "args: homeId, kind, name, accessoryIds?, actions?, events?, executeOnce?, fireDate?, recurrence?, sceneId?")
 
-        // Optional arguments are suffixed "?".
-        let deleteScene = try #require(writeTool("delete_scene"))
-        let deleteSceneSummary = NilesToolCatalog.schemaSummary(for: deleteScene)
-        #expect(deleteSceneSummary.contains("deleteLinkedTriggers?"))
+        // Optional arguments are suffixed "?" and sorted; required ones come first.
+        let getDetails = try #require(agentTool("get_details"))
+        #expect(NilesToolCatalog.schemaSummary(for: getDetails) == "args: id?, kind?")
 
-        // Reads with no required arguments still list them.
-        let getRooms = try #require(allRegistryTools().first { $0.name == "get_rooms" })
-        let getRoomsSummary = NilesToolCatalog.schemaSummary(for: getRooms)
-        #expect(getRoomsSummary.hasPrefix("args: "))
-        #expect(getRoomsSummary.contains("detail?"))
+        let rename = try #require(agentTool("rename"))
+        #expect(NilesToolCatalog.schemaSummary(for: rename) == "args: entityId, newName")
     }
 
     @Test func toolDescriptionCarriesTheCompactLineAndArgs() throws {
-        let createRoom = try #require(writeTool("create_room"))
-        let description = NilesToolCatalog.toolDescription(for: createRoom)
-        #expect(description.hasPrefix("Create a room in a home."))
+        let rename = try #require(agentTool("rename"))
+        let description = NilesToolCatalog.toolDescription(for: rename)
+        #expect(description.hasPrefix("Rename a room, zone, scene, accessory group, or accessory."))
         #expect(description.contains("args:"))
         #expect(!description.contains("STAGES A PROPOSAL"))
     }
 
     @Test func unknownToolFallsBackToCompactedRegistryDescription() {
-        let verbose = Tool(
+        let verbose = MCP.Tool(
             name: "custom_tool",
             description: "Does a thing. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles, and you cannot execute, approve, or deny anything, ever. Poll get_proposal afterwards.",
             inputSchema: .object(["type": .string("object")])
@@ -146,12 +174,12 @@ import Testing
 
     @Test func catalogStaysWithinItsTokenBudget() {
         // Cheap char-based sanity (chars ÷ 3.5, the draft's own estimate):
-        // the whole catalog stays near the ≈1,300-token target. The real
-        // gate is AgentContextBudgetTests with tokenCount(for:).
-        let totalChars = allRegistryTools()
+        // the whole catalog stays well under the ≈1,600-token fixed surface.
+        // The real gate is AgentContextBudgetTests with tokenCount(for:).
+        let totalChars = agentTools()
             .map { NilesToolCatalog.toolDescription(for: $0).count }
             .reduce(0, +)
         let estimatedTokens = Double(totalChars) / 3.5
-        #expect(estimatedTokens < 1_500, "catalog estimated at \(estimatedTokens) tokens")
+        #expect(estimatedTokens < 1_100, "catalog estimated at \(estimatedTokens) tokens")
     }
 }

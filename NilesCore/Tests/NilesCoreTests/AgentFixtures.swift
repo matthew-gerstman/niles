@@ -66,22 +66,42 @@ enum AgentFixtures {
             ]
         )
         let office = HomeGraph.Room(id: "room-office", name: "Office", accessories: [fan])
+        let morningScene = HomeGraph.Scene(
+            id: "scene-morning", name: "Good Morning", type: "AppleScene",
+            actions: [HomeGraph.SceneAction(
+                accessoryId: "acc-kitchen-1", accessoryName: "Kitchen Lamp",
+                service: nil, characteristic: "Brightness", characteristicName: "Brightness",
+                valueDescription: "80"
+            )]
+        )
+        let deskLamps = HomeGraph.ServiceGroup(
+            id: "sg-lamps", name: "Desk Lamps",
+            services: [HomeGraph.ServiceRef(
+                id: "acc-kitchen-1-svc", name: "Lightbulb", serviceType: "000043",
+                accessoryId: "acc-kitchen-1", accessoryName: "Kitchen Lamp"
+            )]
+        )
         let home = HomeGraph.Home(
             id: "home-1", name: "Main House", rooms: [livingRoom, kitchen, office],
-            zones: [HomeGraph.Zone(id: "zone-upstairs", name: "Upstairs", roomIds: ["room-office"])]
+            zones: [HomeGraph.Zone(id: "zone-upstairs", name: "Upstairs", roomIds: ["room-office"])],
+            scenes: [morningScene], serviceGroups: [deskLamps]
         )
         return HomeGraph(homes: [home])
     }
 
     /// Registries over the fixture, with a store whose clock never expires
     /// staged proposals mid-test (fixed epoch well within the 24h TTL).
-    static func registries(graph: HomeGraph = graph()) -> (reads: ReadToolRegistry, writes: WriteToolRegistry, store: ProposalStore) {
+    /// The fake service comes back too, so tests can observe the approved
+    /// graph after execution.
+    static func registries(graph: HomeGraph = graph()) -> (
+        reads: ReadToolRegistry, writes: WriteToolRegistry, store: ProposalStore, service: FakeHomeKitService
+    ) {
         let service = FakeHomeKitService(graph: graph)
         let store = ProposalStore(
             homeKit: service,
             now: { Date(timeIntervalSince1970: 1_762_592_000) }
         )
-        return (ReadToolRegistry(service: service), WriteToolRegistry(store: store), store)
+        return (ReadToolRegistry(service: service), WriteToolRegistry(store: store), store, service)
     }
 
     // MARK: - Syracuse-shaped fixture (direction 3 sizing)

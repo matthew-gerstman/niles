@@ -531,9 +531,13 @@ extension HomeManagerHomeKitService: HomeKitWriting {
             try await Self.execute(try Self.actionSet(sceneId, in: home), in: home)
             return nil
 
-        case .addServiceGroup(let homeId, let name):
+        case .addServiceGroup(let homeId, let name, let serviceIds):
             let home = try Self.home(homeId, in: homes)
-            return try await home.addServiceGroup(named: name).uniqueIdentifier.uuidString
+            let group = try await home.addServiceGroup(named: name)
+            for serviceId in serviceIds {
+                try await Self.add(try Self.service(serviceId, in: home), to: group)
+            }
+            return try await group.uniqueIdentifier.uuidString
 
         case .updateServiceGroupMembers(let homeId, let groupId, let addServiceIds, let removeServiceIds):
             let home = try Self.home(homeId, in: homes)

@@ -186,7 +186,7 @@ enum RevertPlanBuilder {
         case .addActionSet(let homeId, _, _):
             guard let id = createdId else { return nil }
             return BuiltRevert(operations: [.removeActionSet(homeId: homeId, sceneId: id)], memberRestore: nil, recreatedNames: [])
-        case .addServiceGroup(let homeId, _):
+        case .addServiceGroup(let homeId, _, _):
             guard let id = createdId else { return nil }
             return BuiltRevert(operations: [.removeServiceGroup(homeId: homeId, groupId: id)], memberRestore: nil, recreatedNames: [])
         case .addTimerTrigger(let homeId, _, _, _, _), .addEventTrigger(let homeId, _, _, _, _, _):
@@ -239,7 +239,7 @@ enum RevertPlanBuilder {
         case .removeServiceGroup(let homeId, let groupId):
             guard let group = home?.serviceGroups.first(where: { $0.id == groupId }) else { return nil }
             return BuiltRevert(
-                operations: [.addServiceGroup(homeId: homeId, name: group.name)],
+                operations: [.addServiceGroup(homeId: homeId, name: group.name, serviceIds: [])],
                 memberRestore: .groupServices(homeId: homeId, serviceIds: group.services.map(\.id)),
                 recreatedNames: [RevertPlan.RecreatedName(kind: .serviceGroup, name: group.name)]
             )

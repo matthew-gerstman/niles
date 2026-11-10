@@ -151,10 +151,17 @@ public actor FakeHomeKitService: HomeKitWriting {
             graph.homes[h].scenes[s].lastExecutionDate = Date()
             return nil
 
-        case .addServiceGroup(_, let name):
+        case .addServiceGroup(_, let name, let serviceIds):
             let h = try indexOfHome(havingServiceGroupNamed: name)
             let id = nextId(prefix: "group", existing: graph.homes[h].serviceGroups.map(\.id))
-            graph.homes[h].serviceGroups.append(HomeGraph.ServiceGroup(id: id, name: name))
+            var group = HomeGraph.ServiceGroup(id: id, name: name)
+            for serviceId in serviceIds {
+                guard let ref = knownService(id: serviceId) else {
+                    throw HomeKitWriteError.objectMissing("No service \(serviceId) to add to service group \(id).")
+                }
+                group.services.append(ref)
+            }
+            graph.homes[h].serviceGroups.append(group)
             return id
 
         case .setServiceGroupMembers(_, let groupId, let addServiceIds, let removeServiceIds):

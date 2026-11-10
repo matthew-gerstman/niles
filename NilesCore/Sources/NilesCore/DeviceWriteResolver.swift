@@ -141,7 +141,7 @@ enum DeviceWriteStep: Equatable, Sendable {
     case renameActionSet(homeId: String, sceneId: String, to: String)
     case removeActionSet(homeId: String, sceneId: String)
     case executeActionSet(homeId: String, sceneId: String)
-    case addServiceGroup(homeId: String, name: String)
+    case addServiceGroup(homeId: String, name: String, serviceIds: [String])
     case updateServiceGroupMembers(homeId: String, groupId: String, addServiceIds: [String], removeServiceIds: [String])
     case renameServiceGroup(homeId: String, groupId: String, to: String)
     case removeServiceGroup(homeId: String, groupId: String)
@@ -289,7 +289,7 @@ enum DeviceWriteResolver {
                 )
             }
             return [.executeActionSet(homeId: home.id, sceneId: scene.id)]
-        case .addServiceGroup(let homeId, let name):
+        case .addServiceGroup(let homeId, let name, let serviceIds):
             let home = try home(id: homeId, in: view)
             if let why = nameViolation(name) {
                 throw HomeKitWriteError.invalidOperation("New service group name “\(name)” in “\(home.name)”: \(why).")
@@ -297,7 +297,16 @@ enum DeviceWriteResolver {
             if home.serviceGroups.contains(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
                 throw HomeKitWriteError.duplicateName("Home already has a service group named “\(name)”.")
             }
-            return [.addServiceGroup(homeId: home.id, name: name)]
+            // Member services are validated against the live view so a stale
+            // id fails before anything is staged for execution.
+            let knownServiceIds = Set(home.accessories.flatMap(\.services).map(\.id))
+            let unknown = Set(serviceIds).subtracting(knownServiceIds).sorted()
+            guard unknown.isEmpty else {
+                throw HomeKitWriteError.objectMissing(
+                    "No service \(unknown.joined(separator: ", ")) in “\(home.name)”."
+                )
+            }
+            return [.addServiceGroup(homeId: home.id, name: name, serviceIds: serviceIds)]
         case .setServiceGroupMembers(let homeId, let groupId, let addServiceIds, let removeServiceIds):
             return [try resolveServiceGroupMembers(homeId: homeId, groupId: groupId, addServiceIds: addServiceIds, removeServiceIds: removeServiceIds, in: view)]
         case .removeServiceGroup(let homeId, let groupId):

@@ -157,10 +157,11 @@ public struct NilesAgentTool: FoundationModels.Tool {
 
 @available(iOS 26.0, *)
 public enum NilesToolset {
-    /// One `NilesAgentTool` per registry tool — all of them, reads and writes
-    /// alike — backed by the shared dispatcher that owns the budget.
+    /// One `NilesAgentTool` per agent-surface tool (art_yvbPAfG9, v7) —
+    /// backed by the shared dispatcher that owns the budget. The registries'
+    /// full surfaces stay MCP-only; the model never sees them.
     public static func tools(dispatcher: NilesToolDispatcher) -> [any FoundationModels.Tool] {
-        dispatcher.toolDefinitions
+        dispatcher.agentToolDefinitions
             .map { NilesAgentTool(for: $0, dispatcher: dispatcher) }
     }
 }

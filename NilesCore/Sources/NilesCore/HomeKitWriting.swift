@@ -122,7 +122,7 @@ public enum HomeKitOperation: Sendable, Equatable, Hashable {
     case renameActionSet(homeId: String, sceneId: String, to: String)
     case removeActionSet(homeId: String, sceneId: String)
     case executeActionSet(homeId: String, sceneId: String)
-    case addServiceGroup(homeId: String, name: String)
+    case addServiceGroup(homeId: String, name: String, serviceIds: [String])
     case renameServiceGroup(homeId: String, groupId: String, to: String)
     case setServiceGroupMembers(
         homeId: String, groupId: String, addServiceIds: [String], removeServiceIds: [String]
