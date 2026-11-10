@@ -393,7 +393,7 @@ import Testing
     @Test func unifiedUpdateRefusesTimerTriggersAndNeverAbsorbsArming() async throws {
         let (_, _, registry) = makeContext()
 
-        let result = await registry.call(
+        let result = try await registry.call(
             name: "update",
             arguments: [
                 "entityId": .string("trigger-sunset"),
@@ -423,7 +423,7 @@ import Testing
 
     @Test func unknownEntityIdNamesSearchAndGetDetails() async throws {
         let (_, _, registry) = makeContext()
-        let result = await registry.call(name: "rename", arguments: [
+        let result = try await registry.call(name: "rename", arguments: [
             "entityId": .string("nope"), "newName": .string("X"),
         ])
         let text = try #require(errorText(of: result))
@@ -433,7 +433,7 @@ import Testing
 
     @Test func renameOnTriggerIsRejected() async throws {
         let (_, _, registry) = makeContext()
-        let result = await registry.call(name: "rename", arguments: [
+        let result = try await registry.call(name: "rename", arguments: [
             "entityId": .string("trigger-sunset"), "newName": .string("Dusk"),
         ])
         let text = try #require(errorText(of: result))
@@ -442,7 +442,7 @@ import Testing
 
     @Test func unknownCreateKindListsValidKinds() async throws {
         let (fake, _, registry) = makeContext()
-        let result = await registry.call(name: "create", arguments: [
+        let result = try await registry.call(name: "create", arguments: [
             "kind": .string("castle"), "homeId": .string("home-1"), "name": .string("Nope"),
         ])
         let text = try #require(errorText(of: result))
@@ -453,7 +453,7 @@ import Testing
 
     @Test func updateOnRoomIsRejected() async throws {
         let (_, _, registry) = makeContext()
-        let result = await registry.call(name: "update", arguments: [
+        let result = try await registry.call(name: "update", arguments: [
             "entityId": .string("room-kitchen"),
             "actions": .array([]),
         ])
@@ -518,13 +518,14 @@ import Testing
         #expect(byName["rename"]?.description?.contains("DEPRECATED") == false)
     }
 
-    @Test func agentSurfaceStaysAtTheV9EightTools() {
+    @Test func agentSurfaceStaysAtTheV9EightTools() async {
         let fake = FakeHomeKitService(graph: fixtureGraph())
         let toolset = NilesToolDispatcher(
             reads: ReadToolRegistry(service: fake),
             writes: WriteToolRegistry(store: ProposalStore(homeKit: fake, now: { self.t0 }))
         )
-        #expect(toolset.agentToolDefinitions.map(\.name) == NilesToolDispatcher.agentToolOrder)
-        #expect(toolset.agentToolDefinitions.count == 8)
+        let names = await toolset.agentToolDefinitions.map(\.name)
+        #expect(names == NilesToolDispatcher.agentToolOrder)
+        #expect(names.count == 8)
     }
 }
