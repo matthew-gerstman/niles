@@ -40,29 +40,34 @@ struct AgentChatScreen: View {
         }
         .navigationTitle("Ask Niles")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar { composer }
+        .safeAreaInset(edge: .bottom) { composerBar }
         .sensoryFeedback(.success, trigger: resolvedTurnCount)
         .sensoryFeedback(.error, trigger: failedTurnCount)
     }
 
     // MARK: - Transcript
 
+    @ViewBuilder
     private var transcript: some View {
+        if model.entries.isEmpty {
+            // Centered: the empty state has nothing to anchor to the bottom.
+            ContentUnavailableView {
+                Label("Ask Niles", systemImage: "sparkles")
+            } description: {
+                Text("Requests stage proposals for your review — nothing changes until you approve in the Queue.")
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            transcriptList
+        }
+    }
+
+    private var transcriptList: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 20) {
-                    if model.entries.isEmpty {
-                        ContentUnavailableView {
-                            Label("Ask Niles", systemImage: "sparkles")
-                        } description: {
-                            Text("Requests stage proposals for your review — nothing changes until you approve in the Queue.")
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 120)
-                    } else {
-                        ForEach(model.entries) { entry in
-                            row(for: entry)
-                        }
+                    ForEach(model.entries) { entry in
+                        row(for: entry)
                     }
                 }
                 .padding(.horizontal)
@@ -170,29 +175,32 @@ struct AgentChatScreen: View {
     }
 
     /// The composer: a vertical-axis system text field plus a send button,
-    /// anchored to the bottom bar. Disabled while a run is in flight or the
-    /// gate failed.
-    private var composer: some ToolbarContent {
-        ToolbarItem(placement: .bottomBar) {
-            HStack(spacing: 12) {
-                TextField("Ask Niles to dim the living room tonight…", text: $draft, axis: .vertical)
-                    .textFieldStyle(.roundedBorder)
-                    .lineLimit(1...5)
-                    .submitLabel(.send)
-                    .focused($composerFocused)
-                    .disabled(!model.canSend)
-                    .accessibilityIdentifier("chat-composer")
-                Button {
-                    send()
-                } label: {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.title2)
-                }
-                .accessibilityLabel("Send")
-                .disabled(!model.canSend || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    /// anchored above the tab bar as a bottom safe-area inset. (The
+    /// `.bottomBar` toolbar placement renders underneath iOS 26's floating
+    /// tab bar, so taps meant for the composer hit the tab bar; a safe-area
+    /// inset is equally native and sits above both tab bar and keyboard.)
+    /// Disabled while a run is in flight or the gate failed.
+    private var composerBar: some View {
+        HStack(spacing: 12) {
+            TextField("Ask Niles to dim the living room tonight…", text: $draft, axis: .vertical)
+                .textFieldStyle(.roundedBorder)
+                .lineLimit(1...5)
+                .submitLabel(.send)
+                .focused($composerFocused)
+                .disabled(!model.canSend)
+                .accessibilityIdentifier("chat-composer")
+            Button {
+                send()
+            } label: {
+                Image(systemName: "arrow.up.circle.fill")
+                    .font(.title2)
             }
-            .padding(.vertical, 6)
+            .accessibilityLabel("Send")
+            .disabled(!model.canSend || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        .background(.bar)
     }
 
     private func send() {
