@@ -93,7 +93,9 @@ struct ActivityTimelineTests {
         #expect(rows.map { $0.event.kind } == [.executed, .decided, .staged])
     }
 
-    /// Events group into recency buckets, newest bucket first.
+    /// Events group into recency buckets, newest bucket first. Each fixture
+    /// date is anchored to a midnight boundary so the expected buckets hold
+    /// no matter what time of day the suite runs.
     @Test
     func timelineGroupsByRecency() {
         // Anchor fixture events to calendar days, not fixed offsets from
@@ -264,6 +266,114 @@ struct ActivityTimelineTests {
         #expect(!availability(scene, events: [scene], proposals: [
             proposal(id: "prop_scene", tool: "execute_scene")
         ]))
+    }
+
+    // MARK: - One row per proposal
+
+    /// All of a proposal's events collapse into one group; distinct
+    /// proposals stay distinct rows, newest proposal first.
+    @Test
+    func groupsCollapsesToProposalRows() {
+        let events = [
+            event(.staged, minutesAgo: 30, proposalId: "prop_1"),
+            event(.decided, minutesAgo: 20, proposalId: "prop_1", decision: "approved"),
+            event(.executed, minutesAgo: 10, proposalId: "prop_1"),
+            event(.staged, minutesAgo: 5, proposalId: "prop_2"),
+        ]
+        let groups = ActivityTimeline.groups(events: events, proposals: [])
+        #expect(groups.map(\.proposalId) == ["prop_2", "prop_1"])
+        #expect(groups[1].title == "A proposal")
+        // The executed event is the most recent of prop_1.
+        #expect(groups[1].latestAt == events[2].at)
+        // The lifecycle timeline is newest first inside the group.
+        #expect(groups[1].events.map { $0.event.kind } == [.executed, .decided, .staged])
+    }
+
+    /// The group's state is the furthest lifecycle state reached: undone
+    /// dominates, then failed, executed, decided, expired, staged.
+    @Test
+    func groupStateIsTheFurthestStateReached() {
+        func state(_ events: [ActivityEvent]) -> ActivityTimeline.Verdict {
+            ActivityTimeline.groups(events: events, proposals: []).first!.state
+        }
+        #expect(state([event(.staged, minutesAgo: 10, proposalId: "p")]) == .staged)
+        #expect(state([
+            event(.staged, minutesAgo: 10, proposalId: "p"),
+            event(.decided, minutesAgo: 5, proposalId: "p", decision: "approved"),
+        ]) == .approved)
+        #expect(state([
+            event(.staged, minutesAgo: 10, proposalId: "p"),
+            event(.executed, minutesAgo: 5, proposalId: "p"),
+        ]) == .executed)
+        #expect(state([
+            event(.executed, minutesAgo: 10, proposalId: "p"),
+            event(.undone, minutesAgo: 5, proposalId: "p"),
+        ]) == .undone)
+        #expect(state([
+            event(.executed, minutesAgo: 10, proposalId: "p", detail: "Failed — boom"),
+        ]) == .failed)
+    }
+
+    /// A verified execution — non-empty evidence, every check confirmed —
+    /// is what turns on the plain "Verified" badge; partial or failed
+    /// read-backs and evidence-less executions never show it.
+    @Test
+    func verifiedBadgeNeedsFullConfirmedEvidence() {
+        func verified(_ evidence: [ProposalEvidence]) -> Bool {
+            ActivityTimeline.groups(
+                events: [event(.executed, minutesAgo: 10, proposalId: "p", evidence: evidence)],
+                proposals: []
+            ).first!.verified
+        }
+        #expect(!verified([]))
+        #expect(verified(confirmedEvidence("Room exists")))
+        #expect(!verified([
+            ProposalEvidence(claim: "Room exists", observed: "It does not", confirmed: false),
+        ]))
+    }
+
+    /// The group carries the undo gates of its most recent execution —
+    /// an undone proposal never offers Undo.
+    @Test
+    func groupUndoAvailabilityFollowsTheExecution() {
+        let executed = event(.executed, minutesAgo: 10, proposalId: "prop_ok")
+        let undone = event(.undone, minutesAgo: 5, proposalId: "prop_ok")
+        let groups = ActivityTimeline.groups(
+            events: [executed, undone],
+            proposals: [proposal(id: "prop_ok")]
+        )
+        #expect(groups.first?.state == .undone)
+        #expect(groups.first?.undoAvailable == false)
+    }
+
+    // MARK: - Plain-language evidence
+
+    /// The raw "1 of 1 checks confirmed" tally is never surfaced: the
+    /// summary tells the person what was done, with counts only as context.
+    @Test
+    func evidenceSummarySpeaksPlainLanguage() {
+        #expect(ActivityTimeline.evidenceSummary([]) == nil)
+        #expect(
+            ActivityTimeline.evidenceSummary(confirmedEvidence("Room exists"))
+                == "Re-read the home after execution; state matched expectations (1 check)."
+        )
+        #expect(
+            ActivityTimeline.evidenceSummary([
+                confirmedEvidence("Room exists")[0],
+                confirmedEvidence("Name matches")[0],
+            ]) == "Re-read the home after execution; state matched expectations (2 checks)."
+        )
+        #expect(
+            ActivityTimeline.evidenceSummary([
+                confirmedEvidence("Room exists")[0],
+                ProposalEvidence(claim: "Name matches", observed: "It does not", confirmed: false),
+            ]) == "Re-read the home after execution; 1 check of 2 checks matched expectations."
+        )
+        #expect(
+            ActivityTimeline.evidenceSummary([
+                ProposalEvidence(claim: "Room exists", observed: "It does not", confirmed: false),
+            ]) == "Re-read the home after execution; the home did not match expectations."
+        )
     }
 
     // MARK: - Live undo-conflict surfacing
