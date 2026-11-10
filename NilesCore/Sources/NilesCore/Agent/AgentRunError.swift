@@ -33,11 +33,10 @@ extension AgentRunError {
     /// rendering the real localized description.
     static func mapped(from error: Error) -> Error {
         switch error {
-        case SystemLanguageModel.Error.assetsUnavailable:
-            // The iOS 27 spelling — the deprecated GenerationError case's
-            // replacement per the SDK itself.
+        case SystemLanguageModel.Error.assetsUnavailable(_):
+            // The iOS 27 spelling of the asset-unavailable family.
             return .assetUnavailable
-        case GenerationError.assetsUnavailable:
+        case LanguageModelSession.GenerationError.assetsUnavailable(_):
             // Deprecated in iOS 27 in favor of the case above; matched
             // deliberately so a runtime that still throws the legacy
             // spelling cannot slip past the typed handling.

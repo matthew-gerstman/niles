@@ -263,8 +263,10 @@ enum ScriptedFailure: Hashable, Sendable {
                 )
             )
         case .legacyAssetsUnavailable:
-            return GenerationError.assetsUnavailable(
-                GenerationError.Context(debugDescription: "Resource (Local Model Asset) unavailable")
+            return LanguageModelSession.GenerationError.assetsUnavailable(
+                LanguageModelSession.GenerationError.Context(
+                    debugDescription: "Resource (Local Model Asset) unavailable"
+                )
             )
         case .opaque(let description):
             return NSError(
