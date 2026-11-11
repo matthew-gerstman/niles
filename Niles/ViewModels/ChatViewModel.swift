@@ -26,7 +26,9 @@ struct ChatEntry: Identifiable, Equatable {
 /// The in-app chat surface's view model (spec art_AL0RolQe). Each send is
 /// one independent `AgentRunning.run(_:)` — the same seam Siri composes
 /// through — so a message can stage proposals but never approve or execute
-/// them. No cross-request context: follow-ups are new requests.
+/// them. Follow-ups ride a bounded window of completed transcript rows
+/// composed into the request string (ChatContext); no memory survives a
+/// fresh app launch.
 @MainActor
 protocol ChatViewModel: Observable {
     /// The transcript, oldest first.
