@@ -46,7 +46,7 @@ public enum ProposalEvidenceCollector {
         case .renameRoom(_, let roomId, let to):
             let room = graph.homes.flatMap(\.rooms).first { $0.id == roomId }
             return ProposalEvidence(
-                claim: "Room \(roomId) is named “\(to)”",
+                claim: renameClaim(kind: "Room", resolved: room?.name, id: roomId, to: to),
                 observed: room.map { "Room now named “\($0.name)”" }
                     ?? "Room \(roomId) not found after execution",
                 confirmed: room?.name == to
@@ -54,31 +54,37 @@ public enum ProposalEvidenceCollector {
 
         case .removeRoom(_, let roomId):
             let stillPresent = contains(roomId, in: graph.homes.flatMap(\.rooms).map(\.id))
+            let label = subject("Room", roomName(roomId, graph: graph), roomId)
             return ProposalEvidence(
-                claim: "Room \(roomId) is deleted",
-                observed: stillPresent ? "Room still present — delete did not take effect" : "No room with id \(roomId) remains",
+                claim: "\(label) is deleted",
+                observed: stillPresent
+                    ? "\(label) still present — delete did not take effect"
+                    : "No room with id \(roomId) remains",
                 confirmed: !stillPresent
             )
 
         case .setZoneRooms(_, let zoneId, let addRoomIds, let removeRoomIds):
             guard let zone = graph.homes.flatMap(\.zones).first(where: { $0.id == zoneId }) else {
                 return ProposalEvidence(
-                    claim: "Zone \(zoneId) membership updated",
+                    claim: subject("Zone", zoneName(zoneId, graph: graph), zoneId) + " membership updated",
                     observed: Self.missingZoneObservation(zoneId: zoneId, batch: batch, batchIndex: batchIndex),
                     confirmed: false
                 )
             }
-            let memberNames = zone.roomIds.map { roomName(of: $0, graph: graph) }
+            let memberNames = zone.roomIds.map { roomName($0, graph: graph) ?? $0 }
             var observed = "Zone “\(zone.name)” now contains \(zone.roomIds.count) room\(zone.roomIds.count == 1 ? "" : "s")"
             if let firstAdded = addRoomIds.first {
-                observed += ", including “\(roomName(of: firstAdded, graph: graph))”"
+                observed += ", including “\(roomName(firstAdded, graph: graph) ?? firstAdded)”"
             }
             if !memberNames.isEmpty {
                 observed += ": \(memberNames.joined(separator: ", "))"
             }
             let confirmed = addRoomIds.allSatisfy(zone.roomIds.contains)
                 && removeRoomIds.allSatisfy { !zone.roomIds.contains($0) }
-            return ProposalEvidence(claim: "Zone \(zoneId) membership updated", observed: observed, confirmed: confirmed)
+            return ProposalEvidence(
+                claim: subject("Zone", zoneName(zoneId, graph: graph), zoneId) + " membership updated",
+                observed: observed, confirmed: confirmed
+            )
 
         case .createZone(_, let name):
             let zones = graph.homes.flatMap(\.zones)
@@ -102,13 +108,13 @@ public enum ProposalEvidenceCollector {
             let zone = graph.homes.flatMap(\.zones).first { $0.id == zoneId }
             if zone == nil, Self.removedLaterInBatch(zoneId, after: batchIndex, in: batch) {
                 return ProposalEvidence(
-                    claim: "Zone \(zoneId) is named “\(to)”",
+                    claim: renameClaim(kind: "Zone", resolved: zone?.name, id: zoneId, to: to),
                     observed: Self.missingZoneObservation(zoneId: zoneId, batch: batch, batchIndex: batchIndex),
                     confirmed: false
                 )
             }
             return ProposalEvidence(
-                claim: "Zone \(zoneId) is named “\(to)”",
+                claim: renameClaim(kind: "Zone", resolved: zone?.name, id: zoneId, to: to),
                 observed: zone.map { "Zone now named “\($0.name)”" }
                     ?? "Zone \(zoneId) not found after execution",
                 confirmed: zone?.name == to
@@ -117,10 +123,11 @@ public enum ProposalEvidenceCollector {
         case .removeZone(_, let zoneId):
             let stillPresent = contains(zoneId, in: graph.homes.flatMap(\.zones).map(\.id))
             let roomsStillThere = graph.homes.flatMap(\.rooms).count
+            let label = subject("Zone", zoneName(zoneId, graph: graph), zoneId)
             return ProposalEvidence(
-                claim: "Zone \(zoneId) is deleted, rooms preserved",
+                claim: "\(label) is deleted, rooms preserved",
                 observed: stillPresent
-                    ? "Zone still present — delete did not take effect"
+                    ? "\(label) still present — delete did not take effect"
                     : "No zone with id \(zoneId) remains; \(roomsStillThere) room\(roomsStillThere == 1 ? "" : "s") untouched",
                 confirmed: !stillPresent
             )
@@ -139,7 +146,7 @@ public enum ProposalEvidenceCollector {
         case .setSceneActions(_, let sceneId, let add, let remove):
             guard let scene = graph.homes.flatMap(\.scenes).first(where: { $0.id == sceneId }) else {
                 return ProposalEvidence(
-                    claim: "Scene \(sceneId) actions updated",
+                    claim: subject("Scene", sceneName(sceneId, graph: graph), sceneId) + " actions updated",
                     observed: "Scene \(sceneId) not found after execution",
                     confirmed: false
                 )
@@ -149,7 +156,7 @@ public enum ProposalEvidenceCollector {
                 && remove.allSatisfy { key in !current.contains(key) }
             let noun = scene.actions.count == 1 ? "action" : "actions"
             return ProposalEvidence(
-                claim: "Scene \(sceneId) actions updated",
+                claim: subject("Scene", sceneName(sceneId, graph: graph), sceneId) + " actions updated",
                 observed: "Scene “\(scene.name)” now holds \(scene.actions.count) \(noun)",
                 confirmed: confirmed
             )
@@ -157,7 +164,7 @@ public enum ProposalEvidenceCollector {
         case .renameActionSet(_, let sceneId, let to):
             let scene = graph.homes.flatMap(\.scenes).first { $0.id == sceneId }
             return ProposalEvidence(
-                claim: "Scene \(sceneId) is named “\(to)”",
+                claim: renameClaim(kind: "Scene", resolved: scene?.name, id: sceneId, to: to),
                 observed: scene.map { "Scene now named “\($0.name)”" }
                     ?? "Scene \(sceneId) not found after execution",
                 confirmed: scene?.name == to
@@ -166,15 +173,16 @@ public enum ProposalEvidenceCollector {
         case .removeActionSet(_, let sceneId):
             let stillPresent = contains(sceneId, in: graph.homes.flatMap(\.scenes).map(\.id))
             let danglingLinks = graph.homes.flatMap(\.triggers).filter { $0.linkedSceneIds.contains(sceneId) }
+            let label = subject("Scene", sceneName(sceneId, graph: graph), sceneId)
             var observed = stillPresent
-                ? "Scene still present — delete did not take effect"
+                ? "\(label) still present — delete did not take effect"
                 : "No scene with id \(sceneId) remains"
             if !danglingLinks.isEmpty {
                 let names = danglingLinks.map(\.name).joined(separator: ", ")
                 observed += "; triggers still referencing it: \(names)"
             }
             return ProposalEvidence(
-                claim: "Scene \(sceneId) is deleted",
+                claim: "\(label) is deleted",
                 observed: observed,
                 confirmed: !stillPresent
             )
@@ -186,14 +194,14 @@ public enum ProposalEvidenceCollector {
             // run — not a claim the devices moved.
             guard let scene = graph.homes.flatMap(\.scenes).first(where: { $0.id == sceneId }) else {
                 return ProposalEvidence(
-                    claim: "Scene \(sceneId) ran",
+                    claim: subject("Scene", sceneName(sceneId, graph: graph), sceneId) + " ran",
                     observed: "Scene \(sceneId) not found after execution",
                     confirmed: false
                 )
             }
             let noun = scene.actions.count == 1 ? "action" : "actions"
             return ProposalEvidence(
-                claim: "Scene \(sceneId) ran",
+                claim: subject("Scene", sceneName(sceneId, graph: graph), sceneId) + " ran",
                 observed: "HomeKit accepted the run — scene “\(scene.name)” is present with \(scene.actions.count) \(noun)",
                 confirmed: true
             )
@@ -213,7 +221,7 @@ public enum ProposalEvidenceCollector {
         case .setServiceGroupMembers(_, let groupId, let addServiceIds, let removeServiceIds):
             guard let group = graph.homes.flatMap(\.serviceGroups).first(where: { $0.id == groupId }) else {
                 return ProposalEvidence(
-                    claim: "Service group \(groupId) membership updated",
+                    claim: subject("Service group", serviceGroupName(groupId, graph: graph), groupId) + " membership updated",
                     observed: "Service group \(groupId) not found after execution",
                     confirmed: false
                 )
@@ -227,7 +235,7 @@ public enum ProposalEvidenceCollector {
                 observed += ": \(names.joined(separator: ", "))"
             }
             return ProposalEvidence(
-                claim: "Service group \(groupId) membership updated",
+                claim: subject("Service group", serviceGroupName(groupId, graph: graph), groupId) + " membership updated",
                 observed: observed,
                 confirmed: confirmed
             )
@@ -235,7 +243,7 @@ public enum ProposalEvidenceCollector {
         case .renameServiceGroup(_, let groupId, let to):
             let group = graph.homes.flatMap(\.serviceGroups).first { $0.id == groupId }
             return ProposalEvidence(
-                claim: "Service group \(groupId) is named “\(to)”",
+                claim: renameClaim(kind: "Service group", resolved: group?.name, id: groupId, to: to),
                 observed: group.map { "Group now named “\($0.name)”" }
                     ?? "Service group \(groupId) not found after execution",
                 confirmed: group?.name == to
@@ -243,9 +251,12 @@ public enum ProposalEvidenceCollector {
 
         case .removeServiceGroup(_, let groupId):
             let stillPresent = contains(groupId, in: graph.homes.flatMap(\.serviceGroups).map(\.id))
+            let label = subject("Service group", serviceGroupName(groupId, graph: graph), groupId)
             return ProposalEvidence(
-                claim: "Service group \(groupId) is deleted",
-                observed: stillPresent ? "Group still present — delete did not take effect" : "No service group with id \(groupId) remains",
+                claim: "\(label) is deleted",
+                observed: stillPresent
+                    ? "\(label) still present — delete did not take effect"
+                    : "No service group with id \(groupId) remains",
                 confirmed: !stillPresent
             )
 
@@ -267,21 +278,21 @@ public enum ProposalEvidenceCollector {
         case .updateTimerTrigger(_, let triggerId, let fireDate, let recurrence):
             guard let trigger = graph.homes.flatMap(\.triggers).first(where: { $0.id == triggerId }) else {
                 return ProposalEvidence(
-                    claim: "Timer trigger \(triggerId) schedule updated",
+                    claim: subject("Timer trigger", triggerName(triggerId, graph: graph), triggerId) + " schedule updated",
                     observed: "Trigger \(triggerId) not found after execution",
                     confirmed: false
                 )
             }
             guard case .timer(let observedDate, let observedRecurrence) = trigger.detail else {
                 return ProposalEvidence(
-                    claim: "Timer trigger \(triggerId) schedule updated",
+                    claim: subject("Timer trigger", triggerName(triggerId, graph: graph), triggerId) + " schedule updated",
                     observed: "Trigger “\(trigger.name)” is no longer a timer trigger",
                     confirmed: false
                 )
             }
             let confirmed = observedDate == fireDate && observedRecurrence == recurrence
             return ProposalEvidence(
-                claim: "Timer trigger \(triggerId) schedule updated",
+                claim: subject("Timer trigger", triggerName(triggerId, graph: graph), triggerId) + " schedule updated",
                 observed: confirmed
                     ? "Trigger “\(trigger.name)” now fires \(ISOTimestamps.render(observedDate))"
                     : "Trigger “\(trigger.name)” shows a different schedule after execution",
@@ -299,14 +310,14 @@ public enum ProposalEvidenceCollector {
                 let trigger = home.triggers.first(where: { $0.id == triggerId })
             else {
                 return ProposalEvidence(
-                    claim: "Event trigger \(triggerId) events updated",
+                    claim: subject("Event trigger", triggerName(triggerId, graph: graph), triggerId) + " events updated",
                     observed: "Trigger \(triggerId) not found after execution",
                     confirmed: false
                 )
             }
             guard case .event(let detail) = trigger.detail else {
                 return ProposalEvidence(
-                    claim: "Event trigger \(triggerId) events updated",
+                    claim: subject("Event trigger", triggerName(triggerId, graph: graph), triggerId) + " events updated",
                     observed: "Trigger “\(trigger.name)” is no longer an event trigger",
                     confirmed: false
                 )
@@ -318,7 +329,7 @@ public enum ProposalEvidenceCollector {
             let confirmed = eventsConfirmed && sceneConfirmed
             let state = trigger.isEnabled ? "enabled" : "disabled"
             return ProposalEvidence(
-                claim: "Event trigger \(triggerId) events updated",
+                claim: subject("Event trigger", triggerName(triggerId, graph: graph), triggerId) + " events updated",
                 observed: confirmed
                     ? "Trigger “\(trigger.name)” now watches \(currentEvents.count) event\(currentEvents.count == 1 ? "" : "s") and stays \(state)"
                     : "Trigger “\(trigger.name)” shows different events after execution",
@@ -327,16 +338,19 @@ public enum ProposalEvidenceCollector {
 
         case .removeTrigger(_, let triggerId):
             let stillPresent = contains(triggerId, in: graph.homes.flatMap(\.triggers).map(\.id))
+            let label = subject("Trigger", triggerName(triggerId, graph: graph), triggerId)
             return ProposalEvidence(
-                claim: "Trigger \(triggerId) is deleted",
-                observed: stillPresent ? "Trigger still present — delete did not take effect" : "No trigger with id \(triggerId) remains",
+                claim: "\(label) is deleted",
+                observed: stillPresent
+                    ? "\(label) still present — delete did not take effect"
+                    : "No trigger with id \(triggerId) remains",
                 confirmed: !stillPresent
             )
 
         case .renameAccessory(_, let accessoryId, let to):
             let accessory = graph.homes.flatMap(\.rooms).flatMap(\.accessories).first { $0.id == accessoryId }
             return ProposalEvidence(
-                claim: "Accessory \(accessoryId) is named “\(to)”",
+                claim: renameClaim(kind: "Accessory", resolved: accessory?.name, id: accessoryId, to: to),
                 observed: accessory.map { "Accessory now named “\($0.name)”" }
                     ?? "Accessory \(accessoryId) not found after execution",
                 confirmed: accessory?.name == to
@@ -346,10 +360,11 @@ public enum ProposalEvidenceCollector {
             let stillPresent = contains(
                 accessoryId, in: graph.homes.flatMap(\.rooms).flatMap(\.accessories).map(\.id)
             )
+            let label = subject("Accessory", accessoryName(accessoryId, graph: graph), accessoryId)
             return ProposalEvidence(
-                claim: "Accessory \(accessoryId) was identified",
+                claim: "\(label) was identified",
                 observed: stillPresent
-                    ? "Accessory still present — identify (flash/beep) has no graph-observable effect"
+                    ? "\(label) still present — identify (flash/beep) has no graph-observable effect"
                     : "Accessory \(accessoryId) not found after execution",
                 confirmed: stillPresent
             )
@@ -358,11 +373,13 @@ public enum ProposalEvidenceCollector {
             let accessory = graph.homes.flatMap(\.rooms).flatMap(\.accessories).first { $0.id == accessoryId }
             let room = graph.homes.flatMap(\.rooms).first { $0.accessories.contains { $0.id == accessoryId } }
             let confirmed = room?.id == roomId
+            let accessoryLabel = subject("Accessory", accessory?.name, accessoryId)
+            let targetLabel = roomName(roomId, graph: graph).map { "room “\($0)”" } ?? "room \(roomId)"
             return ProposalEvidence(
-                claim: "Accessory \(accessoryId) is in room \(roomId)",
+                claim: "\(accessoryLabel) is in \(targetLabel)",
                 observed: confirmed
-                    ? "Accessory “\(accessory?.name ?? accessoryId)” now sits in room “\(room?.name ?? roomId)”"
-                    : room.map { "Accessory “\(accessory?.name ?? accessoryId)” sits in room “\($0.name)”, not \(roomId)" }
+                    ? "\(accessoryLabel) now sits in \(targetLabel)"
+                    : room.map { "\(accessoryLabel) sits in room “\($0.name)”, not \(targetLabel)" }
                         ?? "Accessory \(accessoryId) not found after execution",
                 confirmed: confirmed
             )
@@ -371,10 +388,11 @@ public enum ProposalEvidenceCollector {
             let stillPresent = contains(
                 accessoryId, in: graph.homes.flatMap(\.rooms).flatMap(\.accessories).map(\.id)
             )
+            let label = subject("Accessory", accessoryName(accessoryId, graph: graph), accessoryId)
             return ProposalEvidence(
-                claim: "Accessory \(accessoryId) was unblocked",
+                claim: "\(label) was unblocked",
                 observed: stillPresent
-                    ? "Accessory still present — blocked state is not graph-observable"
+                    ? "\(label) still present — blocked state is not graph-observable"
                     : "Accessory \(accessoryId) not found after execution",
                 confirmed: stillPresent
             )
@@ -383,9 +401,12 @@ public enum ProposalEvidenceCollector {
             let stillPresent = contains(
                 accessoryId, in: graph.homes.flatMap(\.rooms).flatMap(\.accessories).map(\.id)
             )
+            let label = subject("Accessory", accessoryName(accessoryId, graph: graph), accessoryId)
             return ProposalEvidence(
-                claim: "Accessory \(accessoryId) is deleted",
-                observed: stillPresent ? "Accessory still present — delete did not take effect" : "No accessory with id \(accessoryId) remains",
+                claim: "\(label) is deleted",
+                observed: stillPresent
+                    ? "\(label) still present — delete did not take effect"
+                    : "No accessory with id \(accessoryId) remains",
                 confirmed: !stillPresent
             )
 
@@ -434,16 +455,18 @@ public enum ProposalEvidenceCollector {
     private static func triggerStateEvidence(
         triggerId: String, expected: Bool, graph: HomeGraph
     ) -> ProposalEvidence {
+        let claim = subject("Trigger", triggerName(triggerId, graph: graph), triggerId)
+            + " is \(expected ? "enabled" : "disabled")"
         guard let trigger = graph.homes.flatMap(\.triggers).first(where: { $0.id == triggerId }) else {
             return ProposalEvidence(
-                claim: "Trigger \(triggerId) is \(expected ? "enabled" : "disabled")",
+                claim: claim,
                 observed: "Trigger \(triggerId) not found after execution",
                 confirmed: false
             )
         }
         let confirmed = trigger.isEnabled == expected
         return ProposalEvidence(
-            claim: "Trigger \(triggerId) is \(expected ? "enabled" : "disabled")",
+            claim: claim,
             observed: "Trigger “\(trigger.name)” is now \(trigger.isEnabled ? "enabled" : "disabled")",
             confirmed: confirmed
         )
@@ -454,8 +477,55 @@ public enum ProposalEvidenceCollector {
         ids.contains(id)
     }
 
-    private static func roomName(of roomId: String, graph: HomeGraph) -> String {
-        graph.homes.flatMap(\.rooms).first(where: { $0.id == roomId })?.name ?? roomId
+    // MARK: Friendly-name resolution
+    //
+    // Read-back is for people: every claim and failure-path observation names
+    // the object it talks about. Each resolver returns the object's name from
+    // the post-execution graph, or nil when the object has vanished — raw ids
+    // appear only in that vanished case, paired with a "not found" explanation.
+
+    private static func roomName(_ roomId: String, graph: HomeGraph) -> String? {
+        graph.homes.flatMap(\.rooms).first(where: { $0.id == roomId })?.name
+    }
+
+    private static func zoneName(_ zoneId: String, graph: HomeGraph) -> String? {
+        graph.homes.flatMap(\.zones).first(where: { $0.id == zoneId })?.name
+    }
+
+    private static func sceneName(_ sceneId: String, graph: HomeGraph) -> String? {
+        graph.homes.flatMap(\.scenes).first(where: { $0.id == sceneId })?.name
+    }
+
+    private static func serviceGroupName(_ groupId: String, graph: HomeGraph) -> String? {
+        graph.homes.flatMap(\.serviceGroups).first(where: { $0.id == groupId })?.name
+    }
+
+    private static func triggerName(_ triggerId: String, graph: HomeGraph) -> String? {
+        graph.homes.flatMap(\.triggers).first(where: { $0.id == triggerId })?.name
+    }
+
+    private static func accessoryName(_ accessoryId: String, graph: HomeGraph) -> String? {
+        graph.homes.flatMap(\.rooms).flatMap(\.accessories)
+            .first(where: { $0.id == accessoryId })?.name
+    }
+
+    /// Claim subject: “Room “Studio”” when the name resolves, the bare id
+    /// when the object has vanished ("Room room-9").
+    private static func subject(_ kind: String, _ name: String?, _ id: String) -> String {
+        name.map { "\(kind) “\($0)”" } ?? "\(kind) \(id)"
+    }
+
+    /// Claim for a rename. After a successful rename the graph only knows the
+    /// object by its new name — “X is named “X”” reads like a bug, so the
+    /// subject drops; when the resolved name differs (the rename failed or
+    /// never ran), the old name identifies the object; a vanished object
+    /// falls back to the raw id.
+    private static func renameClaim(kind: String, resolved: String?, id: String, to: String) -> String {
+        switch resolved {
+        case .some(let name) where name != to: "\(kind) “\(name)” is named “\(to)”"
+        case .some: "\(kind) is named “\(to)”"
+        case nil: "\(kind) \(id) is named “\(to)”"
+        }
     }
 
     /// The honest "zone is gone from the read-back" observation. A later
