@@ -108,7 +108,7 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
     /// The in-app chat transcript, oldest first (spec art_AL0RolQe).
     /// Session-scoped by design: no durable chat log in v1 — durable
     /// outcomes already live in Queue + Activity.
-    private(set) var entries: [ChatEntry] = []
+    private(set) var entries: [ConversationEntry] = []
     /// Set from the send until the run resolves — the in-flight half of
     /// `canSend`, so the composer disables and a concurrent send is ignored.
     private(set) var isChatRunInFlight = false
@@ -592,7 +592,7 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
 
     /// One message, one `run(_:)` — identical to Siri, except chat composes
     /// a bounded window of completed transcript rows into the request
-    /// (ChatContext). The user row lands optimistically; the agent row runs
+    /// (ConversationContext). The user row lands optimistically; the agent row runs
     /// until the summary resolves (and staged ids ride the result verbatim)
     /// or the session throws, which renders a failed turn and re-enables
     /// the composer. Concurrent sends are ignored: `canSend` is false from
@@ -602,7 +602,7 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
         // In-flight and failed rows say nothing about the conversation's
         // state, and staged-proposal ids live in the tools, not the
         // transcript — only completed, non-empty rows compose.
-        let request = ChatContext.compose(
+        let request = ConversationContext.compose(
             current: text,
             history: entries
                 .filter { $0.state == .done && !$0.text.isEmpty }
@@ -615,16 +615,16 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
             "Ask Niles run start: entry=in-app chat request: \(AgentRunTrace.truncated(request, to: 500), privacy: .public)"
         )
         await AgentRunTraceStore.shared.recordRunStart(entryPoint: "In-App Chat", request: request)
-        entries.append(ChatEntry(id: UUID(), role: .user, text: text))
-        let pending = ChatEntry(id: UUID(), role: .agent, text: "", state: .running)
+        entries.append(ConversationEntry(id: UUID(), role: .user, text: text))
+        let pending = ConversationEntry(id: UUID(), role: .agent, text: "", state: .running)
         entries.append(pending)
         isChatRunInFlight = true
         defer { isChatRunInFlight = false }
         do {
             let result = try await runner.run(request)
-            ChatTranscript.resolve(pending.id, in: &entries, result: result)
+            ConversationTranscript.resolve(pending.id, in: &entries, result: result)
         } catch {
-            ChatTranscript.fail(pending.id, in: &entries, with: error)
+            ConversationTranscript.fail(pending.id, in: &entries, with: error)
         }
     }
 

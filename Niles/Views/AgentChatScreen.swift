@@ -102,7 +102,7 @@ struct AgentChatScreen: View {
     /// User and agent turns: differentiated by alignment and system text
     /// color — no hand-drawn bubbles (locked decision).
     @ViewBuilder
-    private func row(for entry: ChatEntry) -> some View {
+    private func row(for entry: ConversationEntry) -> some View {
         switch entry.role {
         case .user:
             HStack(alignment: .firstTextBaseline) {
