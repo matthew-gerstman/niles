@@ -13,7 +13,6 @@ protocol DashboardViewModel: Observable {
     var endpoint: String { get }
     var bonjourService: String { get }
     var sessionsSummary: String { get }
-    var approvedTodayCount: Int { get }
     var pendingProposals: [NilesProposal] { get }
     var connectedAgents: [AgentConnection] { get }
     func setServerRunning(_ running: Bool)
@@ -71,6 +70,16 @@ protocol HomeGraphViewModel: Observable {
     func stage(row: HomeRow, action: HomeRowAction, newName: String?) async
 }
 
+/// One live MCP session of a paired agent, as the detail screen renders it:
+/// the client's own name and its timeline. Display-only; the token never
+/// reaches this layer.
+struct AgentSessionRow: Identifiable, Equatable {
+    let id: String
+    let clientName: String
+    let startedAt: Date
+    let lastAccessedAt: Date
+}
+
 /// One row of the paired-agents list: a stored credential plus what the live
 /// sessions say about it. The token itself never reaches this layer — rows
 /// carry display-only fields.
@@ -79,6 +88,10 @@ struct PairedAgentRow: Identifiable, Equatable {
     let name: String
     /// Composed display line: paired date and last-seen session.
     let detail: String
+    /// When the credential was created.
+    let pairedAt: Date
+    /// Live sessions created by this agent's token, newest first.
+    let sessions: [AgentSessionRow]
 }
 
 @MainActor
@@ -117,7 +130,6 @@ final class InMemoryNilesStore: DashboardViewModel, QueueViewModel, HomeGraphVie
     let endpoint = "http://192.168.1.24:8901/mcp"
     let bonjourService = "_niles-mcp._tcp.local"
     let sessionsSummary = "2 active"
-    let approvedTodayCount = 4
     private(set) var connectedAgents: [AgentConnection] = []
 
     private(set) var proposals: [NilesProposal] = []
@@ -187,8 +199,27 @@ final class InMemoryNilesStore: DashboardViewModel, QueueViewModel, HomeGraphVie
         pairingCode = "483920"
         codeExpiresAt = now.addingTimeInterval(5 * minute)
         pairedAgents = [
-            PairedAgentRow(id: UUID(), name: "Obvious Agent", detail: "paired Nov 8 · last seen now"),
-            PairedAgentRow(id: UUID(), name: "Claude Code", detail: "paired Nov 2 · never connected"),
+            PairedAgentRow(
+                id: UUID(),
+                name: "Obvious Agent",
+                detail: "paired Nov 8 · last seen now",
+                pairedAt: now.addingTimeInterval(-3 * 24 * 60 * 60),
+                sessions: [
+                    AgentSessionRow(
+                        id: "fixture-session-1",
+                        clientName: "Obvious Agent",
+                        startedAt: now.addingTimeInterval(-12 * 60),
+                        lastAccessedAt: now
+                    ),
+                ]
+            ),
+            PairedAgentRow(
+                id: UUID(),
+                name: "Claude Code",
+                detail: "paired Nov 2 · never connected",
+                pairedAt: now.addingTimeInterval(-9 * 24 * 60 * 60),
+                sessions: []
+            ),
         ]
         connectedAgents = [
             AgentConnection(name: "Claude Code", detail: "studio-mac · via Bonjour", isActive: true),

@@ -98,7 +98,7 @@ struct HomeScreen: View {
             }
         } header: {
             Text("Queue")
-                .foregroundStyle(queueHighlight ? Color.accentColor : Color.secondary)
+                .foregroundStyle(queueHighlight ? Color.primary : Color.secondary)
         }
         .id(ScrollTarget.queue)
     }
@@ -166,7 +166,6 @@ struct HomeScreen: View {
             LabeledContent("Endpoint", value: model.endpoint)
             LabeledContent("Bonjour", value: model.bonjourService)
             LabeledContent("Sessions", value: model.sessionsSummary)
-            LabeledContent("Approved today", value: model.approvedTodayCount.formatted())
         } header: {
             Text("Server")
         }
@@ -215,11 +214,15 @@ struct HomeScreen: View {
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(model.pairedAgents) { agent in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(agent.name)
-                        Text(agent.detail)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                    NavigationLink {
+                        PairedAgentDetailScreen(agent: agent, model: model)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(agent.name)
+                            Text(agent.detail)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     .swipeActions(edge: .trailing) {
                         Button("Revoke", role: .destructive) {

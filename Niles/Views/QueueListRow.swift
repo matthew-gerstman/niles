@@ -16,11 +16,13 @@ struct QueueListRow: View {
     /// Opens the proposal's detail sheet — the row itself never decides
     /// where the detail lives, so the Home tab can present it as its own.
     let onOpen: () -> Void
+    /// The proposal whose deny confirmation is showing, if any.
+    @State private var pendingDeny: NilesProposal?
 
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
             Image(systemName: proposal.isDestructive ? "exclamationmark.triangle" : "doc.text")
-                .foregroundStyle(proposal.isDestructive ? Color.red : Color.accentColor)
+                .foregroundStyle(proposal.isDestructive ? Color.red : .primary)
             VStack(alignment: .leading, spacing: 3) {
                 Text(proposal.title)
                     .font(.headline)
@@ -41,11 +43,31 @@ struct QueueListRow: View {
         }
         .contentShape(Rectangle())
         .onTapGesture { onOpen() }
-        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+        .swipeActions(edge: .trailing, allowsFullSwipe: proposal.isPending) {
             trailingActions(for: proposal)
         }
-        .swipeActions(edge: .leading, allowsFullSwipe: false) {
+        .swipeActions(edge: .leading, allowsFullSwipe: proposal.isPending) {
             leadingActions(for: proposal)
+        }
+        // A decisive deny flick must never act by itself — full-swipe deny is
+        // easy to fat-finger — so every deny routes through this dialog.
+        .confirmationDialog(
+            "Deny “\(pendingDeny?.title ?? "")”?",
+            isPresented: Binding(
+                get: { pendingDeny != nil },
+                set: { if !$0 { pendingDeny = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Deny", role: .destructive) {
+                if let proposal = pendingDeny {
+                    model.deny(proposal.id)
+                }
+                pendingDeny = nil
+            }
+            Button("Cancel", role: .cancel) { pendingDeny = nil }
+        } message: {
+            Text("Nothing is applied and the proposal cannot be recalled by the agent. It can stage the change again.")
         }
     }
 
@@ -60,7 +82,7 @@ struct QueueListRow: View {
         let undoState = model.undoStates[proposal.id]
         if proposal.isPending {
             Button(role: .destructive) {
-                model.deny(proposal.id)
+                pendingDeny = proposal
             } label: {
                 Label("Deny", systemImage: "xmark.circle")
             }

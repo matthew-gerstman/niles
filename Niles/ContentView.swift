@@ -21,6 +21,15 @@ struct ContentView: View {
         }
         return nil
     }()
+    /// Screenshot/preview hook: `-UIHomeFixtures` renders the Home tab on the
+    /// in-memory fixture store, so a fresh simulator shows a populated queue
+    /// and paired agents without Keychain credentials or live sessions.
+    @State private var fixtureHomeStore: InMemoryNilesStore? = {
+        if ProcessInfo.processInfo.arguments.contains("-UIHomeFixtures") {
+            return InMemoryNilesStore()
+        }
+        return nil
+    }()
 
     enum NilesTab: String, CaseIterable, Identifiable {
         case home, activity, niles
@@ -51,10 +60,16 @@ struct ContentView: View {
 
     var body: some View {
         TabView(selection: $selectedTab) {
-            HomeScreen(model: store)
-                .tabItem { Label("Home", systemImage: "house") }
-                .badge(pendingCount)
-                .tag(NilesTab.home)
+            if let fixtureHomeStore {
+                HomeScreen(model: fixtureHomeStore)
+                    .tabItem { Label("Home", systemImage: "house") }
+                    .tag(NilesTab.home)
+            } else {
+                HomeScreen(model: store)
+                    .tabItem { Label("Home", systemImage: "house") }
+                    .badge(pendingCount)
+                    .tag(NilesTab.home)
+            }
             if let fixture = fixtureActivityStore {
                 ActivityScreen(model: fixture)
                     .tabItem { Label("Activity", systemImage: "clock.arrow.circlepath") }
