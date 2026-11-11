@@ -1,14 +1,17 @@
 import SwiftUI
 import NilesCore
 
-/// Root tab view: Home, Activity, Niles — matching the approved three-tab
-/// mockup. Home carries the Queue (plus the former Settings sections) and
-/// the pending-count badge; Niles is the agent chat as a first-class tab.
-/// Holds the live store; previews substitute the in-memory one behind the
-/// same protocols.
+/// Root tab view: Home, Activity, and — when the agent feature gate allows
+/// it (AgentGate) — Niles. Home carries the Queue (plus the former Settings
+/// sections) and the pending-count badge; Niles is the agent chat as a
+/// first-class tab. Holds the live store; previews substitute the in-memory
+/// one behind the same protocols.
 struct ContentView: View {
     @State private var store: LiveNilesStore
     @State private var navigation = AppNavigation.shared
+    /// The agent feature gate, bound live: toggling it in Settings re-renders
+    /// the tab row here without a relaunch.
+    @AppStorage(AgentGate.storageKey) private var agentEnabled = AgentGate.bundledDefault
     /// Screenshot/preview hook: `-UIActivityFixtures` renders the Activity tab
     /// on the fixture store instead of the live one, so a fresh simulator has
     /// a populated timeline to capture.
@@ -61,14 +64,17 @@ struct ContentView: View {
                     .tabItem { Label("Activity", systemImage: "clock.arrow.circlepath") }
                     .tag(NilesTab.activity)
             }
-            NavigationStack {
-                AgentChatScreen(model: store)
+            if agentEnabled {
+                NavigationStack {
+                    AgentChatScreen(model: store)
+                }
+                .tabItem { Label("Niles", systemImage: "sparkles") }
+                .tag(NilesTab.niles)
             }
-            .tabItem { Label("Niles", systemImage: "sparkles") }
-            .tag(NilesTab.niles)
         }
         .task {
             store.start()
+            AgentGate.toggleFixtureIfRequested()
             await store.seedQueueFixtureIfRequested()
         }
         // Deep link from OpenQueueIntent while the app is already running.

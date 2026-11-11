@@ -33,6 +33,14 @@ struct AskNilesRouter {
         stagedProposalIds: []
     )
 
+    /// The feature-gate refusal copy — distinct from `unavailableOutcome`:
+    /// the device can run the agent, but the user turned it off, so the
+    /// dialog names the fix instead of implying a hardware limit.
+    static let disabledOutcome = AskNilesOutcome(
+        dialog: "Niles' agent is turned off. Turn it on in the Niles app's On-Device Agent settings.",
+        stagedProposalIds: []
+    )
+
     /// The one session-failure copy, shared by the Siri dialog and the
     /// in-app chat's failed turns — one wording, one source of truth.
     /// The typed asset-unavailable case gets the retry-oriented wording:
@@ -50,6 +58,13 @@ struct AskNilesRouter {
     /// the runner's summary; only a session-level failure throws, and that
     /// surfaces as a dialog rather than a silent drop.
     func run(_ prompt: String) async -> AskNilesOutcome {
+        // The feature gate first: a disabled agent never starts a run — not
+        // even a run-start trace — and the refusal is what the trace records.
+        guard AgentGate.isEnabled else {
+            Self.trace.error("Ask Niles run refused: entry=Siri — the feature gate is off (agent disabled in Settings)")
+            await AgentRunTraceStore.shared.recordError("Run refused — the on-device agent is turned off in Settings")
+            return Self.disabledOutcome
+        }
         Self.trace.info(
             "Ask Niles run start: entry=Siri request: \(AgentRunTrace.truncated(prompt, to: 500), privacy: .public)"
         )
