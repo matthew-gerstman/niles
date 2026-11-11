@@ -1,12 +1,12 @@
 import SwiftUI
 import NilesCore
 
-/// The Home tab root (three-tab IA, spec art_t2KGKOy3): the proposal Queue
-/// first, then the former Settings sections — Server, Pairing, Paired
-/// Agents, On-Device Agent, Diagnostics, Connection — moved verbatim (same
-/// bindings, same revoke confirm flow, same static helpers), and one quiet
-/// footer row into the home-graph browser. Everything is a native List
-/// section; nothing shipped by QueueScreen or SettingsScreen is lost.
+/// The Home tab (three-tab IA, spec art_t2KGKOy3): the proposal Queue
+/// first, then the former Settings sections — Server, Pairing, and Paired
+/// Agents (same bindings, same revoke confirm flow). The list ends at
+/// Paired Agents; the on-device agent, diagnostics, connection, and
+/// home-graph sections are gone from here, and neither the Queue nor the
+/// Server section carries a footer anymore.
 struct HomeScreen: View {
     var model: any DashboardViewModel & PairingViewModel & AgentStatusViewModel & QueueViewModel & HomeGraphViewModel
 
@@ -15,24 +15,17 @@ struct HomeScreen: View {
     /// section (the deep link used to land on the Queue tab).
     @State private var navigation = AppNavigation.shared
     @State private var openDetail: NilesProposal?
-    @State private var confirmApproveAll = false
     /// The collapsed empty state: one quiet row that expands the explainer
     /// on tap — never a hero card.
     @State private var showEmptyExplainer = false
     /// The paired agent whose revoke confirmation is showing, if any.
     @State private var pendingRevoke: PairedAgentRow?
-    /// The agent feature gate, bound live for the Settings toggle — the same
-    /// store ContentView's tab row reads, so a toggle lands without relaunch.
-    @AppStorage(AgentGate.storageKey) private var agentEnabled = AgentGate.bundledDefault
     /// Brief highlight of the Queue section when a deep link lands on it.
     @State private var queueHighlight = false
 
     /// Scroll target for the Queue section — attached to the section so a
     /// deep link can scroll it into view.
     private enum ScrollTarget { case queue }
-
-    /// Approve all batches every staged proposal — destructive included.
-    private var stagedCount: Int { model.pendingProposals.count }
 
     var body: some View {
         NavigationStack {
@@ -42,10 +35,6 @@ struct HomeScreen: View {
                     serverSection
                     pairingSection
                     pairedAgentsSection
-                    agentSection
-                    traceSection
-                    connectionSection
-                    browseSection
                 }
                 .listStyle(.insetGrouped)
                 .navigationTitle("Home")
@@ -63,16 +52,6 @@ struct HomeScreen: View {
                     if pending { consumeScrollRequest(proxy) }
                     openPendingProposalIfRequested()
                 }
-            }
-            .confirmationDialog(
-                "Approve all staged proposals?",
-                isPresented: $confirmApproveAll,
-                titleVisibility: .visible
-            ) {
-                Button("Approve all \(stagedCount)") { model.approveAll() }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("Every staged proposal is approved and executed — destructive ones included.")
             }
             .confirmationDialog(
                 revokeTitle,
@@ -120,16 +99,6 @@ struct HomeScreen: View {
         } header: {
             Text("Queue")
                 .foregroundStyle(queueHighlight ? Color.accentColor : Color.secondary)
-        } footer: {
-            if stagedCount > 0 {
-                Button {
-                    confirmApproveAll = true
-                } label: {
-                    Label("Approve All", systemImage: "checkmark.seal")
-                }
-                .disabled(model.isApprovingAll)
-                .padding(.top, 4)
-            }
         }
         .id(ScrollTarget.queue)
     }
@@ -200,8 +169,6 @@ struct HomeScreen: View {
             LabeledContent("Approved today", value: model.approvedTodayCount.formatted())
         } header: {
             Text("Server")
-        } footer: {
-            Text(model.serverIsRunning ? "Serving" : "Stopped")
         }
     }
 
@@ -266,63 +233,10 @@ struct HomeScreen: View {
         }
     }
 
-    /// The on-device agent (spec art_VrC0iUUA §Availability gate): the
-    /// feature toggle first — the whole agent ships dark in Release and this
-    /// is where it turns on — then what the gate decided, and — when it
-    /// passed — session usage. No run entry lives here; requests arrive via
-    /// Siri, and this surface states whether the agent can run at all. When
-    /// the gate fails, the footer names the exact reason and no row invites
-    /// a request.
-    private var agentSection: some View {
-        Section {
-            Toggle("Enabled", isOn: $agentEnabled)
-            LabeledContent("Status", value: Self.agentStatusLabel(model.agentAvailability))
-            if case .available = model.agentAvailability {
-                LabeledContent("Requests", value: model.agentUsage.requestCount.formatted())
-                LabeledContent("Tool calls", value: model.agentUsage.toolCallCount.formatted())
-                if !model.agentUsage.lastStagedProposalIds.isEmpty {
-                    LabeledContent("Last staged", value: model.agentUsage.lastStagedProposalIds.joined(separator: ", "))
-                }
-            }
-        } header: {
-            Text("On-Device Agent")
-        } footer: {
-            Text(Self.agentFooterText(model.agentAvailability))
-        }
-    }
-
-    /// Diagnostics entry: the on-device run-trace viewer (in-memory twin of
-    /// the AgentRunTrace log stream). Always present — the empty state
-    /// explains itself when no run has happened yet.
-    private var traceSection: some View {
-        Section {
-            NavigationLink {
-                AgentTraceScreen()
-            } label: {
-                Label("Agent Trace", systemImage: "list.bullet.rectangle")
-            }
-        } header: {
-            Text("Diagnostics")
-        } footer: {
-            Text("Every model round, tool call, and error the agent records — the same detail the run-trace log carries.")
-        }
-    }
-
-    /// Status row text, one label per gate state. Pure, so the wording is
-    /// directly testable.
-    static func agentStatusLabel(_ availability: AgentAvailability) -> String {
-        switch availability {
-        case .available: return "Available"
-        case .unavailable(.needsIOS27): return "Needs iOS 27"
-        case .unavailable(.deviceNotEligible): return "Device not eligible"
-        case .unavailable(.appleIntelligenceNotEnabled): return "Apple Intelligence off"
-        case .unavailable(.modelNotReady): return "Model not ready"
-        case .unavailable(.unknown): return "Unavailable"
-        }
-    }
-
-    /// The footer states what is missing and nothing else — no fallback is
-    /// ever implied, per the spec's no-degraded-mode invariant. Pure.
+    /// Footer text for the on-device agent: it states what is missing and
+    /// nothing else — no fallback is ever implied, per the spec's
+    /// no-degraded-mode invariant. Shared with the chat toolbar's status
+    /// row. Pure, so the wording is directly testable.
     static func agentFooterText(_ availability: AgentAvailability) -> String {
         switch availability {
         case .available:
@@ -337,30 +251,6 @@ struct HomeScreen: View {
             return "Apple Intelligence is still downloading the on-device model. Check back soon."
         case .unavailable(.unknown):
             return "The on-device agent is unavailable on this device."
-        }
-    }
-
-    private var connectionSection: some View {
-        Section {
-            LabeledContent("Endpoint", value: model.endpoint)
-            LabeledContent("Transport", value: model.transportName)
-        } header: {
-            Text("Connection")
-        } footer: {
-            Text("Niles · HomeKit MCP proxy · \(model.homeName)")
-        }
-    }
-
-    /// The home-graph browser, kept via a quiet footer row: the mockup has
-    /// no tab for it, but nothing it holds was deleted — rooms, zones,
-    /// scenes, and triggers keep their detail pushes.
-    private var browseSection: some View {
-        Section {
-            NavigationLink {
-                HomeGraphScreen(model: model)
-            } label: {
-                Label("Browse home graph", systemImage: "square.grid.3x3")
-            }
         }
     }
 
