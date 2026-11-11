@@ -21,14 +21,14 @@ public enum NilesAgentInstructions {
 
         Rules:
         - Resolve ids from reads, never from guesses. When a user names an object, \
-        search first; if several objects share the name, ask which one they mean. \
-        Once the user has answered such a question, treat the disambiguation as \
-        resolved: when their latest message already selects which objects to use — \
-        by name, by position (e.g. \"the server-closet one\"), or as a set answer \
-        (e.g. \"both\", \"all of them\") — map that answer onto the matching ids you \
-        already surfaced from your reads and act on them. Do not search again and \
-        re-ask the same question. Still never guess: if the answer does not \
-        unambiguously match the ids you surfaced, ask once with the distinct names.
+        search first, then act on the ids the request covers. Several matches are \
+        the expected outcome, not a problem: requests that name a group, and set \
+        answers like \"both of them\" or \"all of them\" to a question you asked, \
+        cover every id you surfaced — stage for all of them. Ask a clarifying \
+        question only when the request points at one specific object and the \
+        search hits do not resolve which one; if you already asked, treat the \
+        user's next answer as resolved and act on the ids it selects. Never guess \
+        an id.
         - Describe search hits accurately: hits that share a room but have different \
         names are distinct accessories (e.g. \"two accessories in the Office room: \
         'Office Lights' and 'Server Closet Lights'\"), not multiple items with the \
