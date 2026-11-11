@@ -45,7 +45,6 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
     private(set) var endpoint = ""
     private(set) var bonjourService = "\(NilesBonjour.serviceType).local"
     private(set) var sessionsSummary = "0 active"
-    private(set) var approvedTodayCount = 0
     private(set) var connectedAgents: [AgentConnection] = []
 
     // MARK: - QueueViewModel
@@ -813,9 +812,6 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
                 agentName: agentNamesByProposal[proposal.id] ?? "MCP agent"
             )
         }
-        approvedTodayCount = live.filter {
-            $0.state == .executed && Calendar.current.isDateInToday($0.createdAt)
-        }.count
         activityEvents = await activityLog.allEvents()
 
         do {
@@ -922,16 +918,25 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
         now: Date
     ) -> [PairedAgentRow] {
         agents.map { agent in
-            let lastSeen = sessions
+            let agentSessions = sessions
                 .filter { $0.tokenId == agent.id }
-                .map(\.lastAccessedAt)
-                .max()
+                .sorted { $0.startedAt > $1.startedAt }
+            let lastSeen = agentSessions.map(\.lastAccessedAt).max()
             let pairedDate = agent.pairedAt.formatted(date: .abbreviated, time: .omitted)
             let seen = lastSeen.map { "last seen \(RelativeTime.label(for: $0, now: now))" } ?? "never connected"
             return PairedAgentRow(
                 id: agent.id,
                 name: agent.name ?? "Agent",
-                detail: "paired \(pairedDate) · \(seen)"
+                detail: "paired \(pairedDate) · \(seen)",
+                pairedAt: agent.pairedAt,
+                sessions: agentSessions.map { session in
+                    AgentSessionRow(
+                        id: session.id,
+                        clientName: session.clientName ?? "MCP client",
+                        startedAt: session.startedAt,
+                        lastAccessedAt: session.lastAccessedAt
+                    )
+                }
             )
         }
     }

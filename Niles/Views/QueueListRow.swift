@@ -16,11 +16,15 @@ struct QueueListRow: View {
     /// Opens the proposal's detail sheet — the row itself never decides
     /// where the detail lives, so the Home tab can present it as its own.
     let onOpen: () -> Void
+    /// Requests the deny confirmation. The dialog is owned by the enclosing
+    /// screen: a full-swipe destructive action tears the row down, so a
+    /// row-local dialog would be destroyed before it could present.
+    let onRequestDeny: (NilesProposal) -> Void
 
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
             Image(systemName: proposal.isDestructive ? "exclamationmark.triangle" : "doc.text")
-                .foregroundStyle(proposal.isDestructive ? Color.red : Color.accentColor)
+                .foregroundStyle(proposal.isDestructive ? Color.red : .primary)
             VStack(alignment: .leading, spacing: 3) {
                 Text(proposal.title)
                     .font(.headline)
@@ -41,10 +45,10 @@ struct QueueListRow: View {
         }
         .contentShape(Rectangle())
         .onTapGesture { onOpen() }
-        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+        .swipeActions(edge: .trailing, allowsFullSwipe: proposal.isPending) {
             trailingActions(for: proposal)
         }
-        .swipeActions(edge: .leading, allowsFullSwipe: false) {
+        .swipeActions(edge: .leading, allowsFullSwipe: proposal.isPending) {
             leadingActions(for: proposal)
         }
     }
@@ -60,7 +64,7 @@ struct QueueListRow: View {
         let undoState = model.undoStates[proposal.id]
         if proposal.isPending {
             Button(role: .destructive) {
-                model.deny(proposal.id)
+                onRequestDeny(proposal)
             } label: {
                 Label("Deny", systemImage: "xmark.circle")
             }
