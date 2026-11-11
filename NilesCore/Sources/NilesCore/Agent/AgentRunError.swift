@@ -1,8 +1,8 @@
 import Foundation
 
-/// A session-level agent failure the app layer renders typed copy for
-/// (`AskNilesRouter.failureMessage`), as opposed to a tool-level failure —
-/// those are already in-band in the run's summary.
+/// A session-level agent failure, as opposed to a tool-level failure —
+/// those are already in-band in the run's summary. The app layer renders
+/// the shared session-failure copy via `failureMessage(for:)`.
 ///
 /// Deliberately iOS 17-safe: Settings and the intent layer hold this type
 /// below the iOS 27 gate, and nothing Foundation Models-typed leaks out of
@@ -19,6 +19,19 @@ public enum AgentRunError: Error, Equatable, Sendable {
     /// The per-run availability recheck failed — the gate no longer passes,
     /// for the reason it names.
     case unavailable(AgentAvailability.Reason)
+
+    /// The one session-failure copy, shared by the Siri dialog and the
+    /// in-app chat's failed turns — one wording, one source of truth.
+    /// The typed asset-unavailable case gets the retry-oriented wording:
+    /// the gate passed when the run was accepted but the on-device model
+    /// asset was missing at generation time — a state that resolves on
+    /// its own, not a request the agent misunderstood.
+    public static func failureMessage(for error: Error) -> String {
+        if case AgentRunError.assetUnavailable = error {
+            return "The on-device model isn't ready yet — try again in a few minutes."
+        }
+        return "Niles couldn't complete that request: \(error.localizedDescription)"
+    }
 }
 
 #if canImport(FoundationModels)

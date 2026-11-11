@@ -137,7 +137,7 @@ final class InMemoryNilesStore: DashboardViewModel, QueueViewModel, HomeGraphVie
     var agentUsage = AgentSessionUsage()
     // MARK: ChatViewModel — transcript storage; the send path lives in
     // ChatViewModel.swift as the presentational fixture.
-    private(set) var entries: [ChatEntry] = []
+    private(set) var entries: [ConversationEntry] = []
     private(set) var isChatRunInFlight = false
     private(set) var pairingCode: String?
     private(set) var codeExpiresAt: Date?
@@ -158,8 +158,8 @@ final class InMemoryNilesStore: DashboardViewModel, QueueViewModel, HomeGraphVie
     /// without the agent core.
     func send(_ text: String) async {
         guard !isChatRunInFlight else { return }
-        entries.append(ChatEntry(id: UUID(), role: .user, text: text))
-        let pending = ChatEntry(id: UUID(), role: .agent, text: "", state: .running)
+        entries.append(ConversationEntry(id: UUID(), role: .user, text: text))
+        let pending = ConversationEntry(id: UUID(), role: .agent, text: "", state: .running)
         entries.append(pending)
         isChatRunInFlight = true
         defer { isChatRunInFlight = false }
@@ -176,7 +176,7 @@ final class InMemoryNilesStore: DashboardViewModel, QueueViewModel, HomeGraphVie
             context: []
         )
         proposals.append(proposal)
-        ChatTranscript.resolve(pending.id, in: &entries, result: AgentRunResult(
+        ConversationTranscript.resolve(pending.id, in: &entries, result: AgentRunResult(
             summary: "I found the Living Room and staged a trigger that sets its lights to 40% at 8:00 PM. Review it in the Queue.",
             stagedProposalIds: [proposal.id]
         ))

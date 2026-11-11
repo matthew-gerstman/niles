@@ -1,19 +1,20 @@
 import Foundation
 
-/// Bounded conversation history for in-app chat requests (spec
-/// art_PFPlXrMj). Follow-ups like "the office ones" only resolve when the
-/// agent sees the turn that introduced the referent, so each chat send
-/// composes the recent completed transcript into the request string. A
-/// fresh app launch starts a new window; nothing persists across sessions.
-enum ChatContext {
+/// Bounded conversation history for agent requests (spec art_PFPlXrMj).
+/// Follow-ups like "the office ones" only resolve when the agent sees the
+/// turn that introduced the referent, so each send composes the recent
+/// completed transcript into the request string. A fresh launch starts a
+/// new window; nothing persists across sessions. Shared by the in-app chat
+/// and remote MCP sessions so both surfaces compose history identically.
+public enum ConversationContext {
     /// Composes `current` with prior transcript rows (oldest first) into a
     /// single request string. Returns nil when there is no history — the
     /// caller then sends the raw text unchanged. `history` rows count
     /// against the budget and are trimmed oldest-first; `current` is never
     /// trimmed.
-    static func compose(
+    public static func compose(
         current: String,
-        history: [(role: ChatEntry.Role, text: String)],
+        history: [(role: ConversationEntry.Role, text: String)],
         maxMessages: Int = 6,
         maxChars: Int = 1200
     ) -> String? {
@@ -34,7 +35,7 @@ enum ChatContext {
         """
     }
 
-    private static func roleName(_ role: ChatEntry.Role) -> String {
+    private static func roleName(_ role: ConversationEntry.Role) -> String {
         switch role {
         case .user: "User"
         case .agent: "Niles"
