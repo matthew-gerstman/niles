@@ -590,26 +590,38 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
         agentRunner != nil && !isChatRunInFlight
     }
 
-    /// One message, one `run(_:)` — identical to Siri. The user row lands
-    /// optimistically; the agent row runs until the summary resolves (and
-    /// staged ids ride the result verbatim) or the session throws, which
-    /// renders a failed turn and re-enables the composer. Concurrent sends
-    /// are ignored: `canSend` is false from before the first await.
+    /// One message, one `run(_:)` — identical to Siri, except chat composes
+    /// a bounded window of completed transcript rows into the request
+    /// (ChatContext). The user row lands optimistically; the agent row runs
+    /// until the summary resolves (and staged ids ride the result verbatim)
+    /// or the session throws, which renders a failed turn and re-enables
+    /// the composer. Concurrent sends are ignored: `canSend` is false from
+    /// before the first await.
     func send(_ text: String) async {
         guard canSend, let runner = agentRunner else { return }
+        // In-flight and failed rows say nothing about the conversation's
+        // state, and staged-proposal ids live in the tools, not the
+        // transcript — only completed, non-empty rows compose.
+        let request = ChatContext.compose(
+            current: text,
+            history: entries
+                .filter { $0.state == .done && !$0.text.isEmpty }
+                .map { ($0.role, $0.text) }
+        ) ?? text
         // Entry-point trace for in-app chat: the shared run trace continues
-        // in AgentService (and the dispatcher) once the run starts.
+        // in AgentService (and the dispatcher) once the run starts. The
+        // composed request is what the agent receives — log that.
         AgentRunTrace.logger.info(
-            "Ask Niles run start: entry=in-app chat request: \(AgentRunTrace.truncated(text, to: 500), privacy: .public)"
+            "Ask Niles run start: entry=in-app chat request: \(AgentRunTrace.truncated(request, to: 500), privacy: .public)"
         )
-        await AgentRunTraceStore.shared.recordRunStart(entryPoint: "In-App Chat", request: text)
+        await AgentRunTraceStore.shared.recordRunStart(entryPoint: "In-App Chat", request: request)
         entries.append(ChatEntry(id: UUID(), role: .user, text: text))
         let pending = ChatEntry(id: UUID(), role: .agent, text: "", state: .running)
         entries.append(pending)
         isChatRunInFlight = true
         defer { isChatRunInFlight = false }
         do {
-            let result = try await runner.run(text)
+            let result = try await runner.run(request)
             ChatTranscript.resolve(pending.id, in: &entries, result: result)
         } catch {
             ChatTranscript.fail(pending.id, in: &entries, with: error)
