@@ -694,6 +694,38 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
             guard let id = await stage(createRoomPlan()) else { return }
             await approveAndWait(id)
 
+        case "evidence":
+            // Read-back QA: friendly names in claims and observations, one
+            // unconfirmed check, and a vanished object falling back to its
+            // raw id with a not-found explanation. The batch adds a room,
+            // updates the Downstairs zone, then deletes that zone — so the
+            // zone update's read-back runs after the delete removed it.
+            _ = await stage(Plan(
+                tool: "update_zone",
+                title: "Create Studio, fill Downstairs, delete the zone",
+                summary: "Adds room Studio, moves Office into Downstairs, then deletes the zone.",
+                isDestructive: true,
+                operations: [
+                    .addRoom(homeId: "home-1", name: "Studio"),
+                    .setZoneRooms(homeId: "home-1", zoneId: "zone-1", addRoomIds: ["room-3"], removeRoomIds: []),
+                    .removeZone(homeId: "home-1", zoneId: "zone-1"),
+                ],
+                entries: [
+                    .init(object: ProposalObjectRef(kind: .room, id: "", name: "Studio"), op: .create, before: nil, after: "Studio"),
+                    .init(object: ProposalObjectRef(kind: .zone, id: "zone-1", name: "Downstairs"), op: .addMembers, before: nil, after: "Office"),
+                    .init(object: ProposalObjectRef(kind: .zone, id: "zone-1", name: "Downstairs"), op: .delete, before: "Downstairs", after: nil),
+                ],
+                card: [
+                    .init(.add, "Add room Studio"),
+                    .init(.plain, "Move Office into zone Downstairs"),
+                    .init(.remove, "Delete zone Downstairs"),
+                ]
+            ))
+            let evidenceProposalId = pendingProposals.first { $0.tool == "update_zone" }?.id
+            if let evidenceProposalId {
+                await approveAndWait(evidenceProposalId)
+            }
+
         case "conflict":
             guard let id = await stage(createRoomPlan()) else { return }
             await approveAndWait(id)

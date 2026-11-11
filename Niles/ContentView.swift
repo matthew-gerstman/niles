@@ -30,6 +30,12 @@ struct ContentView: View {
         }
         return nil
     }()
+    /// Screenshot hook: `-UIProposalDetail <id>` presents that proposal's
+    /// detail sheet directly — per-proposal captures don't need UI
+    /// automation (same family as `-UITabSelect`). Fixture ids are random,
+    /// so a tool name also matches, preferring a proposal that already has
+    /// read-back evidence. No-op with no match.
+    @State private var fixtureDetailProposal: NilesProposal?
 
     enum NilesTab: String, CaseIterable, Identifiable {
         case home, activity, niles
@@ -91,6 +97,20 @@ struct ContentView: View {
             store.start()
             AgentGate.toggleFixtureIfRequested()
             await store.seedQueueFixtureIfRequested()
+            // Screenshot hook: open one proposal's detail sheet directly.
+            let args = ProcessInfo.processInfo.arguments
+            if let i = args.firstIndex(of: "-UIProposalDetail"), i + 1 < args.count {
+                let target = args[i + 1]
+                fixtureDetailProposal = store.proposals.first { $0.id == target }
+                    ?? store.proposals.first { $0.tool == target && !$0.evidence.isEmpty }
+                    ?? store.proposals.first { !$0.evidence.isEmpty }
+                    // Pendings have no evidence yet; only reached when no
+                    // executed proposal matches, so executed stays preferred.
+                    ?? store.proposals.first { $0.tool == target }
+            }
+        }
+        .sheet(item: $fixtureDetailProposal) { proposal in
+            ProposalDetailSheet(proposal: proposal, undoState: store.undoStates[proposal.id])
         }
         // Deep link from OpenQueueIntent while the app is already running.
         .onChange(of: navigation.queueSelectionPending) { _, pending in
