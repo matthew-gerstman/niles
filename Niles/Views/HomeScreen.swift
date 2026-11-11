@@ -20,6 +20,10 @@ struct HomeScreen: View {
     @State private var showEmptyExplainer = false
     /// The paired agent whose revoke confirmation is showing, if any.
     @State private var pendingRevoke: PairedAgentRow?
+    /// The proposal whose deny confirmation is showing, if any. Owned here —
+    /// not by the row — because a full-swipe destructive action tears the
+    /// row's own state down before a row-local dialog could present.
+    @State private var pendingDeny: NilesProposal?
     /// Brief highlight of the Queue section when a deep link lands on it.
     @State private var queueHighlight = false
 
@@ -68,6 +72,21 @@ struct HomeScreen: View {
             } message: {
                 Text("The agent will immediately lose access to this home. Its live session closes and it cannot reconnect without pairing again.")
             }
+            .confirmationDialog(
+                denyTitle,
+                isPresented: Binding(get: { pendingDeny != nil }, set: { if !$0 { pendingDeny = nil } }),
+                titleVisibility: .visible
+            ) {
+                Button("Deny", role: .destructive) {
+                    if let proposal = pendingDeny {
+                        model.deny(proposal.id)
+                    }
+                    pendingDeny = nil
+                }
+                Button("Cancel", role: .cancel) { pendingDeny = nil }
+            } message: {
+                Text("Nothing is applied and the proposal cannot be recalled by the agent. It can stage the change again.")
+            }
             .sheet(item: $openDetail) { snapshot in
                 // Re-read from the model so the sheet reflects decisions made on the row.
                 if let proposal = model.proposals.first(where: { $0.id == snapshot.id }) {
@@ -91,9 +110,11 @@ struct HomeScreen: View {
                 emptyQueueState
             } else {
                 ForEach(model.proposals) { proposal in
-                    QueueListRow(proposal: proposal, model: model) {
-                        openDetail = proposal
-                    }
+                    QueueListRow(
+                        proposal: proposal, model: model,
+                        onOpen: { openDetail = proposal },
+                        onRequestDeny: { pendingDeny = $0 }
+                    )
                 }
             }
         } header: {
@@ -260,6 +281,11 @@ struct HomeScreen: View {
     private var revokeTitle: String {
         guard let name = pendingRevoke?.name else { return "" }
         return "Revoke \(name)?"
+    }
+
+    private var denyTitle: String {
+        guard let proposal = pendingDeny else { return "" }
+        return "Deny “\(proposal.title)”?"
     }
 }
 

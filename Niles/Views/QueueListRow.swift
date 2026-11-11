@@ -16,8 +16,10 @@ struct QueueListRow: View {
     /// Opens the proposal's detail sheet — the row itself never decides
     /// where the detail lives, so the Home tab can present it as its own.
     let onOpen: () -> Void
-    /// The proposal whose deny confirmation is showing, if any.
-    @State private var pendingDeny: NilesProposal?
+    /// Requests the deny confirmation. The dialog is owned by the enclosing
+    /// screen: a full-swipe destructive action tears the row down, so a
+    /// row-local dialog would be destroyed before it could present.
+    let onRequestDeny: (NilesProposal) -> Void
 
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
@@ -49,26 +51,6 @@ struct QueueListRow: View {
         .swipeActions(edge: .leading, allowsFullSwipe: proposal.isPending) {
             leadingActions(for: proposal)
         }
-        // A decisive deny flick must never act by itself — full-swipe deny is
-        // easy to fat-finger — so every deny routes through this dialog.
-        .confirmationDialog(
-            "Deny “\(pendingDeny?.title ?? "")”?",
-            isPresented: Binding(
-                get: { pendingDeny != nil },
-                set: { if !$0 { pendingDeny = nil } }
-            ),
-            titleVisibility: .visible
-        ) {
-            Button("Deny", role: .destructive) {
-                if let proposal = pendingDeny {
-                    model.deny(proposal.id)
-                }
-                pendingDeny = nil
-            }
-            Button("Cancel", role: .cancel) { pendingDeny = nil }
-        } message: {
-            Text("Nothing is applied and the proposal cannot be recalled by the agent. It can stage the change again.")
-        }
     }
 
     // MARK: - Swipes
@@ -82,7 +64,7 @@ struct QueueListRow: View {
         let undoState = model.undoStates[proposal.id]
         if proposal.isPending {
             Button(role: .destructive) {
-                pendingDeny = proposal
+                onRequestDeny(proposal)
             } label: {
                 Label("Deny", systemImage: "xmark.circle")
             }
