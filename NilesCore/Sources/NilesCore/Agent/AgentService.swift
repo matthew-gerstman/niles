@@ -47,6 +47,23 @@ public protocol AgentRunning: Sendable {
     /// session itself fails; every tool-level failure is in-band in the
     /// result's summary (the registries never throw).
     func run(_ request: String) async throws -> AgentRunResult
+    /// The same run, attributed to an entry point — the single-flight
+    /// guard's busy error names it (spec art_rqDQF7Ic §2). Conformers that
+    /// don't track attribution fall back to the unattributed run.
+    func run(_ request: String, entryPoint: String) async throws -> AgentRunResult
+    /// The entry point with a run in flight, if any. Surfaces that answer
+    /// a submit in-band (the remote client's `agent_chat`) read this to
+    /// refuse politely instead of racing the run guard.
+    var activeEntryPoint: String? { get async }
+}
+
+extension AgentRunning {
+    public func run(_ request: String, entryPoint: String) async throws -> AgentRunResult {
+        try await run(request)
+    }
+    public var activeEntryPoint: String? {
+        get async { nil }
+    }
 }
 
 #if canImport(FoundationModels)
@@ -60,6 +77,16 @@ public protocol AgentRunning: Sendable {
 public actor AgentService: AgentRunning {
 
     public private(set) var usage = AgentSessionUsage()
+
+    /// The entry point whose run is in flight — the single-flight guard's
+    /// error names it, and in-band refusers read it before submitting.
+    public private(set) var activeEntryPoint: String?
+
+    /// App-wide single-flight state (spec art_rqDQF7Ic §2): one run at a
+    /// time across Siri, in-app chat, and remote MCP sessions, so rounds
+    /// never interleave in one trace. Actor isolation makes the
+    /// check-and-set atomic.
+    private var runInFlight = false
 
     private let store: ProposalStore
 
@@ -81,6 +108,28 @@ public actor AgentService: AgentRunning {
     }
 
     public func run(_ request: String) async throws -> AgentRunResult {
+        try await run(request, entryPoint: "Unattributed")
+    }
+
+    /// The single-flight entry: refuse before running when any entry point
+    /// holds a run. The guard lives here — where Siri, chat, and the remote
+    /// store all converge — so no surface can interleave rounds in a trace.
+    public func run(_ request: String, entryPoint: String) async throws -> AgentRunResult {
+        guard !runInFlight else {
+            throw AgentRunError.busy(activeEntryPoint ?? "another entry point")
+        }
+        runInFlight = true
+        activeEntryPoint = entryPoint
+        defer {
+            runInFlight = false
+            activeEntryPoint = nil
+        }
+        return try await runChecked(request)
+    }
+
+    /// The run itself, unchanged by single-flight: availability recheck,
+    /// trace logging, generation, run-end attribution.
+    private func runChecked(_ request: String) async throws -> AgentRunResult {
         // Per-run recheck: feature entry evaluated the gate once, but the
         // on-device model's readiness changes at system level between runs
         // (settings, OS update, asset download state). Re-evaluate here —

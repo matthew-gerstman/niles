@@ -5,18 +5,21 @@ import Foundation
 /// dialog — plus the ids of the proposals that run staged. Shared by the
 /// in-app chat and remote MCP sessions so both surfaces compose history
 /// through one code path.
-public struct ConversationEntry: Identifiable, Equatable {
-    public enum Role { case user, agent }
+public struct ConversationEntry: Identifiable, Equatable, Sendable {
+    public enum Role: Sendable { case user, agent }
 
     /// A turn's lifecycle: the agent row runs while the request is in
     /// flight, resolves with the summary, or fails with the surfaced error.
-    public enum State: Equatable {
+    public enum State: Equatable, Sendable {
         case running
         case done
         case failed(String)
     }
 
     public let id: UUID
+    /// When the row was created — the transcript tool interleaves the
+    /// in-app and remote conversations by it (spec art_rqDQF7Ic §2).
+    public let timestamp: Date
     public let role: Role
     public var text: String
     public var stagedProposalIds: [String] = []
@@ -24,12 +27,14 @@ public struct ConversationEntry: Identifiable, Equatable {
 
     public init(
         id: UUID,
+        timestamp: Date = Date(),
         role: Role,
         text: String,
         stagedProposalIds: [String] = [],
         state: State = .done
     ) {
         self.id = id
+        self.timestamp = timestamp
         self.role = role
         self.text = text
         self.stagedProposalIds = stagedProposalIds

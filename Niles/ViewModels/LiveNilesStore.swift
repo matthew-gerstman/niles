@@ -174,6 +174,14 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
                   let proposalStore = coordinator.proposalStore {
             self.agentRunner = AgentService(store: proposalStore)
         }
+        // The remote-conversation surface (spec art_rqDQF7Ic §2) reads this
+        // store's runner and in-app transcript through the coordinator's
+        // factory wiring. Weak self: the closures run per tool call, long
+        // after init, and the shared store lives for the process anyway.
+        coordinator.setConversationSurfaceProviders(
+            runnerProvider: { [weak self] in await self?.agentRunner },
+            inAppTranscriptProvider: { [weak self] in await self?.entries ?? [] }
+        )
     }
 
     /// The one availability check, at the one feature entry this app has.
@@ -621,7 +629,7 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
         isChatRunInFlight = true
         defer { isChatRunInFlight = false }
         do {
-            let result = try await runner.run(request)
+            let result = try await runner.run(request, entryPoint: "In-App Chat")
             ConversationTranscript.resolve(pending.id, in: &entries, result: result)
         } catch {
             ConversationTranscript.fail(pending.id, in: &entries, with: error)

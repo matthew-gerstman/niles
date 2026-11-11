@@ -97,7 +97,13 @@ public final class AgentRunTraceStore {
     /// Records a run start and opens a new run for subsequent emissions.
     /// Called by the entry-point layers, where Siri vs in-app chat is known.
     public func recordRunStart(entryPoint: String, request: String) {
-        let runID = String(UUID().uuidString.prefix(8)).lowercased()
+        recordRunStart(runID: String(UUID().uuidString.prefix(8)).lowercased(), entryPoint: entryPoint, request: request)
+    }
+
+    /// Records a run start with a caller-supplied run id — the remote
+    /// conversation surface returns this id to its client, and `run_trace`
+    /// deep-reads by it, so the ids must match (spec art_rqDQF7Ic §2).
+    public func recordRunStart(runID: String, entryPoint: String, request: String) {
         activeRun = (runID, entryPoint)
         append(kind: .runStart, entryPoint: entryPoint, summary: request)
     }
