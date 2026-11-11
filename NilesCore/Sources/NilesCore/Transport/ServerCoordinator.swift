@@ -37,6 +37,13 @@ public final class ServerCoordinator {
     /// verifying on the wire hit the same code.
     public let pairingCodes: PairingCodeManager
 
+    /// Providers for the remote-conversation surface (spec art_rqDQF7Ic §2),
+    /// wired by the app layer once it knows its runner and transcript. The
+    /// runner exists only below the iOS 27 gate, and the store that holds it
+    /// is built after this coordinator — hence a setter, not an init param.
+    private var conversationRunnerProvider: (@Sendable () async -> (any AgentRunning)?)?
+    private var conversationTranscriptProvider: (@Sendable () async -> [ConversationEntry])?
+
     nonisolated public init(
         port: UInt16 = LANServer.defaultPort,
         tokenStore: any TokenStoring = KeychainTokenStore(),
@@ -47,6 +54,17 @@ public final class ServerCoordinator {
         self.tokenStore = tokenStore
         self.pairingCodes = pairingCodes
         self.proposalStore = homeKitService.map { ProposalStore(homeKit: $0) }
+    }
+
+    /// Wires the remote-conversation providers before the first `start()`.
+    /// Idempotent; later calls replace earlier ones, but the store wiring
+    /// happens once at init so in practice there is exactly one call.
+    public func setConversationSurfaceProviders(
+        runnerProvider: @escaping @Sendable () async -> (any AgentRunning)?,
+        inAppTranscriptProvider: @escaping @Sendable () async -> [ConversationEntry]
+    ) {
+        conversationRunnerProvider = runnerProvider
+        conversationTranscriptProvider = inAppTranscriptProvider
     }
 
     /// Starts serving if not already running; on failure records `.failed` with the
@@ -71,7 +89,11 @@ public final class ServerCoordinator {
             }
             if let proposalStore {
                 gateway = MCPGateway(
-                    serverFactory: NilesServerFactory.makeFactory(store: proposalStore),
+                    serverFactory: NilesServerFactory.makeFactory(
+                        store: proposalStore,
+                        runnerProvider: conversationRunnerProvider,
+                        inAppTranscriptProvider: conversationTranscriptProvider
+                    ),
                     validationPipeline: NilesValidationPipeline(tokenProvider: tokenProvider),
                     auth: BearerTokenAuthMiddleware(tokenProvider: tokenProvider),
                     tokenIdentity: tokenIdentity
