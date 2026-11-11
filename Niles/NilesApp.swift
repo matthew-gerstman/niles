@@ -22,6 +22,9 @@ struct NilesApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView(store: store)
+                // Grappa, the app's one brand voice: the global tint. Every
+                // tinted control, accent, and selected state resolves to it.
+                .tint(Color("accent"))
                 // First launch: scenePhase is already .active, so start here…
                 .task { await store.handleScene(isActive: true) }
                 // …and follow transitions afterwards (app switcher, background).

@@ -199,13 +199,6 @@ struct HomeSection: Identifiable, Hashable {
     let rows: [HomeRow]
 }
 
-/// A `key: value` line on the dashboard or pairing connection card.
-struct KeyValueRow: Identifiable, Hashable {
-    var id: String { key }
-    let key: String
-    let value: String
-}
-
 /// Relative timestamps like "2 min ago" / "now", deterministic and pure so
 /// previews and tests stay stable.
 enum RelativeTime {
