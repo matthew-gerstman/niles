@@ -55,7 +55,7 @@ struct AskNilesRouter {
             return Self.unavailableOutcome
         }
         do {
-            let result = try await runner.run(prompt)
+            let result = try await runner.run(prompt, entryPoint: "Siri")
             // The agent's summary already reports the staged outcome — titles,
             // ids, and anything left undone — so the dialog surfaces it
             // verbatim (spec: the dialog reports the outcome, never a

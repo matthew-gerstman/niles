@@ -19,6 +19,12 @@ public enum AgentRunError: Error, Equatable, Sendable {
     /// The per-run availability recheck failed — the gate no longer passes,
     /// for the reason it names.
     case unavailable(AgentAvailability.Reason)
+    /// A run is already in flight from the named entry point ("Siri",
+    /// "In-App Chat", "Remote MCP") — the app-wide single-flight guard
+    /// (spec art_rqDQF7Ic §2). Each surface renders it in its own idiom:
+    /// the composer re-enables with a failed turn, the Siri dialog speaks
+    /// it, the remote client gets an in-band isError result.
+    case busy(String)
 
     /// The one session-failure copy, shared by the Siri dialog and the
     /// in-app chat's failed turns — one wording, one source of truth.
@@ -29,6 +35,9 @@ public enum AgentRunError: Error, Equatable, Sendable {
     public static func failureMessage(for error: Error) -> String {
         if case AgentRunError.assetUnavailable = error {
             return "The on-device model isn't ready yet — try again in a few minutes."
+        }
+        if case AgentRunError.busy(let entryPoint) = error {
+            return "Niles is already handling a request from \(entryPoint). Wait for that to finish, then try again."
         }
         return "Niles couldn't complete that request: \(error.localizedDescription)"
     }
