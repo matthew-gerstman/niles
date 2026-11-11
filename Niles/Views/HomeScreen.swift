@@ -21,6 +21,9 @@ struct HomeScreen: View {
     @State private var showEmptyExplainer = false
     /// The paired agent whose revoke confirmation is showing, if any.
     @State private var pendingRevoke: PairedAgentRow?
+    /// The agent feature gate, bound live for the Settings toggle — the same
+    /// store ContentView's tab row reads, so a toggle lands without relaunch.
+    @AppStorage(AgentGate.storageKey) private var agentEnabled = AgentGate.bundledDefault
     /// Brief highlight of the Queue section when a deep link lands on it.
     @State private var queueHighlight = false
 
@@ -263,13 +266,16 @@ struct HomeScreen: View {
         }
     }
 
-    /// The on-device agent (spec art_VrC0iUUA §Availability gate): what the
-    /// gate decided, and — when it passed — session usage. No run entry
-    /// lives here; requests arrive via Siri, and this surface states
-    /// whether the agent can run at all. When the gate fails, the footer
-    /// names the exact reason and no row invites a request.
+    /// The on-device agent (spec art_VrC0iUUA §Availability gate): the
+    /// feature toggle first — the whole agent ships dark in Release and this
+    /// is where it turns on — then what the gate decided, and — when it
+    /// passed — session usage. No run entry lives here; requests arrive via
+    /// Siri, and this surface states whether the agent can run at all. When
+    /// the gate fails, the footer names the exact reason and no row invites
+    /// a request.
     private var agentSection: some View {
         Section {
+            Toggle("Enabled", isOn: $agentEnabled)
             LabeledContent("Status", value: Self.agentStatusLabel(model.agentAvailability))
             if case .available = model.agentAvailability {
                 LabeledContent("Requests", value: model.agentUsage.requestCount.formatted())
