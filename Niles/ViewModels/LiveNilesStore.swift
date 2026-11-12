@@ -53,6 +53,10 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
     /// round-trip is still running. Set synchronously in the tap handler,
     /// cleared when the pipeline settles (or the decision fails).
     private(set) var decisionsInFlight: [String: ProposalDecision] = [:]
+    /// Per-row failures from each proposal's most recent swipe decision,
+    /// surfaced as a row-level note (the row is back in the Queue) until
+    /// the next attempt or dismissal — never only a log line.
+    private(set) var decisionFailures: [String: String] = [:]
     /// The activity timeline as of the last refresh, oldest first.
     private(set) var activityEvents: [ActivityEvent] = []
     /// True from the Approve-all tap until the whole batch settles — the
@@ -256,6 +260,10 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
         Task { await denyAndWait(id) }
     }
 
+    func clearDecisionFailure(_ id: String) {
+        decisionFailures[id] = nil
+    }
+
     /// Awaitable decision path — what the button handlers spawn; tests and
     /// this store's own tasks await it directly.
     func approveAndWait(_ id: String) async {
@@ -274,6 +282,8 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
     private func beginDecision(_ decision: ProposalDecision, id: String) {
         guard proposals.first(where: { $0.id == id })?.isPending == true else { return }
         decisionsInFlight[id] = decision
+        // A fresh attempt clears the last failure, like undoFailures.
+        decisionFailures[id] = nil
         let haptic = UINotificationFeedbackGenerator()
         haptic.prepare()
         haptic.notificationOccurred(decision == .approving ? .success : .warning)
@@ -283,7 +293,12 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
         guard let store = coordinator.proposalStore else {
             let verb = approve ? "approve" : "deny"
             logger.error("Cannot \(verb, privacy: .public) \(id, privacy: .public): no proposal store")
+            // The decision did not land — hand the row back to the Queue
+            // with a visible failure note, not only the log line.
             decisionsInFlight[id] = nil
+            decisionFailures[id] = Self.decisionFailureMessage(
+                approve: approve, reason: "the proposal store is unavailable"
+            )
             return
         }
         do {
@@ -301,15 +316,27 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
             )
         } catch {
             // Terminal-state violations and unknown ids are the expected
-            // failures here; the card keeps its staged state either way.
+            // failures here. The decision did not land: drop the chip,
+            // surface the failure as a row-level note (the swipe re-enables
+            // and the row returns to the Queue), and let the next refresh
+            // render the store's real state.
             logger.error("Decision failed for \(id): \(String(describing: error))")
-            // The decision did not land — drop the optimistic chip so the
-            // card reverts to the store's real state at the next refresh.
             decisionsInFlight[id] = nil
+            decisionFailures[id] = Self.decisionFailureMessage(
+                approve: approve, reason: String(describing: error)
+            )
         }
         await refresh()
         // Settled either way: the refreshed state is authoritative.
         decisionsInFlight[id] = nil
+    }
+
+    /// Plain language for a failed decision tap — the row-level note. Pure,
+    /// so the wording is pin-able. The row is back in the Queue either way;
+    /// the wording never claims what did or didn't reach the home.
+    static func decisionFailureMessage(approve: Bool, reason: String) -> String {
+        let verb = approve ? "Approve" : "Deny"
+        return "\(verb) failed — the proposal is back in the queue. (\(reason))"
     }
 
     // MARK: - Undo and approve-all
@@ -730,6 +757,25 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
             } catch {
                 logger.error("Conflict fixture diverge failed: \(String(describing: error))")
             }
+
+        case "in_flight":
+            // Screenshot fixture: a swipe decision frozen mid-pipeline — the
+            // row is out of the Queue and renders on Activity as processing
+            // (Deciding…/Executing…). The chip is planted directly because
+            // the real pipeline settles in milliseconds on the fake home,
+            // too fast to capture; it renders the exact state a real swipe
+            // shows while the pipeline runs.
+            guard let id = await stage(createRoomPlan()) else { return }
+            decisionsInFlight[id] = .approving
+
+        case "decision_failed":
+            // Screenshot fixture: a failed decision — the row is back in
+            // the Queue with its typed error note and re-enabled swipes.
+            // Planted like in_flight; the wording is the real one.
+            guard let id = await stage(createRoomPlan()) else { return }
+            decisionFailures[id] = Self.decisionFailureMessage(
+                approve: true, reason: "the proposal was already decided"
+            )
 
         default:
             logger.error("Unknown -UISeedQueue fixture: \(fixture, privacy: .public)")

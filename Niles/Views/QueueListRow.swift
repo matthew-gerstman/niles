@@ -32,6 +32,7 @@ struct QueueListRow: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                 metadataLine(for: proposal)
+                failureNote(for: proposal)
             }
             Spacer()
             VStack(alignment: .trailing, spacing: 4) {
@@ -129,6 +130,23 @@ struct QueueListRow: View {
                         .foregroundStyle(.secondary)
                 }
             }
+        }
+    }
+
+    /// A failed decision's row-level note (tap to dismiss): the failure is
+    /// visible on the row itself, not only in the log — and the row is back
+    /// in the Queue with its swipe re-enabled.
+    @ViewBuilder
+    private func failureNote(for proposal: NilesProposal) -> some View {
+        if let failure = model.decisionFailures[proposal.id] {
+            Button {
+                model.clearDecisionFailure(proposal.id)
+            } label: {
+                Label(failure, systemImage: "exclamationmark.octagon.fill")
+                    .font(.caption)
+                    .foregroundStyle(Color.red)
+            }
+            .buttonStyle(.plain)
         }
     }
 

@@ -20,6 +20,9 @@ protocol ActivityViewModel: Observable {
     /// The persistent timeline, oldest first (append order).
     var activityEvents: [ActivityEvent] { get }
     var proposals: [NilesProposal] { get }
+    /// Proposal id -> decision in flight; an entry renders that proposal's
+    /// group as a processing row (Deciding…/Executing…) — decided-in-progress.
+    var decisionsInFlight: [String: ProposalDecision] { get }
     /// Proposal id -> the failure from that proposal's most recent Undo tap,
     /// surfaced inline until the next attempt or dismissal.
     var undoFailures: [String: ActivityUndoFailure] { get }
@@ -36,8 +39,11 @@ enum ActivityTimeline {
 
     /// The verdict chip an event renders as. A decided event inherits its
     /// decision; an executed one is a failure when execution recorded one.
+    /// `.deciding` / `.executing` never come from an event — they overlay a
+    /// group whose decision is still in flight (see `groups`).
     enum Verdict: Equatable {
         case staged, approved, denied, executed, failed, expired, undone
+        case deciding, executing
     }
 
     /// One rendered timeline entry.
@@ -127,7 +133,16 @@ enum ActivityTimeline {
     /// Collapses the per-event timeline into one group per proposal, newest
     /// proposal first (by its most recent event). A pure view-layer grouping
     /// over the same persisted events `rows` renders individually.
-    static func groups(events: [ActivityEvent], proposals: [NilesProposal]) -> [Group] {
+    ///
+    /// `decisionsInFlight` overlays the processing state: a swipe decision
+    /// whose pipeline is still running renders as Deciding…/Executing… —
+    /// decided-in-progress — instead of the proposal's last settled event.
+    static func groups(
+        events: [ActivityEvent],
+        proposals: [NilesProposal],
+        decisionsInFlight: [String: ProposalDecision] = [:],
+        now: Date = Date()
+    ) -> [Group] {
         let rows = Self.rows(events: events, proposals: proposals)
         var order: [String] = []
         var byProposal: [String: [Row]] = [:]
@@ -136,18 +151,34 @@ enum ActivityTimeline {
             if byProposal[id] == nil { order.append(id) }
             byProposal[id, default: []].append(row)
         }
+        // An in-flight decision always renders even if the log holds no
+        // event for the proposal yet — a processing row must never vanish
+        // between the swipe and the pipeline's first event.
+        for id in decisionsInFlight.keys where byProposal[id] == nil {
+            order.append(id)
+            byProposal[id] = []
+        }
         return order.map { id in
             let eventRows = byProposal[id]!
-            let newest = eventRows[0]
-            let tool = proposals.first { $0.id == id }?.tool
+            let newest = eventRows.first
+            let proposal = proposals.first { $0.id == id }
+            let tool = proposal?.tool
             // The most recent execution carries the read-back that counts.
             let executedRow = eventRows.first { $0.event.kind == .executed }
             let undoneRow = eventRows.first { $0.event.kind == .undone }
+            let state: Verdict
+            if let decision = decisionsInFlight[id] {
+                // Approve runs the execution pipeline; deny is a decision
+                // alone — hence the two processing names.
+                state = decision == .approving ? .executing : .deciding
+            } else {
+                state = mergedVerdict(eventRows.map(\.verdict))
+            }
             return Group(
                 proposalId: id,
-                title: newest.event.proposalTitle,
-                state: mergedVerdict(eventRows.map(\.verdict)),
-                latestAt: newest.event.at,
+                title: newest?.event.proposalTitle ?? proposal?.title ?? id,
+                state: state,
+                latestAt: newest?.event.at ?? now,
                 events: eventRows.map { EventEntry(event: $0.event, verdict: $0.verdict) },
                 toolName: tool,
                 undoAvailable: executedRow.map {
