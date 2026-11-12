@@ -623,13 +623,21 @@ enum DeviceWriteResolver {
 
     private static func resolveAction(_ spec: SceneActionSpec, in home: DeviceHomeView.Home) throws -> ResolvedAction {
         let (accessory, service, characteristic) = try resolveTarget(spec, in: home)
+        // The same full metadata check staging runs (kind, bounds, step,
+        // valid values) — a proposal that passes staging must execute, and
+        // one that fails staging must fail everywhere.
+        if let why = valueViolation(spec.value, kind: characteristic.kind, metadata: characteristic.metadata) {
+            throw HomeKitWriteError.invalidOperation(
+                "Characteristic \(spec.characteristic) on “\(accessory.name)” cannot take \(spec.value.rendered): \(why)."
+            )
+        }
         return ResolvedAction(
             accessoryId: accessory.id,
             serviceId: service.id,
             characteristicId: characteristic.id,
             characteristicType: characteristic.type,
             kind: characteristic.kind,
-            value: try checkedValue(spec.value, kind: characteristic.kind, characteristic: spec.characteristic)
+            value: spec.value
         )
     }
 
@@ -683,22 +691,10 @@ enum DeviceWriteResolver {
             || characteristic.name?.caseInsensitiveCompare(wanted) == .orderedSame
     }
 
-    /// Characteristic metadata decides the rendering; a mismatch between the
-    /// characteristic's kind and the agent's value is a typed error, not a
-    /// runtime HomeKit surprise.
-    private static func checkedValue(
-        _ value: HomeKitValue, kind: DeviceHomeView.ValueKind, characteristic: String
-    ) throws -> HomeKitValue {
-        guard isKindCompatible(value, kind: kind) else {
-            throw HomeKitWriteError.invalidOperation(
-                "Characteristic \(characteristic) cannot take the value \(value.rendered)."
-            )
-        }
-        return value
-    }
-
     /// Whether a value's type fits a characteristic's rendering family — one
-    /// rule for scene actions and direct writes alike.
+    /// rule for scene actions and direct writes alike. Strings that widen
+    /// into a numeric format conform after conversion (see `valueViolation`);
+    /// the kind check itself stays strict.
     static func isKindCompatible(_ value: HomeKitValue, kind: DeviceHomeView.ValueKind) -> Bool {
         switch (kind, value) {
         case (.string, .string): true
@@ -713,16 +709,35 @@ enum DeviceWriteResolver {
     /// over the device view) both run — a proposal that passes staging must
     /// execute, and one that fails staging must fail everywhere. Returns the
     /// reason the value is invalid, or nil when it fits.
+    ///
+    /// One widening applies: a numeric string for a numeric format conforms
+    /// after conversion — '30' for a brightness int writes as 30. Booleans
+    /// never widen: a string '0' is a type error, not a false (the Power
+    /// State '0' failure the Nov 12 Duo QA run caught at execution).
     static func valueViolation(
         _ value: HomeKitValue, kind: DeviceHomeView.ValueKind, metadata: HomeGraph.CharacteristicMetadata?
     ) -> String? {
         guard isKindCompatible(value, kind: kind) else {
+            if case .string(let text) = value, kind == .number {
+                // Kind .number is derived from the metadata format, so a
+                // number-kind characteristic carries a format string here;
+                // stay defensive when it does not.
+                if let format = metadata?.format, Self.isNumericFormat(format) {
+                    guard let converted = Self.numericValue(in: text) else {
+                        return "holds numbers, not the string “\(text)”"
+                    }
+                    return Self.numericViolation(converted, rendered: value.rendered, metadata: metadata)
+                }
+                if metadata?.format == "bool" {
+                    return "takes a boolean (true or false), not the string “\(text)”"
+                }
+                return "holds numbers, not the string “\(text)”"
+            }
             switch value {
             case .string(let text): return "holds numbers, not the string “\(text)”"
             case .bool, .int, .double: return "holds strings, not \(value.rendered)"
             }
         }
-        guard let metadata else { return nil }
         let numeric: Double?
         switch value {
         case .bool(let flag): numeric = flag ? 1 : 0
@@ -731,20 +746,52 @@ enum DeviceWriteResolver {
         case .string: numeric = nil
         }
         guard let numeric else { return nil }
+        return Self.numericViolation(numeric, rendered: value.rendered, metadata: metadata)
+    }
+
+    /// The numeric-constraint half of `valueViolation` — bounds, step, and
+    /// valid values — shared by the direct and the widened (converted
+    /// string) paths.
+    private static func numericViolation(
+        _ numeric: Double, rendered: String, metadata: HomeGraph.CharacteristicMetadata?
+    ) -> String? {
+        guard let metadata else { return nil }
         if let minimum = metadata.minValue, let maximum = metadata.maxValue {
             if numeric < minimum || numeric > maximum {
-                return "takes \(minimum)…\(maximum), so \(value.rendered) is out of range"
+                return "takes \(minimum)…\(maximum), so \(rendered) is out of range"
             }
         } else if let minimum = metadata.minValue, numeric < minimum {
-            return "takes at least \(minimum), so \(value.rendered) is out of range"
+            return "takes at least \(minimum), so \(rendered) is out of range"
         } else if let maximum = metadata.maxValue, numeric > maximum {
-            return "takes at most \(maximum), so \(value.rendered) is out of range"
+            return "takes at most \(maximum), so \(rendered) is out of range"
+        }
+        if let step = metadata.step, step > 0 {
+            let base = metadata.minValue ?? 0
+            let remainder = (numeric - base).truncatingRemainder(dividingBy: step)
+            let skew = min(remainder, step - remainder)
+            // Tolerance for binary-float drift on declared decimal steps.
+            if skew > 0.000_001 {
+                return "moves in steps of \(step) from \(base), so \(rendered) is not a step the characteristic accepts"
+            }
         }
         if let valid = metadata.validValues, !valid.isEmpty,
            !valid.contains(where: { Double($0) == numeric }) {
-            return "takes only \(valid.map(String.init).joined(separator: ", ")), and \(value.rendered) is not one of them"
+            return "takes only \(valid.map(String.init).joined(separator: ", ")), and \(rendered) is not one of them"
         }
         return nil
+    }
+
+    /// Whether a metadata format is a numeric (non-bool) family — the
+    /// formats a numeric string may widen into.
+    private static func isNumericFormat(_ format: String) -> Bool {
+        ["int", "float", "uint8", "uint16", "uint32", "uint64"].contains(format)
+    }
+
+    /// The number a numeric string spells, or nil when it is not a number —
+    /// the widening conversion shared by staging, resolution, and the
+    /// executor's Cocoa rendering.
+    static func numericValue(in text: String) -> Double? {
+        Double(text.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     /// Fire dates must sit on the minute boundary and recurrences must be

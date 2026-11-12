@@ -340,6 +340,16 @@ extension HomeManagerHomeKitService: HomeKitWriting {
         case (.number, .bool(let value)): .number(NSNumber(value: value))
         case (.number, .int(let value)): .number(NSNumber(value: value))
         case (.number, .double(let value)): .number(NSNumber(value: value))
+        case (.number, .string(let string)):
+            // The widened numeric string the shared check accepted at
+            // staging ('30' for a brightness int) writes as its converted
+            // number — the same conversion `DeviceWriteResolver` ran.
+            guard let converted = DeviceWriteResolver.numericValue(in: string) else {
+                throw HomeKitWriteError.invalidOperation(
+                    "Characteristic \(characteristicType) cannot take the value \(string)."
+                )
+            }
+            .number(NSNumber(value: converted))
         case (.unknown, .string(let string)): .string(string as NSString)
         case (.unknown, .bool(let value)): .number(NSNumber(value: value))
         case (.unknown, .int(let value)): .number(NSNumber(value: value))
