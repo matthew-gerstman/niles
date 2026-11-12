@@ -10,6 +10,12 @@ import NilesCore
 struct HomeScreen: View {
     var model: any DashboardViewModel & PairingViewModel & AgentStatusViewModel & QueueViewModel & HomeGraphViewModel
 
+    /// Wide-layout chat entry: when set, a trailing toolbar button on
+    /// Home's navigation bar opens the gated agent chat as a sheet (the
+    /// wide layout has no Niles tab). The tab layout passes nothing and
+    /// keeps chat on its own tab.
+    var chatEntry: (() -> Void)? = nil
+
     /// The shared navigation signal: proposal deep links from the chat open
     /// the detail sheet here, and the queue request scrolls to the Queue
     /// section (the deep link used to land on the Queue tab).
@@ -42,6 +48,15 @@ struct HomeScreen: View {
                 }
                 .listStyle(.insetGrouped)
                 .navigationTitle("Home")
+                .toolbar {
+                    if let chatEntry {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button(action: chatEntry) {
+                                Label("Niles", systemImage: "sparkles")
+                            }
+                        }
+                    }
+                }
                 .onAppear {
                     consumeScrollRequest(proxy)
                     openPendingProposalIfRequested()
