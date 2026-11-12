@@ -358,7 +358,7 @@ public struct ReadToolRegistry: Sendable {
         _ graph: HomeGraph, query: String, arguments: [String: Value]?, limit: Int
     ) -> CallTool.Result {
         Self.pagedResult(
-            searchHits(graph, query: query),
+            plainUnits(searchHits(graph, query: query)),
             arguments: arguments,
             tool: "search",
             anchorId: query,
@@ -376,6 +376,9 @@ public struct ReadToolRegistry: Sendable {
     struct SummaryProjection: Codable, Sendable, Equatable {
         var homes: [HomeOverview]
         var authorizationStatus: String?
+        /// Present only when the summary is paginated over its rooms list.
+        var nextCursor: String?
+        var note: String?
     }
 
     struct HomeOverview: Codable, Sendable, Equatable {
@@ -536,13 +539,12 @@ public struct ReadToolRegistry: Sendable {
     ) -> CallTool.Result {
         switch (kind?.lowercased(), id) {
         case (nil, nil):
-            return Self.cappedResult(
-                SummaryProjection(
-                    homes: graph.homes.map(HomeOverview.init),
-                    authorizationStatus: graph.authorizationStatus
-                ),
-                hint: "Use search and get_details with kind and id to read one object at a time."
-            )
+            // The lean summary is list-bearing (each home's rooms), so at
+            // real-home scale it pages its rooms list instead of refusing —
+            // every room stays reachable one page at a time. A summary that
+            // fits the cap comes back as a single page with no cursor,
+            // identical to an unpaginated one.
+            return Self.pagedSummary(graph, arguments: arguments, limit: limit)
         case (nil, _), (_, nil):
             return Self.errorResult("Invalid arguments: provide kind and id together, or neither.")
         case (let kindRaw?, let id?):
@@ -551,6 +553,34 @@ public struct ReadToolRegistry: Sendable {
                 return Self.errorResult("Unknown kind \(kindRaw) — use \(known).")
             }
             return Self.objectDetails(graph, kind: kind, id: id, arguments: arguments, limit: limit)
+        }
+    }
+
+    /// The lean no-argument summary. Only the first home's rooms list
+    /// pages today — it dominates the summary's size at evidenced scale;
+    /// the remaining homes' overviews stay whole.
+    private static func pagedSummary(
+        _ graph: HomeGraph, arguments: [String: Value]?, limit: Int
+    ) -> CallTool.Result {
+        let summaries = graph.homes.map(HomeOverview.init)
+        guard let primary = summaries.first else {
+            return Self.cappedResult(
+                SummaryProjection(
+                    homes: summaries, authorizationStatus: graph.authorizationStatus
+                ),
+                hint: "Use search and get_details with kind and id to read one object at a time."
+            )
+        }
+        return Self.pagedResult(
+            plainUnits(primary.rooms), arguments: arguments,
+            tool: "get_details", anchorId: "summary", listPath: "rooms", limit: limit
+        ) { slice, nextCursor, note in
+            var paged = summaries
+            paged[0].rooms = slice
+            return SummaryProjection(
+                homes: paged, authorizationStatus: graph.authorizationStatus,
+                nextCursor: nextCursor, note: note
+            )
         }
     }
 
@@ -569,7 +599,7 @@ public struct ReadToolRegistry: Sendable {
             if kind == .home, home.id == id {
                 let overview = HomeOverview(home)
                 return Self.pagedResult(
-                    overview.rooms, arguments: arguments,
+                    plainUnits(overview.rooms), arguments: arguments,
                     tool: "get_details", anchorId: anchorId, listPath: "rooms", limit: limit
                 ) { slice, nextCursor, note in
                     var paged = overview
@@ -583,7 +613,7 @@ public struct ReadToolRegistry: Sendable {
             if let room = home.rooms.first(where: { $0.id == id }), kind == .room {
                 let zone = home.zones.first { $0.roomIds.contains(room.id) }
                 return Self.pagedResult(
-                    room.accessories, arguments: arguments,
+                    room.accessories.flatMap { accessoryUnits($0) }, arguments: arguments,
                     tool: "get_details", anchorId: anchorId, listPath: "accessories", limit: limit
                 ) { slice, nextCursor, note in
                     Self.FullObject(
@@ -601,7 +631,7 @@ public struct ReadToolRegistry: Sendable {
                 let accessory = room.accessories.first(where: { $0.id == id })
             {
                 return Self.pagedResult(
-                    accessory.services, arguments: arguments,
+                    accessory.services.flatMap { serviceUnits($0) }, arguments: arguments,
                     tool: "get_details", anchorId: anchorId, listPath: "services", limit: limit
                 ) { slice, nextCursor, note in
                     Self.FullObject(
@@ -624,8 +654,8 @@ public struct ReadToolRegistry: Sendable {
             if let zone = home.zones.first(where: { $0.id == id }), kind == .zone {
                 let roomIds = Set(zone.roomIds)
                 return Self.pagedResult(
-                    home.rooms.filter { roomIds.contains($0.id) }
-                        .map { RoomRef(id: $0.id, name: $0.name) },
+                    plainUnits(home.rooms.filter { roomIds.contains($0.id) }
+                        .map { RoomRef(id: $0.id, name: $0.name) }),
                     arguments: arguments,
                     tool: "get_details", anchorId: anchorId, listPath: "rooms", limit: limit
                 ) { slice, nextCursor, note in
@@ -640,7 +670,7 @@ public struct ReadToolRegistry: Sendable {
             }
             if let scene = home.scenes.first(where: { $0.id == id }), kind == .scene {
                 return Self.pagedResult(
-                    scene.actions, arguments: arguments,
+                    plainUnits(scene.actions), arguments: arguments,
                     tool: "get_details", anchorId: anchorId, listPath: "actions", limit: limit
                 ) { slice, nextCursor, note in
                     Self.FullObject(
@@ -655,7 +685,7 @@ public struct ReadToolRegistry: Sendable {
             }
             if let group = home.serviceGroups.first(where: { $0.id == id }), kind == .group {
                 return Self.pagedResult(
-                    group.services, arguments: arguments,
+                    plainUnits(group.services), arguments: arguments,
                     tool: "get_details", anchorId: anchorId, listPath: "services", limit: limit
                 ) { slice, nextCursor, note in
                     Self.FullObject(
@@ -768,17 +798,181 @@ public struct ReadToolRegistry: Sendable {
         return .resume(offset: max(0, cursor.offset))
     }
 
-    /// Serves one page of `items` for a paginated read: validates the
-    /// caller's cursor, then returns whole items from the cursor's offset
-    /// until `limit` is reached or serializing one more item would exceed
-    /// the response cap — whichever comes first. A page is never
+    /// One paginated entry: the rendered item as it appears in the page
+    /// (whole, or one page of an item too large to serve whole) plus the
+    /// note that explains a split, when present.
+    private struct PageUnit<Item: Codable & Sendable & Equatable> {
+        var item: Item
+        /// Present only when this unit is one page of an item whose payload
+        /// spreads across consecutive units.
+        var note: String?
+    }
+
+    /// Serialized size budget for one page unit, measured through the
+    /// nesting probe: under the cap by enough margin for the page
+    /// envelope's identity, note, and cursor, so a slice unit built to
+    /// this budget can never trip the backstop on its own page.
+    private static let unitBudget = responseCap - 1_024
+
+    /// Fitting probe: a candidate's rendered size depends on its JSON
+    /// nesting depth — pretty-printed indentation scales with depth — so a
+    /// unit is fitted wrapped at the deepest page envelope's depth
+    /// (object → rooms → room → accessories, as get_rooms renders a room
+    /// slice), never serialized flat. Shallower envelopes render smaller
+    /// than the probe, so fitting against it is safe for every paginated
+    /// read.
+    private struct UnitProbe<Item: Codable & Sendable>: Codable {
+        var object: ObjectEnvelope
+        struct ObjectEnvelope: Codable {
+            var rooms: [RoomEnvelope]
+        }
+        struct RoomEnvelope: Codable {
+            var accessories: [Item]
+        }
+    }
+
+    private static func unitFits<Item: Codable & Sendable>(_ item: Item) -> Bool {
+        guard let data = try? encoder.encode(UnitProbe(object: .init(rooms: [.init(accessories: [item])]))) else { return false }
+        return data.count <= unitBudget
+    }
+
+    /// The largest count ≤ `maxCount` whose rendered candidate fits the
+    /// unit budget — monotonic in the count, so binary search applies.
+    private static func largestFittingPrefix<Item: Codable & Sendable>(
+        in maxCount: Int, of candidate: (Int) -> Item
+    ) -> Int {
+        guard maxCount >= 1, unitFits(candidate(1)) else { return 0 }
+        var lo = 1
+        var hi = maxCount
+        while lo < hi {
+            let mid = (lo + hi + 1) / 2
+            if unitFits(candidate(mid)) { lo = mid } else { hi = mid - 1 }
+        }
+        return lo
+    }
+
+    /// One accessory as page units: whole when it fits, otherwise
+    /// consecutive units slicing its service list — and a service whose own
+    /// payload cannot fit descends to characteristic slices.
+    /// Characteristics are leaves and are never split: a single one over
+    /// the unit budget reaches the page fitter's backstop as a true defect,
+    /// which is the only way scale can reach the backstop.
+    private static func accessoryUnits(_ accessory: HomeGraph.Accessory) -> [PageUnit<HomeGraph.Accessory>] {
+        guard !unitFits(accessory) else { return [PageUnit(item: accessory, note: nil)] }
+        let splitNote = "Accessory \"\(accessory.name)\" is large: its \(accessory.services.count) services are spread across consecutive pages."
+        var units: [PageUnit<HomeGraph.Accessory>] = []
+        var remaining = accessory.services
+        while !remaining.isEmpty {
+            let head = remaining[0]
+            if unitFits(head) {
+                let taken = max(largestFittingPrefix(in: remaining.count) { count in
+                    accessory.withServices(Array(remaining.prefix(count)))
+                }, 1)
+                let isLast = taken == remaining.count
+                units.append(PageUnit(
+                    item: accessory.withServices(Array(remaining.prefix(taken))),
+                    note: isLast ? nil : splitNote
+                ))
+                remaining = Array(remaining.dropFirst(taken))
+            } else {
+                // The head service's own payload cannot fit — split its
+                // characteristics across units before moving on.
+                for unit in serviceUnits(head) {
+                    units.append(PageUnit(item: accessory.withServices([unit.item]), note: splitNote))
+                }
+                remaining = Array(remaining.dropFirst())
+            }
+        }
+        return units
+    }
+
+    /// One service as page units: whole when it fits, otherwise
+    /// consecutive units slicing its characteristics — never a
+    /// characteristic split.
+    private static func serviceUnits(_ service: HomeGraph.AccessoryService) -> [PageUnit<HomeGraph.AccessoryService>] {
+        guard !unitFits(service) else { return [PageUnit(item: service, note: nil)] }
+        let splitNote = "Service \"\(service.name)\" is large: its \(service.characteristics.count) characteristics are spread across consecutive pages."
+        var units: [PageUnit<HomeGraph.AccessoryService>] = []
+        var remaining = service.characteristics
+        while !remaining.isEmpty {
+            let taken = largestFittingPrefix(in: remaining.count) { count in
+                service.withCharacteristics(Array(remaining.prefix(count)))
+            }
+            if taken == 0 {
+                // A single characteristic over budget is a leaf-sized
+                // defect; emit it whole so the page fitter's backstop
+                // reports it, and let the read stop there.
+                units.append(PageUnit(item: service.withCharacteristics([remaining[0]]), note: nil))
+                return units
+            }
+            let isLast = taken == remaining.count
+            units.append(PageUnit(
+                item: service.withCharacteristics(Array(remaining.prefix(taken))),
+                note: isLast ? nil : splitNote
+            ))
+            remaining = Array(remaining.dropFirst(taken))
+        }
+        return units
+    }
+
+    /// One full-detail room as page units: whole when it fits, otherwise
+    /// consecutive units slicing its accessory list — and an accessory
+    /// whose own payload cannot fit descends to service slices.
+    private static func roomUnits(_ room: RoomSummary<HomeGraph.Accessory>) -> [PageUnit<RoomSummary<HomeGraph.Accessory>>] {
+        func withAccessories(_ accessories: [HomeGraph.Accessory]) -> RoomSummary<HomeGraph.Accessory> {
+            RoomSummary(
+                id: room.id, homeId: room.homeId, homeName: room.homeName, name: room.name,
+                zoneId: room.zoneId, zoneName: room.zoneName, accessories: accessories
+            )
+        }
+        guard !unitFits(room) else { return [PageUnit(item: room, note: nil)] }
+        let splitNote = "Room \"\(room.name)\" is large: its \(room.accessories.count) accessories are spread across consecutive pages."
+        var units: [PageUnit<RoomSummary<HomeGraph.Accessory>>] = []
+        var remaining = room.accessories
+        while !remaining.isEmpty {
+            let head = remaining[0]
+            if unitFits(head) {
+                let taken = max(largestFittingPrefix(in: remaining.count) { count in
+                    withAccessories(Array(remaining.prefix(count)))
+                }, 1)
+                let isLast = taken == remaining.count
+                units.append(PageUnit(
+                    item: withAccessories(Array(remaining.prefix(taken))),
+                    note: isLast ? nil : splitNote
+                ))
+                remaining = Array(remaining.dropFirst(taken))
+            } else {
+                // The head accessory's own payload cannot fit — flatten it
+                // into service-slice units before moving on.
+                for unit in accessoryUnits(head) {
+                    units.append(PageUnit(item: withAccessories([unit.item]), note: splitNote))
+                }
+                remaining = Array(remaining.dropFirst())
+            }
+        }
+        return units
+    }
+
+    /// Whole-item units for reads whose items are never split — the
+    /// expansion helpers above apply only to the deep accessory-bearing
+    /// lists whose items can exceed the cap at real-home scale.
+    private static func plainUnits<Item: Codable & Sendable & Equatable>(
+        _ items: [Item]
+    ) -> [PageUnit<Item>] {
+        items.map { PageUnit(item: $0, note: nil) }
+    }
+
+    /// Serves one page of `units` for a paginated read: validates the
+    /// caller's cursor, then returns whole page units from the cursor's
+    /// offset until `limit` is reached or serializing one more unit would
+    /// exceed the response cap — whichever comes first. A page is never
     /// truncated; a cap-bound clamp is named in the note.
     ///
     /// The `envelope` closure receives the page's items, the `nextCursor`
     /// (nil on the last page), and the note (nil on a quiet first page),
     /// so the fitter measures exactly what will ship.
     private static func pagedResult<Item: Codable & Sendable & Equatable>(
-        _ items: [Item],
+        _ units: [PageUnit<Item>],
         arguments: [String: Value]?,
         tool: String,
         anchorId: String,
@@ -795,7 +989,7 @@ public struct ReadToolRegistry: Sendable {
         case .start:
             offset = 0
         }
-        let total = items.count
+        let total = units.count
         if offset >= total {
             guard offset > 0 else {
                 // An empty list at page one is a valid empty page.
@@ -811,8 +1005,13 @@ public struct ReadToolRegistry: Sendable {
         // fitter measures exactly what will ship.
         func page(_ count: Int) -> any Codable & Sendable {
             let end = offset + count
-            let slice = Array(items[offset..<end])
+            let slice = Array(units[offset..<end])
             var notes: [String] = []
+            for unit in slice {
+                if let note = unit.note, !notes.contains(note) {
+                    notes.append(note)
+                }
+            }
             if offset > 0 {
                 notes.append("Continuing \(listPath) from offset \(offset) of \(total).")
             }
@@ -824,7 +1023,7 @@ public struct ReadToolRegistry: Sendable {
                     tool: tool, anchorId: anchorId, listPath: listPath, offset: end
                 ))
                 : nil
-            return envelope(slice, nextCursor, notes.isEmpty ? nil : notes.joined(separator: " "))
+            return envelope(slice.map(\.item), nextCursor, notes.isEmpty ? nil : notes.joined(separator: " "))
         }
 
         // Binary search the largest page that serializes under the cap —
@@ -1081,7 +1280,7 @@ public struct ReadToolRegistry: Sendable {
             )
         }
         return Self.pagedResult(
-            rooms, arguments: arguments,
+            rooms.flatMap { roomUnits($0) }, arguments: arguments,
             tool: "get_rooms", anchorId: anchorId, listPath: "rooms", limit: limit
         ) { slice, nextCursor, note in
             RoomsProjection(rooms: slice, nextCursor: nextCursor, note: note)
@@ -1182,5 +1381,25 @@ public struct ReadToolRegistry: Sendable {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         return encoder
+    }
+}
+
+// MARK: - Unit-copy conveniences for the pagination expansion helpers
+
+private extension HomeGraph.Accessory {
+    func withServices(_ services: [HomeGraph.AccessoryService]) -> HomeGraph.Accessory {
+        HomeGraph.Accessory(
+            id: id, name: name, supportsIdentify: supportsIdentify,
+            reachable: reachable, bridged: bridged, category: category,
+            firmwareVersion: firmwareVersion, services: services
+        )
+    }
+}
+
+private extension HomeGraph.AccessoryService {
+    func withCharacteristics(_ characteristics: [HomeGraph.CharacteristicRef]) -> HomeGraph.AccessoryService {
+        HomeGraph.AccessoryService(
+            id: id, name: name, serviceType: serviceType, characteristics: characteristics
+        )
     }
 }
