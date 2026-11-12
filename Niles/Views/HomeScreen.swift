@@ -71,6 +71,9 @@ struct HomeScreen: View {
                 }
                 .listStyle(.insetGrouped)
                 .navigationTitle("Home")
+                // Shared bar modifier (bisect cell 3, see ActivityScreen):
+                // pins the compact bar geometry on both panes.
+                .navigationBarTitleDisplayMode(.inline)
                 // Chat entry via navigationBarItems, not .toolbar: iOS 26
                 // hoists topBarTrailing items into a scene-level glass layer
                 // on iPad, which pins the button over the Activity pane and
