@@ -110,7 +110,8 @@ import Testing
             graph: fixtureGraph()
         )
         guard let operation = plan.operations.first, case .writeCharacteristic(_, let spec) = operation else {
-            return Issue.record("expected a write operation")
+            Issue.record("expected a write operation")
+            return
         }
         _ = try await fake.perform(.writeCharacteristic(homeId: "home-1", action: spec))
         let graph = await fake.graph
@@ -312,7 +313,8 @@ import Testing
             Issue.record("expected stageBatch to throw")
         } catch let error as ProposalStoreError {
             guard case .validationFailed(let messages) = error else {
-                return Issue.record("expected validationFailed, got \(error)")
+                Issue.record("expected validationFailed, got \(error)")
+                return
             }
             let joined = messages.joined(separator: " ")
             #expect(joined.contains("Operation 2"))
