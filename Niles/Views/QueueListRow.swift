@@ -4,22 +4,20 @@ import NilesCore
 /// One queue row, shared by the Home tab's Queue section — severity glyph,
 /// title, one-line diff, evidence tally, and a trailing status (a spinner
 /// while a decision or undo is in flight, otherwise the settled SF Symbol
-/// status label). Decisions arrive as swipe actions (leading Approve on the
-/// right, trailing Deny on the left, row tap for the detail sheet); Undo is
-/// a trailing swipe on executed rows that still offer it. Extracted from the
-/// former QueueScreen so the Home section renders the exact same rows and
-/// semantics instead of duplicating them (spec art_t2KGKOy3: reuse, don't
-/// re-implement).
+/// status label). Decisions arrive as full swipe actions (leading Approve
+/// on the right, trailing Deny on the left — the swipe itself is the
+/// decision, no revealed-button tap and no confirmation step); partial
+/// swipes still reveal the same buttons, and a row tap opens the detail
+/// sheet. Undo is a trailing swipe on executed rows that still offer it.
+/// Extracted from the former QueueScreen so the Home section renders the
+/// exact same rows and semantics instead of duplicating them (spec
+/// art_t2KGKOy3: reuse, don't re-implement).
 struct QueueListRow: View {
     let proposal: NilesProposal
     var model: any QueueViewModel
     /// Opens the proposal's detail sheet — the row itself never decides
     /// where the detail lives, so the Home tab can present it as its own.
     let onOpen: () -> Void
-    /// Requests the deny confirmation. The dialog is owned by the enclosing
-    /// screen: a full-swipe destructive action tears the row down, so a
-    /// row-local dialog would be destroyed before it could present.
-    let onRequestDeny: (NilesProposal) -> Void
 
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
@@ -56,15 +54,19 @@ struct QueueListRow: View {
     // MARK: - Swipes
 
     /// Trailing (left) swipes: Deny (destructive role) on staged rows and
-    /// Undo on executed rows that still offer it. Full swipe is disabled so
-    /// a thumb slip can never deny.
+    /// Undo on executed rows that still offer it. A full swipe completes
+    /// the denial in one gesture — the user's direction (2026-11-12): the
+    /// swipe IS the decision, with no revealed-button tap and no
+    /// confirmation step, replacing the earlier "a thumb slip can never
+    /// deny" stance. Partial swipes still reveal a Deny button that denies
+    /// immediately on tap.
     @ViewBuilder
     private func trailingActions(for proposal: NilesProposal) -> some View {
         let decision = model.decisionsInFlight[proposal.id]
         let undoState = model.undoStates[proposal.id]
         if proposal.isPending {
             Button(role: .destructive) {
-                onRequestDeny(proposal)
+                model.deny(proposal.id)
             } label: {
                 Label("Deny", systemImage: "xmark.circle")
             }
