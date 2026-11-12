@@ -40,9 +40,6 @@ struct HomeScreen: View {
     /// section (the deep link used to land on the Queue tab).
     @State private var navigation = AppNavigation.shared
     @State private var openDetail: NilesProposal?
-    /// The collapsed empty state: one quiet row that expands the explainer
-    /// on tap — never a hero card.
-    @State private var showEmptyExplainer = false
     /// The paired agent whose revoke confirmation is showing, if any.
     @State private var pendingRevoke: PairedAgentRow?
     /// Set from the pairing prompt's tap until the "Copied" caption
@@ -154,28 +151,12 @@ struct HomeScreen: View {
         .id(ScrollTarget.queue)
     }
 
-    /// The collapsed empty state: one quiet row that expands the explainer
-    /// on tap. No proposal has ever needed a hero card here.
+    /// The empty state: one quiet row — never a hero card.
     private var emptyQueueState: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Button {
-                withAnimation { showEmptyExplainer.toggle() }
-            } label: {
-                HStack {
-                    Text("No proposals yet")
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Image(systemName: showEmptyExplainer ? "chevron.down" : "chevron.right")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                }
-            }
-            .buttonStyle(.plain)
-            if showEmptyExplainer {
-                Text("When an agent wants to change your home — via Siri or Ask Niles — its request shows up here for your approval.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
+        HStack {
+            Text("No proposals yet")
+                .foregroundStyle(.secondary)
+            Spacer()
         }
     }
 
@@ -306,7 +287,7 @@ struct HomeScreen: View {
     private var pairedAgentsSection: some View {
         Section {
             if model.pairedAgents.isEmpty {
-                Text("No MCP agents are connected right now. Pair one with the code above.")
+                Text("No agents connected")
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(model.pairedAgents) { agent in
