@@ -77,6 +77,11 @@ struct HomeScreen: View {
                 // opens a blank band above both panes' titles. A bar item
                 // stays on the Home pane's own bar at title height.
                 .navigationBarItems(trailing: chatEntryButton)
+                // Scroll-content margins belong on the List, not on the
+                // NavigationStack wrapper (widePane): margins scoped to the
+                // stack interfere with the bar's scroll-edge tracking in the
+                // wide layout (bisect cell 2, diagnosis art_LwUDWPuP).
+                .contentMargins(.horizontal, 20, for: .scrollContent)
                 .onAppear {
                     consumeScrollRequest(proxy)
                     openPendingProposalIfRequested()

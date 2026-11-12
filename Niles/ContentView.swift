@@ -204,14 +204,16 @@ struct ContentView: View {
 // MARK: - Wide pane normalization
 
 /// One modifier for BOTH wideLayout panes, so their horizontal list margins
-/// match regardless of which window edge a pane abuts. Diagnosis
-/// (art_RzbLOF98, Xcode 27.2 simulators): in landscape, SwiftUI distributes
+/// match regardless of which window edge a pane abuts. The scroll-content
+/// margins themselves live on each pane's List (ActivityScreen/HomeScreen):
+/// scoped to the NavigationStack they interfere with the bar's scroll-edge
+/// tracking in the wide layout (bisect cell 2, diagnosis art_LwUDWPuP).
+/// Diagnosis (art_RzbLOF98, Xcode 27.2 simulators): in landscape, SwiftUI distributes
 /// the window's horizontal safe area — the sensor-housing clearance (84 pt
 /// on the Duo) — to the edge-adjacent children of wideLayout's HStack, and
 /// an insetGrouped list folds that clearance into its item insets, leaving
 /// Activity's cells ~68 pt further from their leading edge than Home's.
-/// Explicit scroll-content margins cut that silent absorption and pin the
-/// shared base margin on both panes; the list style is pinned too so the
+/// The list style is pinned so the
 /// panes cannot drift apart. Not the #76 chrome class — no scene-level
 /// glass is involved, so there is nothing to move onto a pane's own bar.
 /// The clearance itself is physical: hardware verification governs whether
@@ -220,7 +222,6 @@ struct ContentView: View {
 fileprivate extension View {
     func widePane() -> some View {
         listStyle(.insetGrouped)
-            .contentMargins(.horizontal, 20, for: .scrollContent)
     }
 }
 
