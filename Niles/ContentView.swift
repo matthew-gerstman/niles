@@ -168,21 +168,22 @@ struct ContentView: View {
         }
     }
 
-    /// Generous-width layout: Home and Activity side by side, each keeping
-    /// its own NavigationStack title, with no tab bar. The gated agent chat
-    /// stays reachable through a trailing toolbar button on the Home pane.
+    /// Generous-width layout: Activity and Home side by side — Activity on
+    /// the left, Home on the right — each keeping its own NavigationStack
+    /// title, with no tab bar. The gated agent chat stays reachable through
+    /// a trailing toolbar button on the Home pane.
     private var wideLayout: some View {
         HStack(spacing: 0) {
-            if let fixtureHomeStore {
-                HomeScreen(model: fixtureHomeStore, chatEntry: chatEntry)
-            } else {
-                HomeScreen(model: store, chatEntry: chatEntry)
-            }
-            Divider()
             if let fixture = fixtureActivityStore {
                 ActivityScreen(model: fixture)
             } else {
                 ActivityScreen(model: store)
+            }
+            Divider()
+            if let fixtureHomeStore {
+                HomeScreen(model: fixtureHomeStore, chatEntry: chatEntry)
+            } else {
+                HomeScreen(model: store, chatEntry: chatEntry)
             }
         }
     }
