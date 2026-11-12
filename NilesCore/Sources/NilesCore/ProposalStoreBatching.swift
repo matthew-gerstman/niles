@@ -15,8 +15,10 @@ public struct BatchOperation: Sendable, Equatable {
 
 extension ProposalStore {
     /// The name every merged batch plan carries, so dedupe can tell a batch
-    /// from a single-tool proposal.
-    static let batchToolName = "stage_batch"
+    /// from a single-tool proposal — and so the app's read models can tell
+    /// a batch row (whose summary line says something the title does not)
+    /// from a single-op row (whose first card line restates the title).
+    public static let batchToolName = "stage_batch"
 
     /// Merges the members' plans into one batch Plan: their operations and
     /// diff entries concatenated in order, destructive if any member is, and
