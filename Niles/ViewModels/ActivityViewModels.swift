@@ -21,7 +21,7 @@ protocol ActivityViewModel: Observable {
     var activityEvents: [ActivityEvent] { get }
     var proposals: [NilesProposal] { get }
     /// Proposal id -> decision in flight; an entry renders that proposal's
-    /// group as a processing row (Deciding…/Executing…) — decided-in-progress.
+    /// group as a processing row (Denying…/Executing…) — decided-in-progress.
     var decisionsInFlight: [String: ProposalDecision] { get }
     /// Proposal id -> the failure from that proposal's most recent Undo tap,
     /// surfaced inline until the next attempt or dismissal.
@@ -39,11 +39,11 @@ enum ActivityTimeline {
 
     /// The verdict chip an event renders as. A decided event inherits its
     /// decision; an executed one is a failure when execution recorded one.
-    /// `.deciding` / `.executing` never come from an event — they overlay a
+    /// `.denying` / `.executing` never come from an event — they overlay a
     /// group whose decision is still in flight (see `groups`).
     enum Verdict: Equatable {
         case staged, approved, denied, executed, failed, expired, undone
-        case deciding, executing
+        case denying, executing
     }
 
     /// One rendered timeline entry.
@@ -135,7 +135,7 @@ enum ActivityTimeline {
     /// over the same persisted events `rows` renders individually.
     ///
     /// `decisionsInFlight` overlays the processing state: a swipe decision
-    /// whose pipeline is still running renders as Deciding…/Executing… —
+    /// whose pipeline is still running renders as Denying…/Executing… —
     /// decided-in-progress — instead of the proposal's last settled event.
     /// A proposal the store has already moved into execution (`approved`,
     /// no local swipe marker — any pipeline client can drive that
@@ -173,7 +173,7 @@ enum ActivityTimeline {
             if let decision = decisionsInFlight[id] {
                 // Approve runs the execution pipeline; deny is a decision
                 // alone — hence the two processing names.
-                state = decision == .approving ? .executing : .deciding
+                state = decision == .approving ? .executing : .denying
             } else if proposal?.state == .approved {
                 // Store-driven in-flight: the pipeline has decided the
                 // proposal and execution is still running (any pipeline
