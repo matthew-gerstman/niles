@@ -155,7 +155,7 @@ final class LiveQueueStore: QueueViewModel, ActivityViewModel {
     /// the wording never claims what did or didn't reach the home.
     static func decisionFailureMessage(approve: Bool, reason: String) -> String {
         let verb = approve ? "Approve" : "Deny"
-        return "\\(verb) failed — the proposal is back in the queue. (\\(reason))"
+        return "\(verb) failed — the proposal is back in the queue. (\(reason))"
     }
 
     func clearDecisionFailure(_ id: String) {
