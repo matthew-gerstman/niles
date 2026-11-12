@@ -19,9 +19,9 @@ struct HomeScreen: View {
     /// keeps chat on its own tab.
     var chatEntry: (() -> Void)? = nil
 
-    /// Title mode for this pane's bar — inline in the wide layout (set by
-    /// widePane()), automatic in the narrow layout. See ContentView.
-    @Environment(\.widePaneTitleMode) private var widePaneTitleMode
+    /// Inline-title pin for this pane's bar — set in the wide layout by
+    /// widePane(); false (automatic) in the narrow layout. See ContentView.
+    @Environment(\.widePaneInlineTitle) private var widePaneInlineTitle
 
     /// Trailing bar item: the wide-layout chat entry button, or nothing
     /// when chat lives on its own tab. Extracted as a ViewBuilder property —
@@ -76,10 +76,10 @@ struct HomeScreen: View {
                 .listStyle(.insetGrouped)
                 .navigationTitle("Home")
                 // Shared bar modifier (bisect cell 3, see widePane): each
-                // pane applies the title mode widePane() publishes — inline
+                // pane applies the inline pin widePane() publishes — pinned
                 // in the wide layout, automatic (untouched) in the narrow
                 // layout.
-                .navigationBarTitleDisplayMode(widePaneTitleMode)
+                .navigationBarTitleDisplayMode(widePaneInlineTitle ? .inline : .automatic)
                 // Chat entry via navigationBarItems, not .toolbar: iOS 26
                 // hoists topBarTrailing items into a scene-level glass layer
                 // on iPad, which pins the button over the Activity pane and

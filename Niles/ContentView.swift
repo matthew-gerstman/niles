@@ -227,7 +227,7 @@ struct ContentView: View {
 /// back to the legacy expanded large-title geometry (110 pt, title below an
 /// empty 58 pt inline zone) while the trailing pane compacts to 58 pt.
 /// Normalizing both panes with a shared inline title pin covers the class.
-/// The mode travels through the widePaneTitleMode environment key rather
+/// The pin travels through the widePaneInlineTitle environment key rather
 /// than .navigationBarTitleDisplayMode() here: the latter cannot be set
 /// from outside a pane's NavigationStack (probed on the Duo simulator —
 /// the modifier on widePane() left the leading pane at 110 pt), so each
@@ -235,21 +235,24 @@ struct ContentView: View {
 fileprivate extension View {
     func widePane() -> some View {
         listStyle(.insetGrouped)
-            .environment(\.widePaneTitleMode, .inline)
+            .environment(\.widePaneInlineTitle, true)
     }
 }
 
-private struct WidePaneTitleModeKey: EnvironmentKey {
-    static let defaultValue: NavigationBarTitleDisplayMode = .automatic
+private struct WidePaneInlineTitleKey: EnvironmentKey {
+    static let defaultValue = false
 }
 
 extension EnvironmentValues {
-    /// Title mode a pane applies to its own navigation bar. Set by
-    /// widePane() for the wide layout's two panes; the narrow layout reads
-    /// the default .automatic, keeping its large titles untouched.
-    var widePaneTitleMode: NavigationBarTitleDisplayMode {
-        get { self[WidePaneTitleModeKey.self] }
-        set { self[WidePaneTitleModeKey.self] = newValue }
+    /// Whether a pane pins inline title mode on its bar. Set by widePane()
+    /// for the wide layout's two panes; the narrow layout reads the default
+    /// false (automatic title mode), keeping its large titles untouched.
+    /// A Bool rather than the title-mode type itself: the SDK type name
+    /// (NavigationBarTitleDisplayMode / NavigationBar.TitleDisplayMode) has
+    /// shifted across iOS SDKs, while the modifier call is stable.
+    var widePaneInlineTitle: Bool {
+        get { self[WidePaneInlineTitleKey.self] }
+        set { self[WidePaneInlineTitleKey.self] = newValue }
     }
 }
 
