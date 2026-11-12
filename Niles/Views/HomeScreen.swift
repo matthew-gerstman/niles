@@ -248,32 +248,45 @@ struct HomeScreen: View {
     /// The Pairing section: the live code, visible again (PR #76 folded it
     /// into the prompt sentence; an agent being paired reads it off the
     /// screen), plus a Copy Prompt button carrying the exact sentence an
-    /// agent needs. Codes still expire and refresh every thirty minutes
+    /// agent needs — a small caption beside the code, not a full-width row
+    /// stacked below it. Codes still expire and refresh every thirty minutes
     /// internally — the UI just no longer renders a countdown.
     @ViewBuilder
     private var pairingSection: some View {
         Section {
             if let code = model.pairingCode {
-                Text(code)
-                    .font(.system(.title2, design: .monospaced).weight(.semibold))
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, 4)
-                Button {
-                    UIPasteboard.general.string = Self.pairingPrompt(address: model.endpoint, code: code)
-                    copiedReset?.cancel()
-                    withAnimation { showCopied = true }
-                    copiedReset = Task {
-                        try? await Task.sleep(for: .seconds(1.5)) // cancellation of a reset is a no-op
-                        withAnimation { showCopied = false }
+                // One row: the code with its copy prompt as a small caption
+                // beside it, not a standard row stacked below.
+                HStack(spacing: 8) {
+                    Text(code)
+                        .font(.system(.title2, design: .monospaced).weight(.semibold))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    Button {
+                        UIPasteboard.general.string = Self.pairingPrompt(address: model.endpoint, code: code)
+                        copiedReset?.cancel()
+                        withAnimation { showCopied = true }
+                        copiedReset = Task {
+                            try? await Task.sleep(for: .seconds(1.5)) // cancellation of a reset is a no-op
+                            withAnimation { showCopied = false }
+                        }
+                    } label: {
+                        Label(showCopied ? "Copied" : "Copy Prompt",
+                              systemImage: showCopied ? "checkmark" : "doc.on.doc")
+                            // The app-wide tint is white (NilesApp), so both
+                            // the system accent and the inherited tint render
+                            // the label white-on-white. Primary keeps the copy
+                            // action visible; footnote keeps it caption-sized
+                            // but still tappable.
+                            .font(.footnote)
+                            .foregroundStyle(.primary)
                     }
-                } label: {
-                    Label(showCopied ? "Copied" : "Copy Prompt",
-                          systemImage: showCopied ? "checkmark" : "doc.on.doc")
+                    // Plain confines the tap target to the label (the row
+                    // also holds the code text) and, unlike borderless,
+                    // keeps .primary visible under the app-wide white tint.
+                    .buttonStyle(.plain)
                 }
-                // The app-wide tint is white (NilesApp), so both the
-                // system accent and the inherited tint render the label
-                // white-on-white. Primary keeps the copy action visible.
-                .foregroundStyle(.primary)
+                .padding(.vertical, 4)
             } else {
                 Text("Pairing code unavailable")
                     .foregroundStyle(.secondary)

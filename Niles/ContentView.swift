@@ -171,19 +171,26 @@ struct ContentView: View {
     /// Generous-width layout: Activity and Home side by side — Activity on
     /// the left, Home on the right — each keeping its own NavigationStack
     /// title, with no tab bar. The gated agent chat stays reachable through
-    /// a trailing toolbar button on the Home pane.
+    /// a trailing toolbar button on the Home pane. Both panes pass through
+    /// `widePane()` so their horizontal list margins match (diagnosis
+    /// art_RzbLOF98: landscape safe-area clearance otherwise folds into the
+    /// edge-adjacent pane's list item insets).
     private var wideLayout: some View {
         HStack(spacing: 0) {
             if let fixture = fixtureActivityStore {
                 ActivityScreen(model: fixture)
+                    .widePane()
             } else {
                 ActivityScreen(model: store)
+                    .widePane()
             }
             Divider()
             if let fixtureHomeStore {
                 HomeScreen(model: fixtureHomeStore, chatEntry: chatEntry)
+                    .widePane()
             } else {
                 HomeScreen(model: store, chatEntry: chatEntry)
+                    .widePane()
             }
         }
     }
@@ -191,6 +198,29 @@ struct ContentView: View {
     /// The wide layout's chat entry: gated, opening the sheet above.
     private var chatEntry: (() -> Void)? {
         agentEnabled ? { showWideChat = true } : nil
+    }
+}
+
+// MARK: - Wide pane normalization
+
+/// One modifier for BOTH wideLayout panes, so their horizontal list margins
+/// match regardless of which window edge a pane abuts. Diagnosis
+/// (art_RzbLOF98, Xcode 27.2 simulators): in landscape, SwiftUI distributes
+/// the window's horizontal safe area — the sensor-housing clearance (84 pt
+/// on the Duo) — to the edge-adjacent children of wideLayout's HStack, and
+/// an insetGrouped list folds that clearance into its item insets, leaving
+/// Activity's cells ~68 pt further from their leading edge than Home's.
+/// Explicit scroll-content margins cut that silent absorption and pin the
+/// shared base margin on both panes; the list style is pinned too so the
+/// panes cannot drift apart. Not the #76 chrome class — no scene-level
+/// glass is involved, so there is nothing to move onto a pane's own bar.
+/// The clearance itself is physical: hardware verification governs whether
+/// the shared margin must instead be the housing width (never negative
+/// padding).
+fileprivate extension View {
+    func widePane() -> some View {
+        listStyle(.insetGrouped)
+            .contentMargins(.horizontal, 20, for: .scrollContent)
     }
 }
 
