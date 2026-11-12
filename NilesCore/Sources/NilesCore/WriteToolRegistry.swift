@@ -1,9 +1,10 @@
 import Foundation
 import MCP
 
-/// The mutating MCP tools: twenty-six declarative write tools plus the
-/// `get_proposal` poll. None of them touches HomeKit — a call plans the
-/// request against the current graph and stages exactly one proposal
+/// The mutating MCP tools: twenty-six declarative write tools, the
+/// `stage_batch` batch stager, and the `get_proposal` poll. None of them
+/// touches HomeKit — a call plans the request against the current graph and
+/// stages exactly one proposal
 /// (spec: "one agent request is always exactly one approval card"); the
 /// human approves or denies on the device, and the agent reads the outcome
 /// back through `get_proposal`.
@@ -196,6 +197,21 @@ public struct WriteToolRegistry: Sendable {
             annotations: Tool.Annotations(readOnlyHint: false)
         ),
         Tool(
+            name: "stage_batch",
+            description:
+                "Stage 1–20 operations as ONE proposal — one review card, one notification, one approval. "
+                + "Each entry is {tool, arguments} naming a staged write tool (everything except get_proposal) with its normal arguments. "
+                + "Every entry is planned against the same home snapshot: if any would fail — unknown object, bad value — the whole batch is rejected with per-entry errors and nothing is staged. "
+                + "Approval applies every operation in order; if one fails partway, the read-back evidence shows which applied — there is no rollback. "
+                + "set_trigger_state is not accepted: arming an automation is always its own proposal and its own approval. "
+                + "A request touching many objects is one batch proposal, never a stream of singles." + Self.stagingSuffix,
+            inputSchema: objectSchema(
+                ["operations": Self.batchOperationsProperty],
+                required: ["operations"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false)
+        ),
+        Tool(
             name: "create_room",
             description: "DEPRECATED — prefer create(kind: \"room\", homeId, name). Create a room in a home. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles on the iPhone. Returns the proposal id immediately; poll get_proposal to learn whether it was approved.",
             inputSchema: objectSchema(
@@ -234,27 +250,6 @@ public struct WriteToolRegistry: Sendable {
             inputSchema: objectSchema(
                 [
                     "zoneId": stringProperty("The zone to update (from get_zones)."),
-                    "roomIds": .object([
-                        "type": .string("array"),
-                        "items": .object(["type": .string("string")]),
-                        "description": .string("Every room the zone should contain (from get_rooms)."),
-                    ]),
-                ],
-                required: ["zoneId", "roomIds"]
-            ),
-            annotations: Tool.Annotations(readOnlyHint: false)
-        ),
-        Tool(
-            name: "create_zone",
-            description: "DEPRECATED — prefer create(kind: \"zone\", homeId, name). Create an empty zone (e.g. 'Upstairs'); add rooms with set_zone_rooms. Zone names are unique within a home. STAGES A PROPOSAL — nothing is applied until a human approves it in Niles. Poll get_proposal afterwards.",
-            inputSchema: objectSchema(
-                [
-                    "homeId": stringProperty("The home to create the zone in (from get_homes)."),
-                    "name": stringProperty("The new zone's name."),
-                ],
-                required: ["homeId", "name"]
-            ),
-            annotations: Tool.Annotations(readOnlyHintnes)."),
                     "roomIds": .object([
                         "type": .string("array"),
                         "items": .object(["type": .string("string")]),
