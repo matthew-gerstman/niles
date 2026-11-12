@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import NilesCore
 
 /// One queue row, shared by the Home tab's Queue section — severity glyph,
@@ -18,6 +19,24 @@ struct QueueListRow: View {
     /// Opens the proposal's detail sheet — the row itself never decides
     /// where the detail lives, so the Home tab can present it as its own.
     let onOpen: () -> Void
+
+    /// Swipe-out dismissal: the edge the decision's swipe came from. The
+    /// row springs out the way the thumb was already moving — deny (a
+    /// trailing-edge swipe) exits left, approve (a leading-edge swipe)
+    /// exits right.
+    private enum ExitDirection {
+        case leading, trailing
+
+        /// Far enough past the row's edge that the spring never settles
+        /// visibly on screen, even mid-flight.
+        var exitOffset: CGFloat {
+            let clear = UIScreen.main.bounds.width * 1.2
+            return self == .trailing ? -clear : clear
+        }
+    }
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var exit: ExitDirection?
 
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
@@ -50,9 +69,40 @@ struct QueueListRow: View {
         .swipeActions(edge: .leading, allowsFullSwipe: proposal.isPending) {
             leadingActions(for: proposal)
         }
+        // Spring-out dismissal, applied after the swipeActions modifiers so
+        // the whole row — content and revealed buttons together — leaves in
+        // one piece instead of exposing the action buttons underneath.
+        .offset(x: exit?.exitOffset ?? 0)
+        .opacity(exit == nil ? 1 : 0)
+        .allowsHitTesting(exit == nil)
     }
 
     // MARK: - Swipes
+
+    /// The dismissal handoff: spring the row out in the swipe's direction,
+    /// then fire the decision so the optimistic removal (decisionsInFlight)
+    /// filters the row and the List reflows the gap — inside withAnimation,
+    /// so neighbors glide closed instead of jump-cutting. Reduced motion
+    /// skips the spring and the removal entirely: the decision applies with
+    /// no animation transaction at all.
+    private func decide(_ direction: ExitDirection, _ decision: @escaping () -> Void) {
+        guard exit == nil else { return }
+        if reduceMotion {
+            withAnimation(nil) { decision() }
+            return
+        }
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+            exit = direction
+        }
+        // The spring has essentially settled by the time the removal runs;
+        // its own spring carries the reflow.
+        Task {
+            try? await Task.sleep(for: .milliseconds(420)) // a cancelled exit still fires the decision
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) {
+                decision()
+            }
+        }
+    }
 
     /// Trailing (left) swipes: Deny (destructive role) on staged rows and
     /// Undo on executed rows that still offer it. A full swipe completes
@@ -67,7 +117,7 @@ struct QueueListRow: View {
         let undoState = model.undoStates[proposal.id]
         if proposal.isPending {
             Button(role: .destructive) {
-                model.deny(proposal.id)
+                decide(.trailing) { model.deny(proposal.id) }
             } label: {
                 Label("Deny", systemImage: "xmark.circle")
             }
@@ -89,7 +139,7 @@ struct QueueListRow: View {
         let decision = model.decisionsInFlight[proposal.id]
         if proposal.isPending {
             Button {
-                model.approve(proposal.id)
+                decide(.leading) { model.approve(proposal.id) }
             } label: {
                 Label("Approve", systemImage: "checkmark.circle")
             }
