@@ -1878,8 +1878,12 @@ extension ProposalStore {
     public init(
         homeKit: any HomeKitWriting,
         now: @escaping @Sendable () -> Date = { Date() },
-        lifetime: TimeInterval = 24 * 60 * 60
+        lifetime: TimeInterval = 24 * 60 * 60,
+        persistence: ProposalStoreFile? = nil
     ) {
-        self.init(homeKit: homeKit, planWith: ProposalPlanner.planFunction, now: now, lifetime: lifetime)
+        self.init(
+            homeKit: homeKit, planWith: ProposalPlanner.planFunction,
+            now: now, lifetime: lifetime, persistence: persistence
+        )
     }
 }

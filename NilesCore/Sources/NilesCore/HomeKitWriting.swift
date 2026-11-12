@@ -49,7 +49,7 @@ public struct SceneActionSpec: Codable, Sendable, Equatable, Hashable {
 /// The identity of a scene action for diffing: same accessory, service,
 /// characteristic, and target value is the same action, whatever name the
 /// read side rendered for it.
-public struct SceneActionKey: Hashable, Sendable {
+public struct SceneActionKey: Codable, Hashable, Sendable {
     public let accessoryId: String?
     public let service: String?
     public let characteristic: String
@@ -109,7 +109,7 @@ public enum TriggerEventSpec: Codable, Sendable, Equatable, Hashable {
 /// Trigger operations enforce the spec's locked rule: creation always adds a
 /// DISABLED trigger, and arming one is its own `setTriggerEnabled` operation
 /// — a separate proposal the human approves separately.
-public enum HomeKitOperation: Sendable, Equatable, Hashable {
+public enum HomeKitOperation: Codable, Sendable, Equatable, Hashable {
     case addRoom(homeId: String, name: String)
     case renameRoom(homeId: String, roomId: String, to: String)
     case removeRoom(homeId: String, roomId: String)
@@ -169,6 +169,9 @@ public enum HomeKitOperation: Sendable, Equatable, Hashable {
 /// `HomeManagerHomeKitService` (the real shared home database). Operations
 /// are not transactional — HomeKit has no rollback — so an executor applies
 /// them in order and the caller records what actually applied.
+///
+/// Codable so staged proposals persist with the operations approval would
+/// run — the execution detail survives a relaunch with its envelope.
 public protocol HomeKitWriting: HomeKitService {
     /// Applies one operation, returning the created object's id when the
     /// operation creates one (a new room, scene, or service group).

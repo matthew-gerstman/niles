@@ -44,6 +44,10 @@ struct NilesProposal: Identifiable, Hashable {
     let diff: [ProposalDiffLine]
     /// Extra context lines shown only in the detail sheet.
     var context: [ProposalDiffLine] = []
+    /// The launch-revalidation reason a reloaded staged proposal can no
+    /// longer be approved — its target object left the home. Rendered on
+    /// the queue row; nil for everything else.
+    var staleReason: String? = nil
 
     var isPending: Bool { state == .staged }
     /// Defaults to staged — every proposal enters the pipeline staged.
