@@ -44,7 +44,6 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
     private(set) var serverIsRunning = false
     private(set) var endpoint = ""
     private(set) var bonjourService = "\(NilesBonjour.serviceType).local"
-    private(set) var sessionsSummary = "0 active"
     private(set) var connectedAgents: [AgentConnection] = []
 
     // MARK: - QueueViewModel
@@ -119,6 +118,9 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
     private let logger = Logger(subsystem: "com.gerstman.niles", category: "live-store")
 
     private var pollingTask: Task<Void, Never>?
+    /// When this store came up — the launch instant the paired-agents list
+    /// filters on: only credentials paired after it render on Home.
+    private let launchedAt = Date()
     /// Proposal id -> the agent that staged it, attributed from the newest
     /// session at detection time. In-memory only, like the proposal store.
     private var agentNamesByProposal: [String: String] = [:]
@@ -523,23 +525,6 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
 
     // MARK: - PairingViewModel
 
-    /// The "New code" tap: discards the live code and mints a fresh one.
-    func mintNewCode() {
-        Task { await mintNewCodeAndWait() }
-    }
-
-    /// Awaitable mint path — what the tap task spawns; tests await it directly.
-    /// Mints unconditionally: the tap discards a still-live code, not just a
-    /// spent one.
-    func mintNewCodeAndWait() async {
-        do {
-            _ = try await coordinator.pairingCodes.mintCode()
-        } catch {
-            logger.error("Pairing code mint failed: \(String(describing: error))")
-        }
-        await refreshPairingState(sessions: await coordinator.sessionInfos())
-    }
-
     /// Revocation: delete the credential, then close any live session the
     /// agent's token created. A failed deletion keeps the session — no half
     /// revocation where the credential outlives the connection it guards.
@@ -760,7 +745,6 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
         applyIdleTimerPolicy()
 
         let sessions = await coordinator.sessionInfos()
-        sessionsSummary = "\(sessions.count) active"
         connectedAgents = sessions.map { session in
             AgentConnection(
                 name: session.clientName ?? "Unknown client",
@@ -920,7 +904,7 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
             pairedAgents = Self.pairedAgentRows(
                 agents: try tokenStore.listAgents(),
                 sessions: sessions,
-                now: Date()
+                launchedAt: launchedAt
             )
         } catch {
             // The Keychain read failing keeps the previous list on screen —
@@ -941,36 +925,35 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
     }
 
     /// The paired-agents rows from stored credentials and live sessions —
-    /// pure, so the list's rendering rules are directly testable. Unnamed
-    /// agents render as "Agent"; last seen comes from the newest session the
-    /// agent's token created.
+    /// pure, so the list's rendering rules are directly testable. Only
+    /// credentials paired since `launchedAt` appear: the Home list is a
+    /// review of pairings that happened this session, not a credential
+    /// inventory. Unnamed agents render as "Agent".
     static func pairedAgentRows(
         agents: [PairedAgent],
         sessions: [MCPGateway.SessionInfo],
-        now: Date
+        launchedAt: Date
     ) -> [PairedAgentRow] {
-        agents.map { agent in
-            let agentSessions = sessions
-                .filter { $0.tokenId == agent.id }
-                .sorted { $0.startedAt > $1.startedAt }
-            let lastSeen = agentSessions.map(\.lastAccessedAt).max()
-            let pairedDate = agent.pairedAt.formatted(date: .abbreviated, time: .omitted)
-            let seen = lastSeen.map { "last seen \(RelativeTime.label(for: $0, now: now))" } ?? "never connected"
-            return PairedAgentRow(
-                id: agent.id,
-                name: agent.name ?? "Agent",
-                detail: "paired \(pairedDate) · \(seen)",
-                pairedAt: agent.pairedAt,
-                sessions: agentSessions.map { session in
-                    AgentSessionRow(
-                        id: session.id,
-                        clientName: session.clientName ?? "MCP client",
-                        startedAt: session.startedAt,
-                        lastAccessedAt: session.lastAccessedAt
-                    )
-                }
-            )
-        }
+        agents
+            .filter { $0.pairedAt >= launchedAt }
+            .map { agent in
+                let agentSessions = sessions
+                    .filter { $0.tokenId == agent.id }
+                    .sorted { $0.startedAt > $1.startedAt }
+                return PairedAgentRow(
+                    id: agent.id,
+                    name: agent.name ?? "Agent",
+                    pairedAt: agent.pairedAt,
+                    sessions: agentSessions.map { session in
+                        AgentSessionRow(
+                            id: session.id,
+                            clientName: session.clientName ?? "MCP client",
+                            startedAt: session.startedAt,
+                            lastAccessedAt: session.lastAccessedAt
+                        )
+                    }
+                )
+            }
     }
 
     // MARK: - Live -> UI mapping

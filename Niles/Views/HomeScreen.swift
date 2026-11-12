@@ -1,9 +1,12 @@
 import SwiftUI
+import UIKit
 import NilesCore
 
 /// The Home tab (three-tab IA, spec art_t2KGKOy3): the proposal Queue
-/// first, then the former Settings sections — Pairing, Paired Agents,
-/// and Server (same bindings, same revoke confirm flow). The list ends at
+/// first, then the former Settings sections — Pairing (a tap-to-copy
+/// agent prompt carrying the live code), Paired Agents (one line per
+/// agent paired since launch), and Server (same bindings, same revoke
+/// confirm flow, minus the Sessions row). The list ends at
 /// Server; the on-device agent, diagnostics, connection, and home-graph
 /// sections are gone from here, and neither the Queue nor the Server
 /// section carries a footer anymore.
@@ -26,6 +29,12 @@ struct HomeScreen: View {
     @State private var showEmptyExplainer = false
     /// The paired agent whose revoke confirmation is showing, if any.
     @State private var pendingRevoke: PairedAgentRow?
+    /// Set from the pairing prompt's tap until the "Copied" caption
+    /// settles back to "Tap to copy".
+    @State private var showCopied = false
+    /// The in-flight "Copied" reset, cancelled by a re-tap so two quick
+    /// copies never race the caption back to its rest state.
+    @State private var copiedReset: Task<Void, Never>?
     /// The proposal whose deny confirmation is showing, if any. Owned here —
     /// not by the row — because a full-swipe destructive action tears the
     /// row's own state down before a row-local dialog could present.
@@ -33,9 +42,11 @@ struct HomeScreen: View {
     /// Brief highlight of the Queue section when a deep link lands on it.
     @State private var queueHighlight = false
 
-    /// Scroll target for the Queue section — attached to the section so a
-    /// deep link can scroll it into view.
-    private enum ScrollTarget { case queue }
+    /// Sections addressable by scroll — deep links target Queue, the
+    /// `-UIHomeScroll` screenshot hook targets any of them.
+    private enum ScrollTarget: String {
+        case queue, pairing, agents, server
+    }
 
     var body: some View {
         NavigationStack {
@@ -48,18 +59,22 @@ struct HomeScreen: View {
                 }
                 .listStyle(.insetGrouped)
                 .navigationTitle("Home")
-                .toolbar {
+                // Chat entry via navigationBarItems, not .toolbar: iOS 26
+                // hoists topBarTrailing items into a scene-level glass layer
+                // on iPad, which pins the button over the Activity pane and
+                // opens a blank band above both panes' titles. A bar item
+                // stays on the Home pane's own bar at title height.
+                .navigationBarItems(trailing: {
                     if let chatEntry {
-                        ToolbarItem(placement: .topBarTrailing) {
-                            Button(action: chatEntry) {
-                                Label("Niles", systemImage: "sparkles")
-                            }
+                        Button(action: chatEntry) {
+                            Label("Niles", systemImage: "sparkles")
                         }
                     }
-                }
+                }())
                 .onAppear {
                     consumeScrollRequest(proxy)
                     openPendingProposalIfRequested()
+                    applyHomeScrollFixtureIfRequested(proxy)
                 }
                 // The chat's chip tap can land here before the store's poll
                 // has surfaced the proposal; retry on the next refresh.
@@ -190,59 +205,105 @@ struct HomeScreen: View {
         }
     }
 
+    /// Screenshot hook: `-UIHomeScroll <section>` scrolls the Home list to a
+    /// section on launch — per-section captures need no UI automation (same
+    /// family as `-UITabSelect`). No-op without the flag.
+    private func applyHomeScrollFixtureIfRequested(_ proxy: ScrollViewProxy) {
+        let args = ProcessInfo.processInfo.arguments
+        guard let i = args.firstIndex(of: "-UIHomeScroll"), i + 1 < args.count,
+              let target = ScrollTarget(rawValue: args[i + 1]) else { return }
+        // A scrollTo before the first layout is a no-op; give the List a beat.
+        Task {
+            try? await Task.sleep(for: .seconds(0.8)) // a cancelled capture scroll is fine to skip
+            proxy.scrollTo(target, anchor: .top)
+        }
+    }
+
     // MARK: - Settings sections (moved verbatim from SettingsScreen)
 
-    /// Serving state as the kill-switch row; endpoint/sessions as value rows.
+    /// Serving state as the standard kill-switch row; endpoint as a value
+    /// row. The toggle restores the system green: UI pass 2's app-wide
+    /// white tint reads as broken on a switch, so this row opts back in.
     private var serverSection: some View {
         Section {
             Toggle("Serving", isOn: Binding(
                 get: { model.serverIsRunning },
                 set: { model.setServerRunning($0) }
             ))
+            .tint(.green)
             LabeledContent("Endpoint", value: model.endpoint)
             LabeledContent("Bonjour", value: model.bonjourService)
-            LabeledContent("Sessions", value: model.sessionsSummary)
         } header: {
             Text("Server")
+                .id(ScrollTarget.server)
         }
     }
 
-    /// The six-digit challenge in system large type with a live countdown and
-    /// an on-demand mint. A code is a challenge, not a secret — it expires in
-    /// five minutes, works once, and dies after five wrong guesses.
+    /// The pairing prompt as one tap-to-copy row: the full sentence the
+    /// user pastes to an agent, with the live code substituted. A code is a
+    /// challenge, not a secret — it expires in thirty minutes, works once,
+    /// and dies after five wrong guesses. There is no manual mint: the
+    /// store mints a fresh code whenever refresh finds none live, so the
+    /// prompt always carries a valid challenge.
     @ViewBuilder
     private var pairingSection: some View {
         Section {
             if let code = model.pairingCode, let expiresAt = model.codeExpiresAt {
-                Text(code)
-                    .font(.largeTitle.weight(.bold).monospacedDigit())
-                    .frame(maxWidth: .infinity, alignment: .center)
+                Button {
+                    UIPasteboard.general.string = Self.pairingPrompt(code: code)
+                    copiedReset?.cancel()
+                    withAnimation { showCopied = true }
+                    copiedReset = Task {
+                        try? await Task.sleep(for: .seconds(1.5)) // cancellation of a reset is a no-op
+                        withAnimation { showCopied = false }
+                    }
+                } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(Self.pairingPrompt(code: code))
+                            .multilineTextAlignment(.leading)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text(showCopied ? "Copied" : "Tap to copy")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .buttonStyle(.plain)
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     LabeledContent("Expires", value: Self.countdownText(expiresAt: expiresAt, now: context.date))
                         .foregroundStyle(.secondary)
                 }
             } else {
-                Text("Code unavailable")
+                Text("Pairing code unavailable")
                     .foregroundStyle(.secondary)
-            }
-            Button("New code") {
-                model.mintNewCode()
             }
         } header: {
             Text("Pairing")
+                .id(ScrollTarget.pairing)
         }
     }
 
+    /// The exact prompt the user copies to an agent — the how-to link and
+    /// the live code in one pasteable sentence. Pure, so the wording is
+    /// directly testable.
+    static func pairingPrompt(code: String) -> String {
+        "I would like you to access the niles MCP. You can see how to do this "
+            + "from https://github.com/matthew-gerstman/niles . The pairing code is \(code)."
+    }
+
     /// The countdown line: time remaining while live, a plain "Expired" once
-    /// past. Pure, so the wording is directly testable.
+    /// past (a beat the store's auto-mint erases on its next refresh). Pure,
+    /// so the wording is directly testable.
     static func countdownText(expiresAt: Date, now: Date) -> String {
         let remaining = Int(expiresAt.timeIntervalSince(now))
         guard remaining > 0 else { return "Expired" }
         return String(format: "Expires in %d:%02d", remaining / 60, remaining % 60)
     }
 
-    /// Paired credentials as standard rows; revoke rides the trailing swipe,
-    /// confirmed by the dialog above.
+    /// One line per credential paired since this launch — name left,
+    /// paired-since time right-aligned. Credentials paired before launch
+    /// stay off the list: they are not new pairings to review. Tapping
+    /// opens the session detail; revoke rides the trailing swipe, confirmed
+    /// by the dialog above.
     private var pairedAgentsSection: some View {
         Section {
             if model.pairedAgents.isEmpty {
@@ -253,9 +314,10 @@ struct HomeScreen: View {
                     NavigationLink {
                         PairedAgentDetailScreen(agent: agent, model: model)
                     } label: {
-                        VStack(alignment: .leading, spacing: 2) {
+                        HStack {
                             Text(agent.name)
-                            Text(agent.detail)
+                            Spacer()
+                            Text(Self.pairedSinceText(agent.pairedAt))
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
@@ -269,7 +331,15 @@ struct HomeScreen: View {
             }
         } header: {
             Text("Paired Agents")
+                .id(ScrollTarget.agents)
         }
+    }
+
+    /// The right-aligned paired-since caption — a time of day only, since
+    /// the list never shows agents paired before today's launch. Pure, so
+    /// the wording is directly testable.
+    static func pairedSinceText(_ pairedAt: Date) -> String {
+        "paired \(pairedAt.formatted(date: .omitted, time: .shortened))"
     }
 
     /// Footer text for the on-device agent: it states what is missing and

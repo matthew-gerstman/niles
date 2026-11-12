@@ -39,10 +39,11 @@ public actor PairingCodeManager {
         }
     }
 
-    /// Five wrong answers burn the code — with 5 attempts per 5-minute window,
-    /// brute force is bounded at ~1,440 tries/day against 10⁶ combinations.
+    /// Five wrong answers burn the code — with 5 attempts per 30-minute
+    /// window, brute force is bounded at ~240 tries/day against 10⁶
+    /// combinations.
     private static let maxAttempts = 5
-    private static let ttl: TimeInterval = 300
+    private static let ttl: TimeInterval = 1800
 
     private struct Active {
         let code: String
