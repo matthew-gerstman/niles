@@ -14,9 +14,13 @@ let package = Package(
     // package.
     platforms: [.iOS(.v17)],
     products: [
-        // Dynamic to keep the framework-shaped embedding the app target
-        // had when NilesCore was an XcodeGen framework.
-        .library(name: "NilesCore", type: .dynamic, targets: ["NilesCore"]),
+        // Static: the single app consumer embeds NilesCore's code directly in
+        // its binary. Dynamic linking here shipped a device build whose bundle
+        // never contained Frameworks/NilesCore.framework (XcodeGen-generated
+        // app targets do not embed dynamic package products), so the app died
+        // under dyld at launch. Static keeps the same package-graph boundary
+        // — the app links only this product; the MCP SDK stays internal.
+        .library(name: "NilesCore", type: .static, targets: ["NilesCore"]),
     ],
     dependencies: [
         .package(
