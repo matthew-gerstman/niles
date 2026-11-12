@@ -172,9 +172,13 @@ struct ProposalDetailSheet: View {
 
     // MARK: - Verdicts
 
-    /// Deny (destructive role) and Approve (prominent) as standard bordered
-    /// buttons over a bar material; disabled once the proposal is past
-    /// staging. Dismissal itself is the sheet's native drag gesture.
+    /// Deny (destructive red) and Approve (prominent green, matching the
+    /// queue's approve swipe) over a bar material; disabled once the
+    /// proposal is past staging. The explicit tints matter: the app-wide
+    /// `.tint(.white)` otherwise starves both standard styles of their
+    /// semantic colors, rendering them as washed-out neutral pills (the
+    /// same white-tint class as the pairing row's white-on-white labels).
+    /// Dismissal itself is the sheet's native drag gesture.
     private var verdictButtons: some View {
         HStack(spacing: 12) {
             Button(role: .destructive) {
@@ -185,6 +189,7 @@ struct ProposalDetailSheet: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
+            .tint(.red)
             Button {
                 onApprove()
                 dismiss()
@@ -193,6 +198,7 @@ struct ProposalDetailSheet: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
+            .tint(.green)
         }
         .disabled(!proposal.isPending)
         .padding(.horizontal, 20)
