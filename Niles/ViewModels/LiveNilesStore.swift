@@ -765,7 +765,7 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
         case "in_flight":
             // Screenshot fixture: a swipe decision frozen mid-pipeline — the
             // row is out of the Queue and renders on Activity as processing
-            // (Deciding…/Executing…). The chip is planted directly because
+            // (Denying…/Executing…). The chip is planted directly because
             // the real pipeline settles in milliseconds on the fake home,
             // too fast to capture; it renders the exact state a real swipe
             // shows while the pipeline runs.
@@ -795,6 +795,11 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
                     agentName: agentNamesByProposal[id]
                 )
             }
+        case "deny_in_flight":
+            // Same frozen mid-pipeline state, denying side: the Activity
+            // processing row must read Denying… while the pipeline runs.
+            guard let id = await stage(createRoomPlan()) else { return }
+            decisionsInFlight[id] = .denying
 
         case "decision_failed":
             // Screenshot fixture: a failed decision — the row is back in

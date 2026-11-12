@@ -10,7 +10,7 @@ import NilesCore
 /// rows offer Undo as a swipe action; undone entries stay marked Undone.
 /// A proposal appears here once it has been decided — pending (staged)
 /// items stay in the Queue alone, except an in-flight swipe decision,
-/// which renders here as a processing row (Deciding…/Executing…) while
+/// which renders here as a processing row (Denying…/Executing…) while
 /// the pipeline runs.
 struct ActivityScreen: View {
     var model: any ActivityViewModel
@@ -137,9 +137,9 @@ struct ActivityScreen: View {
                 VStack(alignment: .trailing, spacing: 4) {
                     // A processing row spins beside its timestamp — the
                     // pipeline is still running. The label names the phase
-                    // (Deciding…/Executing…) so the state is readable, not
+                    // (Denying…/Executing…) so the state is readable, not
                     // just color and motion.
-                    if group.state == .deciding || group.state == .executing {
+                    if group.state == .denying || group.state == .executing {
                         HStack(spacing: 6) {
                             ProgressView()
                             Text(group.state.label)
@@ -184,7 +184,7 @@ extension ActivityTimeline.Verdict {
         case .failed: "xmark.octagon"
         case .expired: "clock.badge.xmark"
         case .undone: "arrow.uturn.backward.circle"
-        case .deciding, .executing: "arrow.triangle.2.circlepath"
+        case .denying, .executing: "arrow.triangle.2.circlepath"
         }
     }
 
@@ -197,7 +197,7 @@ extension ActivityTimeline.Verdict {
         case .approved, .executed: .green
         case .denied, .failed: .red
         case .expired, .undone: .secondary
-        case .deciding, .executing: .blue
+        case .denying, .executing: .blue
         }
     }
 
@@ -210,7 +210,7 @@ extension ActivityTimeline.Verdict {
         case .failed: "Failed"
         case .expired: "Expired"
         case .undone: "Undone"
-        case .deciding: "Deciding…"
+        case .denying: "Denying…"
         case .executing: "Executing…"
         }
     }
