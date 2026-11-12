@@ -281,9 +281,10 @@ struct HomeScreen: View {
                             .font(.footnote)
                             .foregroundStyle(.primary)
                     }
-                    // Borderless confines the tap target to the label — the
-                    // row also holds the code text.
-                    .buttonStyle(.borderless)
+                    // Plain confines the tap target to the label (the row
+                    // also holds the code text) and, unlike borderless,
+                    // keeps .primary visible under the app-wide white tint.
+                    .buttonStyle(.plain)
                 }
                 .padding(.vertical, 4)
             } else {
