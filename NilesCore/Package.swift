@@ -17,7 +17,7 @@ let package = Package(
     dependencies: [
         .package(
             url: "https://github.com/modelcontextprotocol/swift-sdk",
-            exactVersion: "0.12.1"
+            exact: "0.12.1"
         ),
     ],
     targets: [
