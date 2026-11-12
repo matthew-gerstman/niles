@@ -15,6 +15,9 @@ import OSLog
 final class LivePairingStore: PairingViewModel {
 
     let transportName = "Streamable HTTP"
+    /// The serving endpoint, recomputed on every refresh (the LAN IP can
+    /// change); the pairing prompt and the Server row render it.
+    private(set) var endpoint = "http://\(LANAddress.primaryIPv4 ?? "127.0.0.1"):\(LANServer.defaultPort)/mcp"
     /// The live six-digit code, or `nil` between mint failures. Auto-minted
     /// whenever refresh finds none — after expiry, a successful exchange, or
     /// an attempt-cap burn — so the card always shows a fresh challenge.

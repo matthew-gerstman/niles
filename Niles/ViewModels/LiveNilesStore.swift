@@ -41,10 +41,13 @@ final class LiveNilesStore {
 
     // MARK: - Engine
 
-    private let coordinator: ServerCoordinator
+    /// Internal, not private: the simulator QA fixtures live in an
+    /// extension over this type in another file and drive the coordinator
+    /// and the log directly (they were private methods of the monolith).
+    let coordinator: ServerCoordinator
     private let notifier: ProposalNotifier
     private let pollInterval: Duration
-    private let logger = Logger(subsystem: "com.gerstman.niles", category: "live-store")
+    let logger = Logger(subsystem: "com.gerstman.niles", category: "live-store")
 
     private var pollingTask: Task<Void, Never>?
     /// Last-seen proposal state per id — the poll diff that turns state
