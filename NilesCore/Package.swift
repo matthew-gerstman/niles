@@ -8,7 +8,9 @@ import PackageDescription
 /// `Value` type never appears in the app-facing API.
 let package = Package(
     name: "NilesCore",
-    platforms: [.iOS(.v17)],
+    // iOS 17 is the app's floor. macOS 13 exists so the package can be
+    // built standalone on a Mac host (`swift build`) — the MCP SDK's floor.
+    platforms: [.iOS(.v17), .macOS(.v13)],
     products: [
         // Dynamic to keep the framework-shaped embedding the app target
         // had when NilesCore was an XcodeGen framework.
