@@ -117,6 +117,11 @@ struct ActivityScreen: View {
                 }
             }
         }
+        // Plain keeps the label's .primary/.secondary styles honest: the
+        // default button style under the app-wide .tint(.white) renders
+        // .primary text white-on-white in light mode (same pairing-row
+        // lesson from UI pass 2).
+        .buttonStyle(.plain)
         .swipeActions(edge: .trailing) {
             if group.undoAvailable {
                 Button {
