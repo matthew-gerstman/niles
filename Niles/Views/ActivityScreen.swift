@@ -8,6 +8,8 @@ import NilesCore
 /// most recent timestamp. Tapping opens a detail view with the full
 /// lifecycle timeline and structured read-back evidence. Recent executed
 /// rows offer Undo as a swipe action; undone entries stay marked Undone.
+/// A proposal appears here only once it has been decided — pending (staged)
+/// items stay in the Queue alone until approved or denied.
 struct ActivityScreen: View {
     var model: any ActivityViewModel
 
@@ -19,15 +21,27 @@ struct ActivityScreen: View {
     /// detail sheet on launch, so per-proposal captures need no UI automation.
     @State private var autoOpenedDetail = false
 
+    /// Pending (staged) proposals never render here — Activity starts at
+    /// the decision. A proposal no longer in memory (after a relaunch) is
+    /// settled history and always shows.
+    private static func decidedGroups(
+        events: [ActivityEvent], proposals: [NilesProposal]
+    ) -> [ActivityTimeline.Group] {
+        ActivityTimeline.groups(events: events, proposals: proposals).filter { group in
+            guard let proposal = proposals.first(where: { $0.id == group.proposalId }) else { return true }
+            return proposal.state != .staged
+        }
+    }
+
     var body: some View {
         NavigationStack {
             List {
-                let groups = ActivityTimeline.groups(events: model.activityEvents, proposals: model.proposals)
+                let groups = Self.decidedGroups(events: model.activityEvents, proposals: model.proposals)
                 if groups.isEmpty {
                     ContentUnavailableView(
                         "No activity yet",
                         systemImage: "clock.arrow.circlepath",
-                        description: Text("Proposals will appear here as they are staged, decided, and executed.")
+                        description: Text("Proposals appear here once you approve or deny them — pending items wait in the Queue.")
                     )
                 } else {
                     ForEach(ActivityDaySections(groups: groups)) { section in
@@ -57,7 +71,7 @@ struct ActivityScreen: View {
             .sheet(item: $openDetail) { group in
                 // Rebuild the group from the model so the sheet reflects undo
                 // taps and refreshed evidence, like the approvals sheet does.
-                if let fresh = ActivityTimeline.groups(
+                if let fresh = Self.decidedGroups(
                     events: model.activityEvents, proposals: model.proposals
                 ).first(where: { $0.proposalId == group.proposalId }) {
                     ActivityDetailView(
@@ -71,7 +85,7 @@ struct ActivityScreen: View {
             .task {
                 if !autoOpenedDetail,
                    ProcessInfo.processInfo.arguments.contains("-UIActivityOpenDetail"),
-                   let newest = ActivityTimeline.groups(
+                   let newest = Self.decidedGroups(
                        events: model.activityEvents, proposals: model.proposals
                    ).first {
                     openDetail = newest
