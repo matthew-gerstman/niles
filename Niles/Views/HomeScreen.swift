@@ -11,7 +11,9 @@ import NilesCore
 /// sections are gone from here, and neither the Queue nor the Server
 /// section carries a footer anymore.
 struct HomeScreen: View {
-    var model: any DashboardViewModel & PairingViewModel & AgentStatusViewModel & QueueViewModel & HomeGraphViewModel
+    var dashboard: any DashboardViewModel
+    var pairing: any PairingViewModel
+    var queue: any QueueViewModel
 
     /// Wide-layout chat entry: when set, a trailing toolbar button on
     /// Home's navigation bar opens the gated agent chat as a sheet (the
@@ -112,7 +114,7 @@ struct HomeScreen: View {
                 }
                 // The chat's chip tap can land here before the store's poll
                 // has surfaced the proposal; retry on the next refresh.
-                .onChange(of: model.proposals) { _, _ in openPendingProposalIfRequested() }
+                .onChange(of: queue.proposals) { _, _ in openPendingProposalIfRequested() }
                 // Deep link from OpenQueueIntent while the app is already
                 // running: ContentView selects this tab; this scrolls to the
                 // Queue section (and opens a riding proposal, if any).
@@ -128,7 +130,7 @@ struct HomeScreen: View {
             ) {
                 Button("Revoke", role: .destructive) {
                     if let agent = pendingRevoke {
-                        Task { await model.revokeAgent(agent.id) }
+                        Task { await pairing.revokeAgent(agent.id) }
                     }
                     pendingRevoke = nil
                 }
@@ -138,13 +140,13 @@ struct HomeScreen: View {
             }
             .sheet(item: $openDetail) { snapshot in
                 // Re-read from the model so the sheet reflects decisions made on the row.
-                if let proposal = model.proposals.first(where: { $0.id == snapshot.id }) {
+                if let proposal = queue.proposals.first(where: { $0.id == snapshot.id }) {
                     ProposalDetailSheet(
                         proposal: proposal,
-                        undoState: model.undoStates[proposal.id],
-                        onApprove: { model.approve(proposal.id) },
-                        onDeny: { model.deny(proposal.id) },
-                        onUndo: { model.undo(proposal.id) }
+                        undoState: queue.undoStates[proposal.id],
+                        onApprove: { queue.approve(proposal.id) },
+                        onDeny: { queue.deny(proposal.id) },
+                        onUndo: { queue.undo(proposal.id) }
                     )
                 }
             }
@@ -162,13 +164,13 @@ struct HomeScreen: View {
             // denied, executed, expired, execution-failed) never renders
             // here. Activity owns decided and in-flight work; a failed
             // decision returns the row with its error note.
-            let visible = model.queueProposals
+            let visible = queue.queueProposals
             if visible.isEmpty {
                 emptyQueueState
             } else {
                 ForEach(visible) { proposal in
                     QueueListRow(
-                        proposal: proposal, model: model,
+                        proposal: proposal, model: queue,
                         onOpen: { openDetail = proposal }
                     )
                 }
@@ -194,7 +196,7 @@ struct HomeScreen: View {
     /// a no-op — the flag stays until the proposal shows up.
     private func openPendingProposalIfRequested() {
         guard let id = navigation.pendingProposalId else { return }
-        guard let proposal = model.proposals.first(where: { $0.id == id }) else { return }
+        guard let proposal = queue.proposals.first(where: { $0.id == id }) else { return }
         openDetail = proposal
         navigation.consumePendingProposal()
     }
@@ -236,12 +238,12 @@ struct HomeScreen: View {
     private var serverSection: some View {
         Section {
             Toggle("Serving", isOn: Binding(
-                get: { model.serverIsRunning },
-                set: { model.setServerRunning($0) }
+                get: { dashboard.serverIsRunning },
+                set: { dashboard.setServerRunning($0) }
             ))
             .tint(.green)
-            LabeledContent("Endpoint", value: model.endpoint)
-            LabeledContent("Bonjour", value: model.bonjourService)
+            LabeledContent("Endpoint", value: dashboard.endpoint)
+            LabeledContent("Bonjour", value: dashboard.bonjourService)
         } header: {
             Text("Server")
                 .id(ScrollTarget.server)
@@ -257,7 +259,7 @@ struct HomeScreen: View {
     @ViewBuilder
     private var pairingSection: some View {
         Section {
-            if let code = model.pairingCode {
+            if let code = pairing.pairingCode {
                 // One row: the code with its copy prompt as a small caption
                 // beside it, not a standard row stacked below.
                 HStack(spacing: 8) {
@@ -266,7 +268,7 @@ struct HomeScreen: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
 
                     Button {
-                        UIPasteboard.general.string = Self.pairingPrompt(address: model.endpoint, code: code)
+                        UIPasteboard.general.string = Self.pairingPrompt(address: dashboard.endpoint, code: code)
                         copiedReset?.cancel()
                         withAnimation { showCopied = true }
                         copiedReset = Task {
@@ -314,13 +316,13 @@ struct HomeScreen: View {
     /// by the dialog above.
     private var pairedAgentsSection: some View {
         Section {
-            if model.pairedAgents.isEmpty {
+            if pairing.pairedAgents.isEmpty {
                 Text("No agents connected")
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(model.pairedAgents) { agent in
+                ForEach(pairing.pairedAgents) { agent in
                     NavigationLink {
-                        PairedAgentDetailScreen(agent: agent, model: model)
+                        PairedAgentDetailScreen(agent: agent, model: pairing)
                     } label: {
                         HStack {
                             Text(agent.name)
@@ -378,5 +380,6 @@ struct HomeScreen: View {
 }
 
 #Preview("Home") {
-    HomeScreen(model: InMemoryNilesStore())
+    let model = InMemoryNilesStore()
+    HomeScreen(dashboard: model, pairing: model, queue: model)
 }

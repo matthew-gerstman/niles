@@ -12,7 +12,9 @@ struct AgentChatScreen: View {
     /// (`AgentStatusViewModel`), and the proposal live state that chips ride
     /// (`QueueViewModel` — refreshed by the store's existing 1-second poll;
     /// no `ProposalStore` changes).
-    var model: any ChatViewModel & AgentStatusViewModel & QueueViewModel
+    var chat: any ChatViewModel
+    var agentStatus: any AgentStatusViewModel
+    var queue: any QueueViewModel
 
     @State private var draft = ""
     @State private var navigation = AppNavigation.shared
@@ -21,10 +23,10 @@ struct AgentChatScreen: View {
     /// Haptic triggers: one count per outcome, so a resolved turn buzzes
     /// success and a failed turn buzzes error exactly once.
     private var resolvedTurnCount: Int {
-        model.entries.filter { $0.role == .agent && $0.state == .done }.count
+        chat.entries.filter { $0.role == .agent && $0.state == .done }.count
     }
     private var failedTurnCount: Int {
-        model.entries.filter { entry in
+        chat.entries.filter { entry in
             if case .failed = entry.state { return true }
             return false
         }.count
@@ -32,7 +34,7 @@ struct AgentChatScreen: View {
 
     var body: some View {
         Group {
-            if case .unavailable(let reason) = model.agentAvailability {
+            if case .unavailable(let reason) = agentStatus.agentAvailability {
                 unavailableState(reason)
             } else {
                 transcript
@@ -61,7 +63,7 @@ struct AgentChatScreen: View {
 
     @ViewBuilder
     private var transcript: some View {
-        if model.entries.isEmpty {
+        if chat.entries.isEmpty {
             // Centered: the empty state has nothing to anchor to the bottom.
             ContentUnavailableView {
                 Label("Ask Niles", systemImage: "sparkles")
@@ -78,7 +80,7 @@ struct AgentChatScreen: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 20) {
-                    ForEach(model.entries) { entry in
+                    ForEach(chat.entries) { entry in
                         row(for: entry)
                     }
                 }
@@ -87,13 +89,13 @@ struct AgentChatScreen: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .defaultScrollAnchor(.bottom)
-            .onChange(of: model.entries.count) { _, _ in scrollToLast(proxy) }
+            .onChange(of: chat.entries.count) { _, _ in scrollToLast(proxy) }
             .onAppear { scrollToLast(proxy) }
         }
     }
 
     private func scrollToLast(_ proxy: ScrollViewProxy) {
-        guard let last = model.entries.last else { return }
+        guard let last = chat.entries.last else { return }
         withAnimation {
             proxy.scrollTo(last.id, anchor: .bottom)
         }
@@ -148,7 +150,7 @@ struct AgentChatScreen: View {
     /// the Queue with that proposal as context. Live state rides the store's
     /// existing poll — this view only reads it.
     private func chip(for id: String) -> some View {
-        let proposal = model.proposals.first { $0.id == id }
+        let proposal = queue.proposals.first { $0.id == id }
         return Button {
             navigation.requestQueue(proposalId: id)
         } label: {
@@ -199,7 +201,7 @@ struct AgentChatScreen: View {
                 .lineLimit(1...5)
                 .submitLabel(.send)
                 .focused($composerFocused)
-                .disabled(!model.canSend)
+                .disabled(!chat.canSend)
                 .accessibilityIdentifier("chat-composer")
             Button {
                 send()
@@ -209,7 +211,7 @@ struct AgentChatScreen: View {
             }
             .accessibilityLabel("Send")
             .accessibilityIdentifier("chat-send")
-            .disabled(!model.canSend || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .disabled(!chat.canSend || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
         .padding(.horizontal)
         .padding(.vertical, 8)
@@ -218,10 +220,10 @@ struct AgentChatScreen: View {
 
     private func send() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard model.canSend, !text.isEmpty else { return }
+        guard chat.canSend, !text.isEmpty else { return }
         draft = ""
         composerFocused = false
-        Task { await model.send(text) }
+        Task { await chat.send(text) }
     }
 }
 
@@ -255,7 +257,7 @@ enum AgentChatChip {
 
 #Preview("Empty") {
     NavigationStack {
-        AgentChatScreen(model: InMemoryNilesStore())
+        AgentChatScreen(chat: InMemoryNilesStore(), agentStatus: InMemoryNilesStore(), queue: InMemoryNilesStore())
     }
 }
 
@@ -263,6 +265,6 @@ enum AgentChatChip {
     let store = InMemoryNilesStore()
     store.agentAvailability = .unavailable(.appleIntelligenceNotEnabled)
     return NavigationStack {
-        AgentChatScreen(model: store)
+        AgentChatScreen(chat: store, agentStatus: store, queue: store)
     }
 }

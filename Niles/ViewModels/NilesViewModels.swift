@@ -12,7 +12,6 @@ protocol DashboardViewModel: Observable {
     var serverIsRunning: Bool { get }
     var endpoint: String { get }
     var bonjourService: String { get }
-    var pendingProposals: [NilesProposal] { get }
     var connectedAgents: [AgentConnection] { get }
     func setServerRunning(_ running: Bool)
 }
