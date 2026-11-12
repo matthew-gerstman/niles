@@ -48,6 +48,10 @@ public actor ProposalStore {
 
     /// Oldest first; `proposals()` renders newest first, like the mockup queue.
     private var proposals: [Proposal] = []
+    /// The most operations one `stage_batch` call may stage — beyond this
+    /// the review card stops being one legible decision, and the error names
+    /// the limit instead of staging a card nobody reads.
+    public static let batchLimit = 20
     /// The operations behind each staged proposal — the execution detail the
     /// envelope intentionally omits. Cleared once terminal.
     private var operations: [String: [HomeKitOperation]] = [:]
@@ -184,6 +188,59 @@ public actor ProposalStore {
         operations[proposal.id] = plan.operations
         persistSnapshot()
         return proposal
+    }
+
+    /// Stages many write-tool operations as ONE proposal — one review card,
+    /// one notification, one approval (Blueprint art_iN2CYQKa). Every member
+    /// names a staged write tool with its normal arguments, and every member
+    /// plans against a single graph snapshot through the same per-tool
+    /// planning the individual tools call.
+    ///
+    /// All-or-nothing planning: every member plans before anything stages.
+    /// Any failure — unknown object, bad value, unknown tool — rejects the
+    /// whole batch with per-entry errors and no proposal exists, matching
+    /// `stage(tool:arguments:)`'s eager validation. Members carrying
+    /// `set_trigger_state` are rejected outright: enabling or disarming an
+    /// automation is always its own proposal and its own approval (the
+    /// create/arm firewall). Approval runs the merged operations in order
+    /// through the ordinary forward-only executor; a partial failure records
+    /// which applied. Dedupe and persistence ride `stage(plan:)` unchanged.
+    public func stageBatch(_ operations: [BatchOperation]) async throws -> Proposal {
+        guard !operations.isEmpty else {
+            throw ProposalStoreError.invalidArguments(
+                "stage_batch requires at least one operation — an empty batch stages nothing."
+            )
+        }
+        guard operations.count <= Self.batchLimit else {
+            throw ProposalStoreError.invalidArguments(
+                "A batch is limited to \(Self.batchLimit) operations (got \(operations.count)) — split the request into batches of \(Self.batchLimit) or fewer."
+            )
+        }
+        if let armIndex = operations.firstIndex(where: { $0.tool == "set_trigger_state" }) {
+            throw ProposalStoreError.validationFailed([
+                "Operation \(armIndex + 1) (set_trigger_state) is not a valid batch member — enabling or disarming an automation is always its own proposal and its own approval (the create/arm firewall). Stage it separately."
+            ])
+        }
+        let graph: HomeGraph
+        do {
+            graph = try await homeKit.snapshot()
+        } catch {
+            throw ProposalStoreError.homeReadFailed(String(describing: error))
+        }
+        var plans: [Plan] = []
+        plans.reserveCapacity(operations.count)
+        var failures: [String] = []
+        for (index, operation) in operations.enumerated() {
+            do {
+                plans.append(try planWith(operation.tool, operation.arguments, graph))
+            } catch {
+                failures.append("Operation \(index + 1) (\(operation.tool)): \(Self.planningFailureMessage(error))")
+            }
+        }
+        guard failures.isEmpty else {
+            throw ProposalStoreError.validationFailed(failures)
+        }
+        return stage(plan: Self.merge(plans))
     }
 
     // MARK: - Reading
