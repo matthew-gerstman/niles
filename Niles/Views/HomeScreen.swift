@@ -79,11 +79,22 @@ struct HomeScreen: View {
                 // opens a blank band above both panes' titles. A bar item
                 // stays on the Home pane's own bar at title height.
                 .navigationBarItems(trailing: chatEntryButton)
-                // Scroll-content margins belong on the List, not on the
-                // NavigationStack wrapper (widePane): margins scoped to the
-                // stack interfere with the bar's scroll-edge tracking in the
-                // wide layout (bisect cell 2, diagnosis art_LwUDWPuP).
-                .contentMargins(.horizontal, 20, for: .scrollContent)
+                // No explicit .contentMargins on the List: an explicit
+                // horizontal scroll-content margin REPLACES the
+                // safe-area-derived one, and on the Duo that is the 84 pt
+                // sensor-housing/status-pillar clearance (device-measured,
+                // todo_5nDqe0he — with the margin set, cards rendered ~66 pt
+                // under the pillar). The default grouped-list margins already
+                // give the 20 pt gutters, and keeping margins off the stack
+                // wrapper avoids the bar scroll-edge interference of bisect
+                // cell 2 (diagnosis art_LwUDWPuP).
+                // Safe-area diagnostics: -UISafeAreaProbe overlays the
+                // List's measured insets and boundary lines.
+                .overlay(alignment: .bottomLeading) {
+                    if SafeAreaProbe.active {
+                        SafeAreaOverlay(label: "home.list", badgeAlignment: .topLeading)
+                    }
+                }
                 .onAppear {
                     consumeScrollRequest(proxy)
                     openPendingProposalIfRequested()

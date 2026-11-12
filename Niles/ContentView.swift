@@ -98,6 +98,13 @@ struct ContentView: View {
                 tabLayout
             }
         }
+        // Safe-area diagnostics: -UISafeAreaProbe overlays the root's
+        // measured insets and boundary lines (see SafeAreaProbe).
+        .overlay {
+            if SafeAreaProbe.active {
+                SafeAreaOverlay(label: usesWideLayout ? "root-wide" : "root-compact")
+            }
+        }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { measuredWidth = $0 }
         .task {
             store.start()
