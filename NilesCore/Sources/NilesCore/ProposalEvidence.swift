@@ -13,16 +13,48 @@ public enum ProposalEvidenceCollector {
     /// service group, or trigger is then matched by id, so a same-named
     /// pre-existing object cannot false-confirm a creation. Name matching
     /// is only the fallback when no created id is known.
+    ///
+    /// `ranFlags` carries the executor's per-entry applied marker — one Bool
+    /// per operation, true when its `perform` returned. Graph-only read-back
+    /// cannot distinguish executed from never-attempted (an "accessory still
+    /// present" claim reads confirmed either way), so a forward-only abort
+    /// is re-stamped here: entries after the first unrun flag were never
+    /// attempted and read not-run; the failing entry keeps its real
+    /// read-back but confirms false, with the HomeKit error (`failureMessage`)
+    /// appended so the abort is on the row, not only on the card's error line.
     public static func collect(
-        operations: [HomeKitOperation], createdIds: [String?], graph: HomeGraph
+        operations: [HomeKitOperation], createdIds: [String?], graph: HomeGraph,
+        ranFlags: [Bool]? = nil, failureMessage: String? = nil
     ) -> [ProposalEvidence] {
         let ids = createdIds.count == operations.count
             ? createdIds
             : Array(repeating: nil as String?, count: operations.count)
-        return operations.enumerated().map { batchIndex, operation in
+        let flags = ranFlags?.count == operations.count ? ranFlags! : nil
+        let evidence = operations.enumerated().map { batchIndex, operation in
             collect(
                 operation: operation, createdId: ids[batchIndex],
                 batch: operations, batchIndex: batchIndex, graph: graph
+            )
+        }
+        guard let flags, let failureIndex = flags.firstIndex(of: false) else {
+            return evidence
+        }
+        return evidence.enumerated().map { index, item in
+            guard index >= failureIndex else { return item }
+            if index == failureIndex {
+                guard let failureMessage else { return item }
+                return ProposalEvidence(
+                    claim: item.claim,
+                    observed: "\(item.observed) — HomeKit reported: \(failureMessage)",
+                    confirmed: false
+                )
+            }
+            return ProposalEvidence(
+                claim: item.claim,
+                observed: "Not run — the batch aborted at operation \(failureIndex + 1), "
+                    + "and forward-only execution never attempted this entry.",
+                confirmed: false,
+                notRun: true
             )
         }
     }

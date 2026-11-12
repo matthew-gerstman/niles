@@ -210,14 +210,18 @@ enum ActivityTimeline {
         let confirmed = evidence.filter(\.confirmed).count
         let total = evidence.count
         let totalChecks = total == 1 ? "1 check" : "\(total) checks"
+        let notRun = evidence.filter(\.notRun).count
         if confirmed == total {
             return "Re-read the home after execution; state matched expectations (\(totalChecks))."
         }
+        let notRunNote = notRun == 0 ? ""
+            : notRun == 1 ? " 1 entry never ran — the batch aborted first."
+            : " \(notRun) entries never ran — the batch aborted first."
         if confirmed == 0 {
-            return "Re-read the home after execution; the home did not match expectations."
+            return "Re-read the home after execution; the home did not match expectations.\(notRunNote)"
         }
         let confirmedChecks = confirmed == 1 ? "1 check" : "\(confirmed) checks"
-        return "Re-read the home after execution; \(confirmedChecks) of \(totalChecks) matched expectations."
+        return "Re-read the home after execution; \(confirmedChecks) of \(totalChecks) matched expectations.\(notRunNote)"
     }
 
     /// Groups rows by recency and orders the buckets themselves.

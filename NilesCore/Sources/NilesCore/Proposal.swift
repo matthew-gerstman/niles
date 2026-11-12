@@ -78,11 +78,32 @@ public struct ProposalEvidence: Codable, Sendable, Equatable, Hashable {
     public let claim: String
     public let observed: String
     public let confirmed: Bool
+    /// True when a forward-only batch aborted before this entry ever ran.
+    /// Graph-only evidence cannot distinguish executed from never-attempted
+    /// (an "accessory still present" claim reads confirmed either way), so
+    /// the executor's per-entry applied marker sets this explicitly for
+    /// every entry the failure left unreached.
+    public let notRun: Bool
 
-    public init(claim: String, observed: String, confirmed: Bool) {
+    public init(claim: String, observed: String, confirmed: Bool, notRun: Bool = false) {
         self.claim = claim
         self.observed = observed
         self.confirmed = confirmed
+        self.notRun = notRun
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case claim, observed, confirmed, notRun
+    }
+
+    /// Snapshots written before `notRun` existed describe entries that ran —
+    /// decoded as such rather than failing the whole proposal load.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        claim = try container.decode(String.self, forKey: .claim)
+        observed = try container.decode(String.self, forKey: .observed)
+        confirmed = try container.decode(Bool.self, forKey: .confirmed)
+        notRun = try container.decodeIfPresent(Bool.self, forKey: .notRun) ?? false
     }
 }
 

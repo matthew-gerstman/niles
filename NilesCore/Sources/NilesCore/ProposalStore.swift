@@ -293,35 +293,60 @@ public actor ProposalStore {
             // false-confirm a creation.
             var createdIds = [String?](repeating: nil, count: operations.count)
             var allOperations = operations
+            // Per-entry applied marker: true the moment an entry's perform
+            // returns. Graph-only evidence cannot tell executed from
+            // never-attempted, so a forward-only abort stamps every entry
+            // after the first unrun one as not-run instead of letting its
+            // read-back read confirmed (Duo QA: identifies in an aborted
+            // batch showed "✓ confirmed" without ever running).
+            var ranFlags = [Bool](repeating: false, count: operations.count)
+            var failureMessage: String?
             do {
                 for (index, operation) in operations.enumerated() {
-                    createdIds[index] = try await homeKit.perform(operation)
+                    do {
+                        createdIds[index] = try await homeKit.perform(operation)
+                        ranFlags[index] = true
+                    } catch {
+                        failureMessage = String(describing: error)
+                        throw error
+                    }
                 }
                 if let restore = memberRestore, let createdId = createdIds.compactMap({ $0 }).first {
                     let restoreOperations = restore.operations(createdId: createdId)
-                    for restoreOperation in restoreOperations {
-                        _ = try await homeKit.perform(restoreOperation)
+                    var restoreFlags = [Bool](repeating: false, count: restoreOperations.count)
+                    for (index, restoreOperation) in restoreOperations.enumerated() {
+                        do {
+                            _ = try await homeKit.perform(restoreOperation)
+                            restoreFlags[index] = true
+                        } catch {
+                            failureMessage = String(describing: error)
+                            throw error
+                        }
                     }
                     // The restore rides in the same execution and the same
                     // read-back: each member's return is confirmed like any
                     // other operation.
                     allOperations += restoreOperations
                     createdIds += [String?](repeating: nil, count: restoreOperations.count)
+                    ranFlags += restoreFlags
                 }
                 let fresh = try await homeKit.snapshot()
                 updated.evidence = ProposalEvidenceCollector.collect(
-                    operations: allOperations, createdIds: createdIds, graph: fresh
+                    operations: allOperations, createdIds: createdIds, graph: fresh,
+                    ranFlags: ranFlags, failureMessage: failureMessage
                 )
                 updated.state = .executed
             } catch {
                 // The HomeKit failure is recorded verbatim; evidence from
                 // whatever did apply is still read back so the human and the
-                // agent see the same story. If even the read-back fails, the
-                // error line stands alone — and empty evidence is itself the
-                // honest observation.
+                // agent see the same story — with every unreached entry
+                // marked not-run rather than confirmed off the graph alone.
+                // If even the read-back fails, the error line stands alone —
+                // and empty evidence is itself the honest observation.
                 if let fresh = try? await homeKit.snapshot() {
                     updated.evidence = ProposalEvidenceCollector.collect(
-                        operations: allOperations, createdIds: createdIds, graph: fresh
+                        operations: allOperations, createdIds: createdIds, graph: fresh,
+                        ranFlags: ranFlags, failureMessage: failureMessage
                     )
                 }
                 updated.error = String(describing: error)
