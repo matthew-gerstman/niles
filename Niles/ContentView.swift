@@ -1,30 +1,33 @@
 import SwiftUI
 import NilesCore
 
-/// Root view: Home, Activity, and — when the agent feature gate allows it
-/// (AgentGate) — Niles. At generous widths (measured, not size-class, so
-/// base iPhones in landscape qualify) Home and Activity sit side by side
-/// with no tab bar; at compact widths they are tabs, with Niles as the
-/// agent chat as a first-class tab. Holds the live store; previews
-/// substitute the in-memory one behind the same protocols.
+/// Root view: Home and Activity. At generous widths (measured, not
+/// size-class, so base iPhones in landscape qualify) they sit side by side
+/// with no tab bar — Activity left, Home right — with the pane split
+/// aligned to the device's crease when one is reported (Duo, iOS 27.1+).
+/// At compact widths there is also no tab bar: a single page with Home
+/// above Activity. The gated agent chat (AgentGate) is reachable from
+/// either layout through a trailing button on Home's bar, opening the chat
+/// as a sheet. Holds the live store; previews substitute the in-memory one
+/// behind the same protocols.
 struct ContentView: View {
     @State private var store: LiveNilesStore
     @State private var navigation = AppNavigation.shared
     /// The agent feature gate, bound live: toggling it in Settings re-renders
-    /// the tab row here without a relaunch.
+    /// Home's chat entry here without a relaunch.
     @AppStorage(AgentGate.storageKey) private var agentEnabled = AgentGate.bundledDefault
-    /// Screenshot/preview hook: `-UIActivityFixtures` renders the Activity tab
-    /// on the fixture store instead of the live one, so a fresh simulator has
-    /// a populated timeline to capture.
+    /// Screenshot/preview hook: `-UIActivityFixtures` renders the Activity
+    /// pane on the fixture store instead of the live one, so a fresh
+    /// simulator has a populated timeline to capture.
     @State private var fixtureActivityStore: FixtureActivityStore? = {
         if LaunchArguments.uiActivityFixtures {
             return FixtureActivityStore()
         }
         return nil
     }()
-    /// Screenshot/preview hook: `-UIHomeFixtures` renders the Home tab on the
-    /// in-memory fixture store, so a fresh simulator shows a populated queue
-    /// and paired agents without Keychain credentials or live sessions.
+    /// Screenshot/preview hook: `-UIHomeFixtures` renders the Home pane on
+    /// the in-memory fixture store, so a fresh simulator shows a populated
+    /// queue and paired agents without Keychain credentials or live sessions.
     @State private var fixtureHomeStore: InMemoryNilesStore? = {
         if LaunchArguments.uiHomeFixtures {
             return InMemoryNilesStore()
@@ -43,35 +46,14 @@ struct ContentView: View {
     private static let wideLayoutMinWidth: CGFloat = 600
     /// Live measured width of the root view; drives the adaptive layout.
     @State private var measuredWidth: CGFloat = 0
-    /// Wide layout only: presents the gated agent chat as a sheet (the
-    /// toolbar button on the Home pane opens it).
-    @State private var showWideChat = false
-
-    enum NilesTab: String, CaseIterable, Identifiable {
-        case home, activity, niles
-        var id: String { rawValue }
-    }
-
-    @State private var selectedTab: NilesTab = {
-    // Test/screenshot hook: `simctl launch ... -UITabSelect niles` opens a
-    // given tab so per-tab captures don't need UI automation.
-    if let tab = LaunchArguments.uiTabSelect {
-        return NilesTab(rawValue: tab) ?? .home
-    }
-    // Deep link from OpenQueueIntent: a cold launch lands on Home, whose
-    // Queue section holds the staged proposals awaiting approval. The
-    // scroll-to-Queue signal is left for HomeScreen to consume on appear.
-    if AppNavigation.shared.queueSelectionPending {
-        AppNavigation.shared.consumeQueueSelection()
-    }
-    return .home
-}()
+    /// Presents the gated agent chat as a sheet: the trailing button on
+    /// Home's bar opens it in both layouts (the compact single page has no
+    /// Niles tab either).
+    @State private var showChatSheet = false
 
     init(store: LiveNilesStore) {
         _store = State(initialValue: store)
     }
-
-    private var pendingCount: Int { store.pendingProposals.count }
 
     /// The adaptive decision: a forced hook wins, else the measured width.
     private var usesWideLayout: Bool {
@@ -84,7 +66,7 @@ struct ContentView: View {
             if usesWideLayout {
                 wideLayout
             } else {
-                tabLayout
+                compactLayout
             }
         }
         // Safe-area diagnostics: -UISafeAreaProbe overlays the root's
@@ -109,90 +91,125 @@ struct ContentView: View {
                     // executed proposal matches, so executed stays preferred.
                     ?? store.proposals.first { $0.tool == target }
             }
-            // The wide layout has no tab row; `-UITabSelect niles` opens
-            // the chat sheet instead.
-            if usesWideLayout, selectedTab == .niles {
-                selectedTab = .home
-                showWideChat = true
+            // Test/screenshot hook: `simctl launch ... -UITabSelect niles`
+            // opens the agent chat so its capture doesn't need UI
+            // automation. There are no tabs anymore — the single page shows
+            // Home and Activity together — so niles is the only meaningful
+            // value; home/activity are no-ops (both panes already visible).
+            if LaunchArguments.uiTabSelect == "niles" {
+                showChatSheet = true
+            }
+            // Deep link from OpenQueueIntent: a cold launch lands on the
+            // page whose Home pane holds the staged proposals awaiting
+            // approval. Consuming the selection here leaves the
+            // scroll-to-Queue signal for HomeScreen to act on.
+            if navigation.queueSelectionPending {
+                navigation.consumeQueueSelection()
             }
         }
         .sheet(item: $fixtureDetailProposal) { proposal in
             ProposalDetailSheet(proposal: proposal, undoState: store.undoStates[proposal.id])
         }
-        .sheet(isPresented: $showWideChat) {
+        .sheet(isPresented: $showChatSheet) {
             NavigationStack { AgentChatScreen(model: store) }
         }
-        // Deep link from OpenQueueIntent while the app is already running.
+        // Deep link from OpenQueueIntent while the app is already running:
+        // consume the selection so HomeScreen's scroll-to-Queue signal
+        // fires (HomeScreen observes it directly).
         .onChange(of: navigation.queueSelectionPending) { _, pending in
             guard pending else { return }
-            selectedTab = .home
             navigation.consumeQueueSelection()
         }
     }
 
-    /// Compact layout (the pre-adaptive root): the Home / Activity /
-    /// (gated) Niles tab pair.
-    private var tabLayout: some View {
-        TabView(selection: $selectedTab) {
+    /// Compact layout: one page, no tab bar — Home on top, Activity on the
+    /// bottom, a Divider between them; each pane scrolls within its half of
+    /// the page. The gated agent chat stays reachable through the same
+    /// trailing button on Home's bar the wide layout uses (chatEntry).
+    private var compactLayout: some View {
+        VStack(spacing: 0) {
             if let fixtureHomeStore {
-                HomeScreen(model: fixtureHomeStore)
-                    .tabItem { Label("Home", systemImage: "house") }
-                    .tag(NilesTab.home)
+                HomeScreen(model: fixtureHomeStore, chatEntry: chatEntry)
             } else {
-                HomeScreen(model: store)
-                    .tabItem { Label("Home", systemImage: "house") }
-                    .badge(pendingCount)
-                    .tag(NilesTab.home)
+                HomeScreen(model: store, chatEntry: chatEntry)
             }
+            Divider()
             if let fixture = fixtureActivityStore {
                 ActivityScreen(model: fixture)
-                    .tabItem { Label("Activity", systemImage: "clock.arrow.circlepath") }
-                    .tag(NilesTab.activity)
             } else {
                 ActivityScreen(model: store)
-                    .tabItem { Label("Activity", systemImage: "clock.arrow.circlepath") }
-                    .tag(NilesTab.activity)
-            }
-            if agentEnabled {
-                NavigationStack {
-                    AgentChatScreen(model: store)
-                }
-                .tabItem { Label("Niles", systemImage: "sparkles") }
-                .tag(NilesTab.niles)
             }
         }
     }
 
     /// Generous-width layout: Activity and Home side by side — Activity on
     /// the left, Home on the right — each keeping its own NavigationStack
-    /// title, with no tab bar. The gated agent chat stays reachable through
-    /// a trailing toolbar button on the Home pane. Both panes pass through
-    /// `widePane()` so their horizontal list margins match (observed in
-    /// simulation: landscape safe-area clearance otherwise folds into the
+    /// title, with no tab bar. The pane split follows the device's crease
+    /// when one is reported (`activityPaneWidth`); otherwise it is equal.
+    /// The gated agent chat stays reachable through a trailing toolbar
+    /// button on the Home pane. Both panes pass through `widePane()` so
+    /// their horizontal list margins match (observed in simulation:
+    /// landscape safe-area clearance otherwise folds into the
     /// edge-adjacent pane's list item insets).
     private var wideLayout: some View {
-        HStack(spacing: 0) {
-            if let fixture = fixtureActivityStore {
-                ActivityScreen(model: fixture)
-                    .widePane()
-            } else {
-                ActivityScreen(model: store)
-                    .widePane()
-            }
-            Divider()
-            if let fixtureHomeStore {
-                HomeScreen(model: fixtureHomeStore, chatEntry: chatEntry)
-                    .widePane()
-            } else {
-                HomeScreen(model: store, chatEntry: chatEntry)
-                    .widePane()
+        GeometryReader { proxy in
+            let activityWidth = activityPaneWidth(in: proxy)
+            HStack(spacing: 0) {
+                if let fixture = fixtureActivityStore {
+                    ActivityScreen(model: fixture)
+                        .widePane()
+                        .frame(width: activityWidth)
+                } else {
+                    ActivityScreen(model: store)
+                        .widePane()
+                        .frame(width: activityWidth)
+                }
+                Divider()
+                if let fixtureHomeStore {
+                    HomeScreen(model: fixtureHomeStore, chatEntry: chatEntry)
+                        .widePane()
+                } else {
+                    HomeScreen(model: store, chatEntry: chatEntry)
+                        .widePane()
+                }
             }
         }
     }
 
-    /// The wide layout's chat entry: gated, opening the sheet above.
+    /// The wide layout's Activity pane width: when the device reports an
+    /// active vertical division region (the Duo's crease — ReservedRegion,
+    /// iOS 27.1+, read from the same proxy that measures this pane), the
+    /// Activity pane extends through the crease's region so Home starts
+    /// clear of the fold, making Activity wider than the equal split. Any
+    /// other report falls back to the equal split: no active region (the
+    /// device open flat reports none), a horizontal division (laptop pose —
+    /// a leading/trailing split cannot follow it), or a split that would
+    /// not leave Activity at least its half. `-UICreasePosition` forces a
+    /// crease at a fraction of the width so the aligned split is capturable
+    /// on simulators that report no region.
+    private func activityPaneWidth(in proxy: GeometryProxy) -> CGFloat {
+        let width = proxy.size.width
+        if let fraction = LaunchArguments.uiCreasePosition {
+            return max(width * fraction, width / 2)
+        }
+        if #available(iOS 27.1, *) {
+            if let crease = proxy.reservedRegions(kind: .division)
+                .first(where: { $0.isActive }),
+                // A vertical crease line only: the region is tall and narrow
+                // when the fold runs top-to-bottom (book pose, portrait).
+                crease.frame.height > crease.frame.width {
+                let split = crease.frame.maxX
+                if split.isFinite, split >= width / 2, split < width {
+                    return split
+                }
+            }
+        }
+        return width / 2
+    }
+
+    /// The chat entry shared by both layouts: gated, opening the sheet above.
     private var chatEntry: (() -> Void)? {
-        agentEnabled ? { showWideChat = true } : nil
+        agentEnabled ? { showChatSheet = true } : nil
     }
 }
 

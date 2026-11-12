@@ -17,6 +17,7 @@ public enum LaunchArguments {
         case activityOpenDetail = "-UIActivityOpenDetail"
         case agentGateToggle = "-UIAgentGateToggle"
         case chatFixtures = "-UIChatFixtures"
+        case creasePosition = "-UICreasePosition"
         case homeFixtures = "-UIHomeFixtures"
         case homeScroll = "-UIHomeScroll"
         case notificationsDisabled = "-UINotificationsDisabled"
@@ -82,11 +83,20 @@ public enum LaunchArguments {
     public static var uiHomeScroll: String? { value(after: .homeScroll) }
 
     /// `-UIWideLayout [on|off]` — pins the adaptive layout: bare or `on`
-    /// forces the side-by-side panes, `off` forces the tab pair, absent is
-    /// nil (measure the width normally).
+    /// forces the side-by-side panes, `off` forces the single-page compact
+    /// layout, absent is nil (measure the width normally).
     public static var uiWideLayout: Bool? {
         guard isPresent(.wideLayout) else { return nil }
         return value(after: .wideLayout)?.lowercased() == "off" ? false : true
+    }
+
+    /// `-UICreasePosition <fraction>` — force a vertical crease at that
+    /// fraction of the wide layout's width (e.g. `0.6`) so the
+    /// crease-aligned pane split is capturable on simulators that report
+    /// no division region. Absent is nil (read the device's real regions).
+    public static var uiCreasePosition: CGFloat? {
+        guard isPresent(.creasePosition) else { return nil }
+        return value(after: .creasePosition).flatMap { Double($0) }.map { CGFloat($0) }
     }
 
     // MARK: - Safety property
@@ -98,7 +108,7 @@ public enum LaunchArguments {
     /// by `NilesBonjour.advertisedInstanceName`, so fixture hygiene holds
     /// even if a caller forgets to opt out.
     public static var isCaptureFixture: Bool {
-        uiWideLayout != nil || uiHomeFixtures || uiActivityFixtures
+        uiWideLayout != nil || uiCreasePosition != nil || uiHomeFixtures || uiActivityFixtures
     }
 
     // MARK: - Environment (not an argument)
