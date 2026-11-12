@@ -136,9 +136,16 @@ struct ActivityScreen: View {
                 Spacer()
                 VStack(alignment: .trailing, spacing: 4) {
                     // A processing row spins beside its timestamp — the
-                    // pipeline is still running.
+                    // pipeline is still running. The label names the phase
+                    // (Deciding…/Executing…) so the state is readable, not
+                    // just color and motion.
                     if group.state == .deciding || group.state == .executing {
-                        ProgressView()
+                        HStack(spacing: 6) {
+                            ProgressView()
+                            Text(group.state.label)
+                                .font(.footnote)
+                                .foregroundStyle(group.state.tint)
+                        }
                     }
                     Text(RelativeTime.label(for: group.latestAt))
                         .font(.footnote)
