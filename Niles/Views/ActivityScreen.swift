@@ -54,8 +54,7 @@ struct ActivityScreen: View {
                 }
             }
             .navigationTitle("Activity")
-            // Shared bar modifier (bisect cell 3, diagnosis art_LwUDWPuP):
-            // in the wide layout the leading pane never registers the top
+            // Shared bar modifier: in the wide layout the leading pane never registers the top
             // scroll-edge effect — the system status pillar sits over the
             // trailing pane's x-range — so its bar falls back to the legacy
             // expanded large-title geometry (110 pt, title below an empty
@@ -66,12 +65,12 @@ struct ActivityScreen: View {
             // No explicit .contentMargins on the List: an explicit
             // horizontal scroll-content margin REPLACES the
             // safe-area-derived one, and on the Duo that is the 84 pt
-            // sensor-housing/status-pillar clearance (device-measured,
-            // todo_5nDqe0he — with the margin set, rows rendered under the
+            // sensor-housing/status-pillar clearance (device-measured —
+            // with the margin set, rows rendered under the
             // pillar). The default grouped-list margins already give the
             // 20 pt gutters, and keeping margins off the stack wrapper
-            // avoids the bar scroll-edge interference of bisect cell 2
-            // (diagnosis art_LwUDWPuP).
+            // avoids the bar scroll-edge interference seen in the
+            // wide layout.
             // Safe-area diagnostics: -UISafeAreaProbe overlays the
             // List's measured insets and boundary lines.
             .overlay(alignment: .bottomLeading) {
