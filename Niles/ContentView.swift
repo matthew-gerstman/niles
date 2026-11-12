@@ -226,14 +226,30 @@ struct ContentView: View {
 /// status pillar sits over the trailing pane's x-range — so its bar falls
 /// back to the legacy expanded large-title geometry (110 pt, title below an
 /// empty 58 pt inline zone) while the trailing pane compacts to 58 pt.
-/// Normalizing both panes with a shared inline title pin — here on
-/// widePane(), so it covers the class without touching the narrow layout —
-/// pins the compact 58 pt geometry on both. Bar items (cell 1) and margin
-/// scoping (cell 2) were probed first and do not drive the geometry.
+/// Normalizing both panes with a shared inline title pin covers the class.
+/// The mode travels through the widePaneTitleMode environment key rather
+/// than .navigationBarTitleDisplayMode() here: the latter cannot be set
+/// from outside a pane's NavigationStack (probed on the Duo simulator —
+/// the modifier on widePane() left the leading pane at 110 pt), so each
+/// pane's List reads the key and applies it inside its own stack.
 fileprivate extension View {
     func widePane() -> some View {
         listStyle(.insetGrouped)
-            .navigationBarTitleDisplayMode(.inline)
+            .environment(\.widePaneTitleMode, .inline)
+    }
+}
+
+private struct WidePaneTitleModeKey: EnvironmentKey {
+    static let defaultValue: NavigationBarTitleDisplayMode = .automatic
+}
+
+extension EnvironmentValues {
+    /// Title mode a pane applies to its own navigation bar. Set by
+    /// widePane() for the wide layout's two panes; the narrow layout reads
+    /// the default .automatic, keeping its large titles untouched.
+    var widePaneTitleMode: NavigationBarTitleDisplayMode {
+        get { self[WidePaneTitleModeKey.self] }
+        set { self[WidePaneTitleModeKey.self] = newValue }
     }
 }
 
