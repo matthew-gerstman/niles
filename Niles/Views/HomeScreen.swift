@@ -64,13 +64,13 @@ struct HomeScreen: View {
                 // on iPad, which pins the button over the Activity pane and
                 // opens a blank band above both panes' titles. A bar item
                 // stays on the Home pane's own bar at title height.
-                .navigationBarItems(trailing: {
+                .navigationBarItems(trailing: Group {
                     if let chatEntry {
                         Button(action: chatEntry) {
                             Label("Niles", systemImage: "sparkles")
                         }
                     }
-                }())
+                })
                 .onAppear {
                     consumeScrollRequest(proxy)
                     openPendingProposalIfRequested()
@@ -239,18 +239,26 @@ struct HomeScreen: View {
         }
     }
 
-    /// The pairing prompt as one tap-to-copy row: the full sentence the
-    /// user pastes to an agent, with the live code substituted. A code is a
-    /// challenge, not a secret — it expires in thirty minutes, works once,
-    /// and dies after five wrong guesses. There is no manual mint: the
-    /// store mints a fresh code whenever refresh finds none live, so the
-    /// prompt always carries a valid challenge.
+    /// The pairing section: the live code front and center, plus a button
+    /// that copies the ready-made prompt (endpoint + code) to paste into an
+    /// agent. A code is a challenge, not a secret — it expires in thirty
+    /// minutes, works once, and dies after five wrong guesses. There is no
+    /// manual mint: the store mints a fresh code whenever refresh finds
+    /// none live, so the copied prompt always carries a valid challenge.
     @ViewBuilder
     private var pairingSection: some View {
         Section {
-            if let code = model.pairingCode, let expiresAt = model.codeExpiresAt {
+            if let code = model.pairingCode {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Pairing code")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(code)
+                        .font(.system(.title2, design: .monospaced))
+                        .textSelection(.enabled)
+                }
                 Button {
-                    UIPasteboard.general.string = Self.pairingPrompt(code: code)
+                    UIPasteboard.general.string = Self.pairingPrompt(code: code, address: model.endpoint)
                     copiedReset?.cancel()
                     withAnimation { showCopied = true }
                     copiedReset = Task {
@@ -258,20 +266,12 @@ struct HomeScreen: View {
                         withAnimation { showCopied = false }
                     }
                 } label: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(Self.pairingPrompt(code: code))
-                            .multilineTextAlignment(.leading)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        Text(showCopied ? "Copied" : "Tap to copy")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                    // Explicit color: the app root tints buttons white (neutral
+                    // chrome), which is invisible on a white list row.
+                    Label(showCopied ? "Copied" : "Copy prompt", systemImage: showCopied ? "checkmark" : "doc.on.doc")
+                        .foregroundStyle(.green)
                 }
                 .buttonStyle(.plain)
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    LabeledContent("Expires", value: Self.countdownText(expiresAt: expiresAt, now: context.date))
-                        .foregroundStyle(.secondary)
-                }
             } else {
                 Text("Pairing code unavailable")
                     .foregroundStyle(.secondary)
@@ -282,21 +282,11 @@ struct HomeScreen: View {
         }
     }
 
-    /// The exact prompt the user copies to an agent — the how-to link and
-    /// the live code in one pasteable sentence. Pure, so the wording is
+    /// The exact prompt the user copies to an agent — the endpoint and the
+    /// live code in one pasteable sentence. Pure, so the wording is
     /// directly testable.
-    static func pairingPrompt(code: String) -> String {
-        "I would like you to access the niles MCP. You can see how to do this "
-            + "from https://github.com/matthew-gerstman/niles . The pairing code is \(code)."
-    }
-
-    /// The countdown line: time remaining while live, a plain "Expired" once
-    /// past (a beat the store's auto-mint erases on its next refresh). Pure,
-    /// so the wording is directly testable.
-    static func countdownText(expiresAt: Date, now: Date) -> String {
-        let remaining = Int(expiresAt.timeIntervalSince(now))
-        guard remaining > 0 else { return "Expired" }
-        return String(format: "Expires in %d:%02d", remaining / 60, remaining % 60)
+    static func pairingPrompt(code: String, address: String) -> String {
+        "I would like you to access the niles MCP at \(address). My pairing code is \(code)"
     }
 
     /// One line per credential paired since this launch — name left,
