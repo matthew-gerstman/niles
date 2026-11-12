@@ -204,10 +204,11 @@ struct ContentView: View {
 // MARK: - Wide pane normalization
 
 /// One modifier for BOTH wideLayout panes, so their horizontal list margins
-/// match regardless of which window edge a pane abuts. The scroll-content
-/// margins themselves live on each pane's List (ActivityScreen/HomeScreen):
-/// scoped to the NavigationStack they interfere with the bar's scroll-edge
-/// tracking in the wide layout (bisect cell 2, diagnosis art_LwUDWPuP).
+/// match regardless of which window edge a pane abuts, and so their bar
+/// geometry matches too. The scroll-content margins themselves live on each
+/// pane's List (ActivityScreen/HomeScreen): scoped to the NavigationStack
+/// they interfere with the bar's scroll-edge tracking in the wide layout
+/// (bisect cell 2, diagnosis art_LwUDWPuP).
 /// Diagnosis (art_RzbLOF98, Xcode 27.2 simulators): in landscape, SwiftUI distributes
 /// the window's horizontal safe area — the sensor-housing clearance (84 pt
 /// on the Duo) — to the edge-adjacent children of wideLayout's HStack, and
@@ -219,9 +220,20 @@ struct ContentView: View {
 /// The clearance itself is physical: hardware verification governs whether
 /// the shared margin must instead be the housing width (never negative
 /// padding).
+///
+/// Bar geometry (bisect cell 3, diagnosis art_LwUDWPuP): in the wide layout
+/// the leading pane never registers the top scroll-edge effect — the system
+/// status pillar sits over the trailing pane's x-range — so its bar falls
+/// back to the legacy expanded large-title geometry (110 pt, title below an
+/// empty 58 pt inline zone) while the trailing pane compacts to 58 pt.
+/// Normalizing both panes with a shared inline title pin — here on
+/// widePane(), so it covers the class without touching the narrow layout —
+/// pins the compact 58 pt geometry on both. Bar items (cell 1) and margin
+/// scoping (cell 2) were probed first and do not drive the geometry.
 fileprivate extension View {
     func widePane() -> some View {
         listStyle(.insetGrouped)
+            .navigationBarTitleDisplayMode(.inline)
     }
 }
 

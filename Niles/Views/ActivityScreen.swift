@@ -37,15 +37,6 @@ struct ActivityScreen: View {
                 }
             }
             .navigationTitle("Activity")
-            // Shared bar modifier (bisect cell 3, diagnosis art_LwUDWPuP):
-            // in the wide layout the leading pane never registers the top
-            // scroll-edge effect — the system status pillar sits over the
-            // trailing pane's x-range — so its bar falls back to the legacy
-            // expanded large-title geometry (110 pt, title below an empty
-            // 58 pt inline zone). Pinning inline title mode on BOTH pane
-            // Lists pins the compact 58 pt geometry on both; bar items and
-            // margin scoping (cells 1-2) alone did not normalize it.
-            .navigationBarTitleDisplayMode(.inline)
             // Scroll-content margins belong on the List, not on the
             // NavigationStack wrapper (widePane): margins scoped to the
             // stack interfere with the bar's scroll-edge tracking in the
