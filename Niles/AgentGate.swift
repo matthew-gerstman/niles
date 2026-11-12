@@ -1,4 +1,5 @@
 import Foundation
+import NilesCore
 
 /// The single on-device agent feature gate (approved initial-ship choice):
 /// the whole agent — the Niles chat tab and the Ask Niles App Intent — sits
@@ -37,7 +38,7 @@ enum AgentGate {
     /// toggle performs — so a capture pair shows the tab row re-rendering
     /// live, without a relaunch. No-op without the argument.
     static func toggleFixtureIfRequested() {
-        guard ProcessInfo.processInfo.arguments.contains("-UIAgentGateToggle") else { return }
+        guard LaunchArguments.uiAgentGateToggle else { return }
         Task {
             try? await Task.sleep(for: .seconds(3))
             UserDefaults.standard.set(!isEnabled, forKey: storageKey)

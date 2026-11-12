@@ -17,7 +17,7 @@ struct ContentView: View {
     /// on the fixture store instead of the live one, so a fresh simulator has
     /// a populated timeline to capture.
     @State private var fixtureActivityStore: FixtureActivityStore? = {
-        if ProcessInfo.processInfo.arguments.contains("-UIActivityFixtures") {
+        if LaunchArguments.uiActivityFixtures {
             return FixtureActivityStore()
         }
         return nil
@@ -26,7 +26,7 @@ struct ContentView: View {
     /// in-memory fixture store, so a fresh simulator shows a populated queue
     /// and paired agents without Keychain credentials or live sessions.
     @State private var fixtureHomeStore: InMemoryNilesStore? = {
-        if ProcessInfo.processInfo.arguments.contains("-UIHomeFixtures") {
+        if LaunchArguments.uiHomeFixtures {
             return InMemoryNilesStore()
         }
         return nil
@@ -55,9 +55,8 @@ struct ContentView: View {
     @State private var selectedTab: NilesTab = {
     // Test/screenshot hook: `simctl launch ... -UITabSelect niles` opens a
     // given tab so per-tab captures don't need UI automation.
-    let args = ProcessInfo.processInfo.arguments
-    if let i = args.firstIndex(of: "-UITabSelect"), i + 1 < args.count {
-        return NilesTab(rawValue: args[i + 1]) ?? .home
+    if let tab = LaunchArguments.uiTabSelect {
+        return NilesTab(rawValue: tab) ?? .home
     }
     // Deep link from OpenQueueIntent: a cold launch lands on Home, whose
     // Queue section holds the staged proposals awaiting approval. The
@@ -74,19 +73,9 @@ struct ContentView: View {
 
     private var pendingCount: Int { store.pendingProposals.count }
 
-    /// Screenshot hook: `-UIWideLayout [on|off]` pins the adaptive layout —
-    /// bare or `on` forces the side-by-side panes even at compact width,
-    /// `off` forces the tab pair even at generous width (same family as
-    /// `-UITabSelect`, so captures need no UI automation).
-    private static func forcedWideLayout() -> Bool? {
-        let args = ProcessInfo.processInfo.arguments
-        guard let i = args.firstIndex(of: "-UIWideLayout") else { return nil }
-        return i + 1 < args.count && args[i + 1].lowercased() == "off" ? false : true
-    }
-
     /// The adaptive decision: a forced hook wins, else the measured width.
     private var usesWideLayout: Bool {
-        if let forced = Self.forcedWideLayout() { return forced }
+        if let forced = LaunchArguments.uiWideLayout { return forced }
         return measuredWidth >= Self.wideLayoutMinWidth
     }
 
@@ -112,9 +101,7 @@ struct ContentView: View {
             await store.seedQueueFixtureIfRequested()
             await store.seedProposalsFixtureIfRequested()
             // Screenshot hook: open one proposal's detail sheet directly.
-            let args = ProcessInfo.processInfo.arguments
-            if let i = args.firstIndex(of: "-UIProposalDetail"), i + 1 < args.count {
-                let target = args[i + 1]
+            if let target = LaunchArguments.uiProposalDetail {
                 fixtureDetailProposal = store.proposals.first { $0.id == target }
                     ?? store.proposals.first { $0.tool == target && !$0.evidence.isEmpty }
                     ?? store.proposals.first { !$0.evidence.isEmpty }

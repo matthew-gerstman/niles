@@ -39,7 +39,7 @@ enum AppEnvironment {
     private static func chatFixtureRunnerIfRequested(
         proposalStore: ProposalStore?
     ) -> (any AgentRunning)? {
-        guard ProcessInfo.processInfo.arguments.contains("-UIChatFixtures"),
+        guard LaunchArguments.uiChatFixtures,
               let proposalStore else { return nil }
         return ChatFixtureRunner(store: proposalStore)
     }

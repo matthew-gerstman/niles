@@ -625,8 +625,7 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
     /// fake home and performs the Undo tap so the row shows the typed
     /// divergence error. No-op without the argument.
     func seedQueueFixtureIfRequested() async {
-        let args = ProcessInfo.processInfo.arguments
-        guard let index = args.firstIndex(of: "-UISeedQueue"), index + 1 < args.count else { return }
+        guard let fixture = LaunchArguments.uiSeedQueue else { return }
         guard let store = coordinator.proposalStore else {
             logger.error("Seed fixture requested but no proposal store is running")
             return
@@ -654,7 +653,7 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
             )
         }
 
-        switch args[index + 1] {
+        switch fixture {
         case "pending":
             _ = await stage(createRoomPlan())
             _ = await stage(Plan(
@@ -733,7 +732,7 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
             }
 
         default:
-            logger.error("Unknown -UISeedQueue fixture: \(args[index + 1], privacy: .public)")
+            logger.error("Unknown -UISeedQueue fixture: \(fixture, privacy: .public)")
         }
         await refresh()
     }
@@ -749,10 +748,9 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
     /// Activity still shows the card and the row still offers Undo).
     /// No-op without the argument; any mode but `seed` is logged and ignored.
     func seedProposalsFixtureIfRequested() async {
-        let args = ProcessInfo.processInfo.arguments
-        guard let index = args.firstIndex(of: "-UIProposalsFixture"), index + 1 < args.count else { return }
-        guard args[index + 1] == "seed" else {
-            logger.error("Unknown -UIProposalsFixture mode: \(args[index + 1], privacy: .public)")
+        guard let mode = LaunchArguments.uiProposalsFixture else { return }
+        guard mode == "seed" else {
+            logger.error("Unknown -UIProposalsFixture mode: \(mode, privacy: .public)")
             return
         }
         guard let store = coordinator.proposalStore else {
