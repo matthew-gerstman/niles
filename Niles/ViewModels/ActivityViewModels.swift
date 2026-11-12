@@ -137,6 +137,9 @@ enum ActivityTimeline {
     /// `decisionsInFlight` overlays the processing state: a swipe decision
     /// whose pipeline is still running renders as Deciding…/Executing… —
     /// decided-in-progress — instead of the proposal's last settled event.
+    /// A proposal the store has already moved into execution (`approved`,
+    /// no local swipe marker — any pipeline client can drive that
+    /// transition) renders Executing… for the same reason.
     static func groups(
         events: [ActivityEvent],
         proposals: [NilesProposal],
@@ -171,6 +174,14 @@ enum ActivityTimeline {
                 // Approve runs the execution pipeline; deny is a decision
                 // alone — hence the two processing names.
                 state = decision == .approving ? .executing : .deciding
+            } else if proposal?.state == .approved {
+                // Store-driven in-flight: the pipeline has decided the
+                // proposal and execution is still running (any pipeline
+                // client — a relaunch mid-execution included; the poll
+                // surfaces the persisted `approved` state). Same processing
+                // treatment as a swipe in flight; the Queue hides the row
+                // for the same reason.
+                state = .executing
             } else {
                 state = mergedVerdict(eventRows.map(\.verdict))
             }

@@ -145,12 +145,13 @@ struct HomeScreen: View {
 
     private var queueSection: some View {
         Section {
-            // Optimistic swipe exit (2026-11-12): a row whose decision is
-            // in flight leaves the Queue immediately and synchronously —
-            // the pipeline runs behind it, never in front of it. The row
-            // renders on Activity as processing until it settles (or
-            // returns here with the failure note when the decision fails).
-            let visible = model.proposals.filter { model.decisionsInFlight[$0.id] == nil }
+            // Queue exclusivity: the row set comes from the store layer's
+            // `queueProposals` gate — a proposal whose decision pipeline
+            // is running (the optimistic swipe marker) or that the store
+            // has already moved into execution (`approved`, any pipeline
+            // client) never renders here. Activity owns in-flight work;
+            // a failed decision returns the row with its error note.
+            let visible = model.queueProposals
             if visible.isEmpty {
                 emptyQueueState
             } else {
