@@ -37,6 +37,13 @@ struct ActivityScreen: View {
                 }
             }
             .navigationTitle("Activity")
+            // Wide-layout pane parity: Home's pane carries a trailing bar item,
+            // so its bar registers the top scroll-edge effect and renders the
+            // compact glass layout. With no bar-item signal, Activity's bar
+            // falls back to the legacy expanded large-title layout (110 pt,
+            // title below an empty 58 pt inline zone) in the wide layout only.
+            // An explicit empty item restores the compact 58 pt bar.
+            .navigationBarItems(trailing: EmptyView())
             .sheet(item: $openDetail) { group in
                 // Rebuild the group from the model so the sheet reflects undo
                 // taps and refreshed evidence, like the approvals sheet does.
