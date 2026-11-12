@@ -1,5 +1,4 @@
 import Foundation
-import MCP
 
 /// Pure planning: one typed write request + the current graph -> the minimal
 /// HomeKit operations and the full review card. No side effects; every
@@ -142,11 +141,11 @@ public enum ProposalPlanner {
     }
 
     /// The default planning function the proposal store composes: parse the
-    /// MCP arguments, then plan against the graph. Unified verbs (Blueprint
-    /// art_34OYtrUm, write layer) resolve here to their per-type tool — the
-    /// exact tool name and arguments `parse` already answers — so a unified
-    /// verb shares the per-type code path by construction and cannot grow a
-    /// dispatch of its own.
+    /// decoded tool arguments, then plan against the graph. Unified verbs
+    /// (Blueprint art_34OYtrUm, write layer) resolve here to their per-type
+    /// tool — the exact tool name and arguments `parse` already answers — so
+    /// a unified verb shares the per-type code path by construction and
+    /// cannot grow a dispatch of its own.
     public static var planFunction: ProposalStore.PlanFunction {
         { tool, arguments, graph in
             if let unified = try resolveUnified(tool: tool, arguments: arguments, graph: graph) {
@@ -173,8 +172,8 @@ public enum ProposalPlanner {
     /// argument parsing; this only decides which per-type tool the call
     /// becomes, and never stages a proposal itself.
     static func resolveUnified(
-        tool: String, arguments: [String: MCP.Value]?, graph: HomeGraph
-    ) throws -> (tool: String, arguments: [String: MCP.Value])? {
+        tool: String, arguments: [String: ToolArgument]?, graph: HomeGraph
+    ) throws -> (tool: String, arguments: [String: ToolArgument])? {
         switch tool {
         case "rename", "delete", "create", "update":
             break
@@ -213,7 +212,7 @@ public enum ProposalPlanner {
             }
         case "delete":
             let entityId = try string("entityId")
-            var args: [String: MCP.Value]
+            var args: [String: ToolArgument]
             switch try entity(of: entityId, in: graph) {
             case .room:
                 args = ["roomId": .string(entityId)]

@@ -1,5 +1,4 @@
 import Foundation
-import MCP
 
 /// Errors raised along the proposal pipeline. Every case is reportable to the
 /// agent in-band; validation failures carry per-action details.
@@ -34,7 +33,10 @@ public enum ProposalStoreError: Error, Equatable, Sendable {
 public actor ProposalStore {
     /// Plans one write-tool request against the current graph. Throws
     /// `ProposalStoreError.validationFailed` before any proposal exists.
-    public typealias PlanFunction = @Sendable (String, [String: MCP.Value]?, HomeGraph) throws -> Plan
+    /// Arguments are domain-typed — MCP clients' wire arguments decode at
+    /// the registry boundary, and app-layer callers build these directly
+    /// (cleanup W1).
+    public typealias PlanFunction = @Sendable (String, [String: ToolArgument]?, HomeGraph) throws -> Plan
 
     /// The writing service this store executes approved operations against —
     /// also the read surface for in-band tools, so one service is the single
@@ -137,7 +139,7 @@ public actor ProposalStore {
 
     /// Plans and stores one proposal for a write-tool call. Invalid requests
     /// throw before a proposal exists — the human never sees them.
-    public func stage(tool: String, arguments: [String: MCP.Value]?) async throws -> Proposal {
+    public func stage(tool: String, arguments: [String: ToolArgument]?) async throws -> Proposal {
         let graph: HomeGraph
         do {
             graph = try await homeKit.snapshot()

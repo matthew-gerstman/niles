@@ -39,7 +39,13 @@ public struct WriteToolRegistry: Sendable {
                 let proposal = try await store.proposal(id: id)
                 return try Self.result(proposal, summary: Self.statusSummary(for: proposal))
             }
-            let proposal = try await store.stage(tool: name, arguments: arguments)
+            // The MCP boundary for the staging pipeline: wire arguments
+            // decode once here, and everything downstream of `stage` —
+            // planner, store, app layer — speaks `ToolArgument` only.
+            let proposal = try await store.stage(
+                tool: name,
+                arguments: arguments?.compactMapValues(ToolArgument.init)
+            )
             return try Self.result(proposal, summary: Self.stagedSummary(for: proposal))
         } catch {
             return Self.errorResult(Self.message(for: error, tool: name))

@@ -1,7 +1,7 @@
 import Foundation
-import MCP
 
-/// The typed form of one write-tool call, parsed from MCP arguments.
+/// The typed form of one write-tool call, parsed from decoded tool
+/// arguments (`ToolArgument`).
 ///
 /// Parsing is the tool layer's job (the planner is pure over typed input);
 /// failures throw `ProposalStoreError.invalidArguments` with the offending
@@ -44,7 +44,7 @@ public enum WriteRequest: Sendable, Equatable {
     /// A direct characteristic write, staged as a device-immediate proposal.
     case writeCharacteristic(accessoryId: String, service: String?, characteristic: String, value: HomeKitValue)
 
-    public static func parse(tool: String, arguments: [String: MCP.Value]?) throws -> WriteRequest {
+    public static func parse(tool: String, arguments: [String: ToolArgument]?) throws -> WriteRequest {
         let args = Args(arguments)
         switch tool {
         case "create_room":
@@ -156,9 +156,9 @@ public enum WriteRequest: Sendable, Equatable {
 
 /// Argument accessors with precise, agent-readable failure messages.
 private struct Args {
-    let raw: [String: MCP.Value]?
+    let raw: [String: ToolArgument]?
 
-    init(_ raw: [String: MCP.Value]?) {
+    init(_ raw: [String: ToolArgument]?) {
         self.raw = raw
     }
 
@@ -270,7 +270,7 @@ private struct Args {
     /// same shape `get_triggers` renders. Component names are HomeKit's date
     /// components; unknown names are rejected so agents fix the request
     /// instead of staging a recurrence that silently never matches.
-    private func recurrence(_ value: MCP.Value, at name: String) throws -> [String: Int] {
+    private func recurrence(_ value: ToolArgument, at name: String) throws -> [String: Int] {
         guard let object = value.objectValue else {
             throw ProposalStoreError.invalidArguments(
                 "Argument “\(name)” must be an object of date components, e.g. {\"hour\": 7, \"minute\": 30}."
@@ -327,7 +327,7 @@ private struct Args {
         return try array.enumerated().map { index, element in try event(element, at: index, in: name) }
     }
 
-    private func event(_ element: MCP.Value, at index: Int, in name: String) throws -> TriggerEventSpec {
+    private func event(_ element: ToolArgument, at index: Int, in name: String) throws -> TriggerEventSpec {
         let prefix = "Event \(index + 1): "
         guard let object = element.objectValue else {
             throw ProposalStoreError.invalidArguments(
@@ -359,7 +359,7 @@ private struct Args {
             case .int(let int): value = .int(int)
             case .double(let double): value = .double(double)
             case .string(let string): value = .string(string)
-            case .null, .data, .array, .object:
+            case .null, .array, .object:
                 throw ProposalStoreError.invalidArguments(
                     prefix + "value must be a number, string, or boolean."
                 )
@@ -388,7 +388,7 @@ private struct Args {
         return try array.enumerated().map { index, element in try action(element, at: index) }
     }
 
-    private func action(_ element: MCP.Value, at index: Int) throws -> SceneActionSpec {
+    private func action(_ element: ToolArgument, at index: Int) throws -> SceneActionSpec {
         let prefix = "Action \(index + 1): "
         guard let object = element.objectValue else {
             throw ProposalStoreError.invalidArguments(
@@ -413,15 +413,15 @@ private struct Args {
         )
     }
 
-    /// The typed value behind an MCP scalar — nil for anything a
-    /// characteristic cannot take (null, data, array, object).
-    private static func homeKitValue(_ raw: MCP.Value?) -> HomeKitValue? {
+    /// The typed value behind a scalar argument — nil for anything a
+    /// characteristic cannot take (null, array, object).
+    private static func homeKitValue(_ raw: ToolArgument?) -> HomeKitValue? {
         switch raw {
         case .bool(let bool): .bool(bool)
         case .int(let int): .int(int)
         case .double(let double): .double(double)
         case .string(let string): .string(string)
-        case .none, .null, .data, .array, .object: nil
+        case .none, .null, .array, .object: nil
         }
     }
 }
