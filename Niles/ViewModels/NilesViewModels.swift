@@ -12,7 +12,6 @@ protocol DashboardViewModel: Observable {
     var serverIsRunning: Bool { get }
     var endpoint: String { get }
     var bonjourService: String { get }
-    var sessionsSummary: String { get }
     var pendingProposals: [NilesProposal] { get }
     var connectedAgents: [AgentConnection] { get }
     func setServerRunning(_ running: Bool)
@@ -80,14 +79,12 @@ struct AgentSessionRow: Identifiable, Equatable {
     let lastAccessedAt: Date
 }
 
-/// One row of the paired-agents list: a stored credential plus what the live
-/// sessions say about it. The token itself never reaches this layer — rows
-/// carry display-only fields.
+/// One row of the paired-agents list: a credential paired since launch.
+/// The token itself never reaches this layer — rows carry display-only
+/// fields.
 struct PairedAgentRow: Identifiable, Equatable {
     let id: UUID
     let name: String
-    /// Composed display line: paired date and last-seen session.
-    let detail: String
     /// When the credential was created.
     let pairedAt: Date
     /// Live sessions created by this agent's token, newest first.
@@ -105,8 +102,6 @@ protocol PairingViewModel: Observable {
     var codeExpiresAt: Date? { get }
     /// Every paired credential, named and dated, each revocable.
     var pairedAgents: [PairedAgentRow] { get }
-    /// Discards the live code and mints a fresh one.
-    func mintNewCode()
     /// Revokes one agent: deletes its credential and closes its live session.
     func revokeAgent(_ id: UUID) async
 }
@@ -129,7 +124,6 @@ final class InMemoryNilesStore: DashboardViewModel, QueueViewModel, HomeGraphVie
     let homeName = "Gerstman Home"
     let endpoint = "http://192.168.1.24:8901/mcp"
     let bonjourService = "_niles-mcp._tcp.local"
-    let sessionsSummary = "2 active"
     private(set) var connectedAgents: [AgentConnection] = []
 
     private(set) var proposals: [NilesProposal] = []
@@ -197,13 +191,16 @@ final class InMemoryNilesStore: DashboardViewModel, QueueViewModel, HomeGraphVie
     init(now: Date = Date()) {
         let minute: TimeInterval = 60
         pairingCode = "483920"
-        codeExpiresAt = now.addingTimeInterval(5 * minute)
+        codeExpiresAt = now.addingTimeInterval(30 * minute)
+        // The launch rule, mirrored for previews: only credentials paired
+        // since this store's creation render. Obvious Agent paired at
+        // launch and shows; Claude Code paired nine days ago and is
+        // filtered out, so the preview exercises the launch filter.
         pairedAgents = [
             PairedAgentRow(
                 id: UUID(),
                 name: "Obvious Agent",
-                detail: "paired Nov 8 · last seen now",
-                pairedAt: now.addingTimeInterval(-3 * 24 * 60 * 60),
+                pairedAt: now,
                 sessions: [
                     AgentSessionRow(
                         id: "fixture-session-1",
@@ -216,11 +213,10 @@ final class InMemoryNilesStore: DashboardViewModel, QueueViewModel, HomeGraphVie
             PairedAgentRow(
                 id: UUID(),
                 name: "Claude Code",
-                detail: "paired Nov 2 · never connected",
                 pairedAt: now.addingTimeInterval(-9 * 24 * 60 * 60),
                 sessions: []
             ),
-        ]
+        ].filter { $0.pairedAt >= now }
         connectedAgents = [
             AgentConnection(name: "Claude Code", detail: "studio-mac · via Bonjour", isActive: true),
             AgentConnection(name: "Obvious Agent", detail: "obvious sandbox · idle 12 min", isActive: false),
@@ -340,12 +336,6 @@ final class InMemoryNilesStore: DashboardViewModel, QueueViewModel, HomeGraphVie
         guard let index = proposals.firstIndex(where: { $0.id == id }),
               proposals[index].state.canTransition(to: next) else { return }
         proposals[index].state = next
-    }
-
-    /// Presentational: mints a fresh countdown so previews react.
-    func mintNewCode() {
-        pairingCode = String(format: "%06d", Int.random(in: 0..<1_000_000))
-        codeExpiresAt = Date().addingTimeInterval(5 * 60)
     }
 
     /// Presentational: the row disappears; nothing is stored.
