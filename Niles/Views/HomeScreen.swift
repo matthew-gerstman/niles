@@ -2,11 +2,11 @@ import SwiftUI
 import NilesCore
 
 /// The Home tab (three-tab IA, spec art_t2KGKOy3): the proposal Queue
-/// first, then the former Settings sections — Server, Pairing, and Paired
-/// Agents (same bindings, same revoke confirm flow). The list ends at
-/// Paired Agents; the on-device agent, diagnostics, connection, and
-/// home-graph sections are gone from here, and neither the Queue nor the
-/// Server section carries a footer anymore.
+/// first, then the former Settings sections — Pairing, Paired Agents,
+/// and Server (same bindings, same revoke confirm flow). The list ends at
+/// Server; the on-device agent, diagnostics, connection, and home-graph
+/// sections are gone from here, and neither the Queue nor the Server
+/// section carries a footer anymore.
 struct HomeScreen: View {
     var model: any DashboardViewModel & PairingViewModel & AgentStatusViewModel & QueueViewModel & HomeGraphViewModel
 
@@ -36,9 +36,9 @@ struct HomeScreen: View {
             ScrollViewReader { proxy in
                 List {
                     queueSection
-                    serverSection
                     pairingSection
                     pairedAgentsSection
+                    serverSection
                 }
                 .listStyle(.insetGrouped)
                 .navigationTitle("Home")
