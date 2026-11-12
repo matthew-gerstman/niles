@@ -643,7 +643,7 @@ public struct WriteToolRegistry: Sendable {
                     "Operation \(index + 1): “tool” is required — the name of a staged write tool."
                 )
             }
-            let entryArguments = entry["arguments"].flatMap(ToolArgument.init)?.objectValue
+            let entryArguments = entry["arguments"]?.objectValue
             return BatchOperation(tool: tool, arguments: entryArguments)
         }
     }
