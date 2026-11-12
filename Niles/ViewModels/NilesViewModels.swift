@@ -22,7 +22,14 @@ protocol QueueViewModel: Observable {
     var proposals: [NilesProposal] { get }
     /// Proposal id -> decision in flight; present from the tap until the
     /// pipeline settles (or the decision fails and the card reverts).
+    /// While a decision is in flight its row renders on the Activity side
+    /// as a processing row — decided-in-progress, not staged.
     var decisionsInFlight: [String: ProposalDecision] { get }
+    /// Proposal id -> the failure from that proposal's most recent swipe
+    /// decision, surfaced as a row-level note (the row is back in the Queue)
+    /// until the next attempt or dismissal.
+    var decisionFailures: [String: String] { get }
+    func clearDecisionFailure(_ id: String)
     /// Per-row Undo affordance state. Only executed rows that currently
     /// offer Undo appear: unrevertable operations, already-undone rows, and
     /// refused rows render no Undo button.
@@ -130,6 +137,10 @@ final class InMemoryNilesStore: DashboardViewModel, QueueViewModel, HomeGraphVie
     /// The in-memory store settles decisions synchronously, so nothing is
     /// ever in flight here.
     let decisionsInFlight: [String: ProposalDecision] = [:]
+    /// Presentational: previews can seed decision failures to render the
+    /// row-level error note; the fixture itself never fails a decision.
+    var decisionFailures: [String: String] = [:]
+    func clearDecisionFailure(_ id: String) { decisionFailures[id] = nil }
     /// Previews set this directly to render the Undo affordance states.
     var undoStates: [String: UndoState] = [:]
     var isApprovingAll = false
