@@ -201,9 +201,8 @@ struct HomeScreen: View {
     /// section on launch — per-section captures need no UI automation (same
     /// family as `-UITabSelect`). No-op without the flag.
     private func applyHomeScrollFixtureIfRequested(_ proxy: ScrollViewProxy) {
-        let args = ProcessInfo.processInfo.arguments
-        guard let i = args.firstIndex(of: "-UIHomeScroll"), i + 1 < args.count,
-              let target = ScrollTarget(rawValue: args[i + 1]) else { return }
+        guard let rawTarget = LaunchArguments.uiHomeScroll,
+              let target = ScrollTarget(rawValue: rawTarget) else { return }
         // A scrollTo before the first layout is a no-op; give the List a beat.
         Task {
             try? await Task.sleep(for: .seconds(0.8)) // a cancelled capture scroll is fine to skip

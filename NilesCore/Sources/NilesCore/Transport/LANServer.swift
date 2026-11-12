@@ -14,18 +14,11 @@ public enum NilesBonjour {
     public static let baseName = "Niles"
     public static let serviceType = "_niles-mcp._tcp"
 
-    /// Launch arguments that pin screenshot/preview capture fixtures (parsed
-    /// alongside these in `Niles/ContentView.swift`).
-    static let captureFixtureArguments = [
-        "-UIWideLayout", "-UIHomeFixtures", "-UIActivityFixtures",
-    ]
-
-    /// True when the app launched with a capture-fixture argument. A capture
-    /// instance must never advertise: a fixture visible in a browse as "Niles"
-    /// can impersonate a real endpoint and capture pairing codes.
+    /// True when the app launched with a capture-fixture argument — the
+    /// safety property itself is parsed and evaluated once, in
+    /// `LaunchArguments.isCaptureFixture`.
     public static var isCaptureFixture: Bool {
-        let arguments = ProcessInfo.processInfo.arguments
-        return captureFixtureArguments.contains { arguments.contains($0) }
+        LaunchArguments.isCaptureFixture
     }
 
     /// The device-qualified instance name, e.g. `Niles (Matthew's iPhone)`.

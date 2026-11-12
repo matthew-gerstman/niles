@@ -1,4 +1,5 @@
 import Foundation
+import NilesCore
 import OSLog
 import UserNotifications
 
@@ -37,7 +38,7 @@ final class ProposalNotifier: NSObject, UNUserNotificationCenterDelegate, @unche
         // Fixture runs (seeded relaunch QA) capture the UI headless — there
         // is no one to answer the system prompt, and it would occlude every
         // capture. Skip the request under that launch argument.
-        guard !ProcessInfo.processInfo.arguments.contains("-UINotificationsDisabled") else { return }
+        guard !LaunchArguments.uiNotificationsDisabled else { return }
         let center = UNUserNotificationCenter.current()
         Task {
             let settings = await center.notificationSettings()

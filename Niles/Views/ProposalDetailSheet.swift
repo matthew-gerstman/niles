@@ -46,7 +46,7 @@ struct ProposalDetailSheet: View {
                 }
                 .task {
                     // Screenshot hook: jump past the summary to the evidence.
-                    if ProcessInfo.processInfo.arguments.contains("-UIProposalDetailEvidence") {
+                    if LaunchArguments.uiProposalDetailEvidence {
                         try? await Task.sleep(for: .milliseconds(600))
                         if proposal.evidence.isEmpty {
                             withAnimation { presentationDetent = .large }

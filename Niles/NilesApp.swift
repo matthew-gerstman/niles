@@ -10,7 +10,7 @@ struct NilesApp: App {
         ProposalNotifier.registerForegroundPresentation()
         // Permission is asked at first launch, before a proposal needs it; the
         // test host must not trip the system prompt mid-test-run.
-        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
+        if !LaunchArguments.isTestHost {
             ProposalNotifier.shared.requestPermissionIfNeeded()
         }
         // The shared environment: a background Siri intent launches this

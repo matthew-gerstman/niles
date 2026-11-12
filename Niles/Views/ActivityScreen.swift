@@ -94,7 +94,7 @@ struct ActivityScreen: View {
             }
             .task {
                 if !autoOpenedDetail,
-                   ProcessInfo.processInfo.arguments.contains("-UIActivityOpenDetail"),
+                   LaunchArguments.uiActivityOpenDetail,
                    let newest = Self.decidedGroups(
                        events: model.activityEvents, proposals: model.proposals
                    ).first {

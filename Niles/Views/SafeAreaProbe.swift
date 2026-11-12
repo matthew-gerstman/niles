@@ -1,4 +1,5 @@
 import SwiftUI
+import NilesCore
 
 /// Diagnostics (no user surface): launching with `-UISafeAreaProbe` overlays
 /// safe-area geometry — inset values plus boundary lines at each safe-area
@@ -7,7 +8,7 @@ import SwiftUI
 /// other `-UI…` screenshot hooks (inert without the argument); built for the
 /// status-pillar clearance diagnosis.
 enum SafeAreaProbe {
-    static let active = ProcessInfo.processInfo.arguments.contains("-UISafeAreaProbe")
+    static let active = LaunchArguments.uiSafeAreaProbe
 }
 
 /// One overlay unit: dashed boundary lines at the hosting view's safe-area
