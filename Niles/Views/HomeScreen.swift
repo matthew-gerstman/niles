@@ -19,6 +19,18 @@ struct HomeScreen: View {
     /// keeps chat on its own tab.
     var chatEntry: (() -> Void)? = nil
 
+    /// Trailing bar item: the wide-layout chat entry button, or nothing
+    /// when chat lives on its own tab. Extracted as a ViewBuilder property —
+    /// an immediately-invoked closure here typechecks as `()`, not a View.
+    @ViewBuilder
+    private var chatEntryButton: some View {
+        if let chatEntry {
+            Button(action: chatEntry) {
+                Label("Niles", systemImage: "sparkles")
+            }
+        }
+    }
+
     /// The shared navigation signal: proposal deep links from the chat open
     /// the detail sheet here, and the queue request scrolls to the Queue
     /// section (the deep link used to land on the Queue tab).
@@ -64,13 +76,7 @@ struct HomeScreen: View {
                 // on iPad, which pins the button over the Activity pane and
                 // opens a blank band above both panes' titles. A bar item
                 // stays on the Home pane's own bar at title height.
-                .navigationBarItems(trailing: {
-                    if let chatEntry {
-                        Button(action: chatEntry) {
-                            Label("Niles", systemImage: "sparkles")
-                        }
-                    }
-                }())
+                .navigationBarItems(trailing: chatEntryButton)
                 .onAppear {
                     consumeScrollRequest(proxy)
                     openPendingProposalIfRequested()
