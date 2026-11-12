@@ -375,8 +375,12 @@ struct ActivityDetailView: View {
     private func evidenceRows(_ evidence: [ProposalEvidence]) -> some View {
         ForEach(Array(evidence.enumerated()), id: \.offset) { _, item in
             HStack(alignment: .top, spacing: 8) {
-                Image(systemName: item.confirmed ? "checkmark.circle" : "xmark.circle")
-                    .foregroundStyle(item.confirmed ? Color.green : Color.red)
+                Image(systemName: item.notRun
+                    ? "minus.circle"
+                    : (item.confirmed ? "checkmark.circle" : "xmark.circle"))
+                    .foregroundStyle(item.notRun
+                        ? Color.secondary
+                        : (item.confirmed ? Color.green : Color.red))
                 Text("\(item.claim) — \(item.observed)")
             }
         }

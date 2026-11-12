@@ -77,9 +77,9 @@ struct ProposalDetailSheet: View {
                 ForEach(Array(proposal.evidence.enumerated()), id: \.offset) { index, item in
                     VStack(alignment: .leading, spacing: 8) {
                         HStack(spacing: 6) {
-                            Image(systemName: item.confirmed ? "checkmark.circle.fill" : "xmark.circle.fill")
-                                .foregroundStyle(item.confirmed ? Color.green : Color.red)
-                            Text(item.confirmed ? "Confirmed" : "Not confirmed")
+                            Image(systemName: Self.evidenceSymbol(for: item))
+                                .foregroundStyle(Self.evidenceColor(for: item))
+                            Text(Self.evidenceLabel(for: item))
                                 .font(.subheadline.weight(.semibold))
                         }
                         VStack(alignment: .leading, spacing: 2) {
@@ -112,7 +112,7 @@ struct ProposalDetailSheet: View {
             }
         } footer: {
             if !proposal.evidence.isEmpty {
-                Text("\(proposal.evidence.filter(\.confirmed).count) of \(proposal.evidence.count) checks confirmed against the live home.")
+                Text(Self.evidenceFooter(for: proposal.evidence))
             }
         }
     }
@@ -214,6 +214,34 @@ struct ProposalDetailSheet: View {
     /// The one-line caption above the evidence list: what a check IS.
     private static let evidenceCaption = "Niles re-reads your home after executing. "
         + "Each check compares what was intended with what your home now shows."
+
+    /// Three evidence states, rendered distinctly: confirmed (green), not
+    /// confirmed (red), and not run (gray — the batch aborted before the
+    /// entry was ever attempted).
+    private static func evidenceSymbol(for item: ProposalEvidence) -> String {
+        item.notRun ? "minus.circle.fill" : (item.confirmed ? "checkmark.circle.fill" : "xmark.circle.fill")
+    }
+
+    private static func evidenceColor(for item: ProposalEvidence) -> Color {
+        item.notRun ? Color.secondary : (item.confirmed ? Color.green : Color.red)
+    }
+
+    private static func evidenceLabel(for item: ProposalEvidence) -> String {
+        item.notRun ? "Not run" : (item.confirmed ? "Confirmed" : "Not confirmed")
+    }
+
+    /// The footer tally. Not-run entries are neither confirmed checks nor
+    /// failed ones — they are called out separately so an aborted batch's
+    /// footer doesn't read as "0 of 3 checks confirmed" without saying why.
+    private static func evidenceFooter(for evidence: [ProposalEvidence]) -> String {
+        let confirmed = evidence.filter(\.confirmed).count
+        var footer = "\(confirmed) of \(evidence.count) checks confirmed against the live home."
+        let notRun = evidence.filter(\.notRun).count
+        if notRun > 0 {
+            footer += " \(notRun) never ran — the batch aborted before them."
+        }
+        return footer
+    }
 }
 
 #Preview("Detail — zone move") {

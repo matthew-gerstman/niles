@@ -189,13 +189,20 @@ struct QueueListRow: View {
     }
 
     /// "N of M checks confirmed" — the app's core trust signal. Green when
-    /// the read-back agreed on every check, amber the moment it didn't.
+    /// the read-back agreed on every check, amber the moment it didn't. An
+    /// aborted batch's unreached entries are called out separately — they
+    /// never ran, so they are not failed checks.
     private func evidenceTally(of proposal: NilesProposal) -> (text: String, symbol: String, color: Color)? {
         guard !proposal.evidence.isEmpty else { return nil }
         let confirmed = proposal.evidence.filter(\.confirmed).count
         let allConfirmed = confirmed == proposal.evidence.count
+        var text = "\(confirmed) of \(proposal.evidence.count) checks confirmed"
+        let notRun = proposal.evidence.filter(\.notRun).count
+        if notRun > 0 {
+            text += " · \(notRun) not run"
+        }
         return (
-            "\(confirmed) of \(proposal.evidence.count) checks confirmed",
+            text,
             allConfirmed ? "checkmark.seal.fill" : "exclamationmark.triangle.fill",
             allConfirmed ? Color.green : Color.orange
         )
