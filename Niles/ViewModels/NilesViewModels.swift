@@ -50,6 +50,32 @@ enum ProposalDecision: Hashable {
     case denying
 }
 
+extension QueueViewModel {
+    /// Pure gate: whether a proposal may render as a Queue row right now.
+    /// In-flight work never renders in the Queue — it lives in Activity:
+    ///
+    /// - a swipe decision's pipeline round-trip is running (the local
+    ///   optimistic marker), or
+    /// - the store has already moved the proposal past staged into
+    ///   execution (`approved` — the state machine's only non-terminal
+    ///   post-staged state). Any client of the pipeline can drive that
+    ///   transition and a poll surfaces it between taps, so the row must
+    ///   disappear the moment the state flips, not on the next local tap.
+    ///
+    /// A failed decision drops the marker and the proposal stays staged,
+    /// so the row returns to the Queue with its error note (the #94
+    /// contract); `.failed` and other terminal rows keep rendering here
+    /// as before — they are outcomes, not running work.
+    func isQueueVisible(_ proposal: NilesProposal) -> Bool {
+        decisionsInFlight[proposal.id] == nil && proposal.state != .approved
+    }
+
+    /// The rows the Queue renders, in queue order.
+    var queueProposals: [NilesProposal] {
+        proposals.filter { self.isQueueVisible($0) }
+    }
+}
+
 /// The Undo affordance's state on one executed Queue row. Tapping Undo
 /// applies the paired revert immediately — the tap IS the approval — and a
 /// refused undo renders its typed cause inline on the row.
