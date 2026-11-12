@@ -1,9 +1,10 @@
 import Foundation
 import MCP
 
-/// The mutating MCP tools: twenty-six declarative write tools plus the
-/// `get_proposal` poll. None of them touches HomeKit — a call plans the
-/// request against the current graph and stages exactly one proposal
+/// The mutating MCP tools: twenty-six declarative write tools, the
+/// `stage_batch` batch stager, and the `get_proposal` poll. None of them
+/// touches HomeKit — a call plans the request against the current graph and
+/// stages exactly one proposal
 /// (spec: "one agent request is always exactly one approval card"); the
 /// human approves or denies on the device, and the agent reads the outcome
 /// back through `get_proposal`.
@@ -38,6 +39,11 @@ public struct WriteToolRegistry: Sendable {
                 }
                 let proposal = try await store.proposal(id: id)
                 return try Self.result(proposal, summary: Self.statusSummary(for: proposal))
+            }
+            if name == "stage_batch" {
+                let operations = try Self.batchOperations(from: arguments)
+                let proposal = try await store.stageBatch(operations)
+                return try Self.result(proposal, summary: Self.stagedSummary(for: proposal))
             }
             // The MCP boundary for the staging pipeline: wire arguments
             // decode once here, and everything downstream of `stage` —
@@ -187,6 +193,21 @@ public struct WriteToolRegistry: Sendable {
                     ),
                 ],
                 required: ["entityId"]
+            ),
+            annotations: Tool.Annotations(readOnlyHint: false)
+        ),
+        Tool(
+            name: "stage_batch",
+            description:
+                "Stage 1–20 operations as ONE proposal — one review card, one notification, one approval. "
+                + "Each entry is {tool, arguments} naming a staged write tool (everything except get_proposal) with its normal arguments. "
+                + "Every entry is planned against the same home snapshot: if any would fail — unknown object, bad value — the whole batch is rejected with per-entry errors and nothing is staged. "
+                + "Approval applies every operation in order; if one fails partway, the read-back evidence shows which applied — there is no rollback. "
+                + "set_trigger_state is not accepted: arming an automation is always its own proposal and its own approval. "
+                + "A request touching many objects is one batch proposal, never a stream of singles." + Self.stagingSuffix,
+            inputSchema: objectSchema(
+                ["operations": Self.batchOperationsProperty],
+                required: ["operations"]
             ),
             annotations: Tool.Annotations(readOnlyHint: false)
         ),
@@ -579,6 +600,53 @@ public struct WriteToolRegistry: Sendable {
         ]),
         "description": .string("Every characteristic write the scene should perform."),
     ])
+
+    /// The `stage_batch` operations argument: {tool, arguments} entries,
+    /// applied in order on approval.
+    private static let batchOperationsProperty: Value = .object([
+        "type": .string("array"),
+        "items": .object([
+            "type": .string("object"),
+            "properties": .object([
+                "tool": .object([
+                    "type": .string("string"),
+                    "description": .string(
+                        "A staged write tool's name, e.g. \"create_scene\", \"rename\", or \"write_characteristic\". set_trigger_state is not accepted — arming is always its own approval."
+                    ),
+                ]),
+                "arguments": .object([
+                    "type": .string("object"),
+                    "description": .string("That tool's normal arguments, exactly as the individual tool takes them."),
+                ]),
+            ]),
+            "required": .array([.string("tool")]),
+        ]),
+        "description": .string("1–20 operations, applied in order on approval."),
+    ])
+
+    /// Decodes the wire `operations` argument into `BatchOperation`s — the
+    /// same MCP-Value-to-ToolArgument decode the single-tool path performs.
+    private static func batchOperations(from arguments: [String: Value]?) throws -> [BatchOperation] {
+        guard let raw = arguments?["operations"], let operations = ToolArgument(raw)?.arrayValue else {
+            throw ProposalStoreError.invalidArguments(
+                "Missing required argument “operations” — an array of {tool, arguments}."
+            )
+        }
+        return try operations.enumerated().map { index, element in
+            guard let entry = element.objectValue else {
+                throw ProposalStoreError.invalidArguments(
+                    "Operation \(index + 1): must be an object {tool, arguments}."
+                )
+            }
+            guard let tool = entry["tool"]?.stringValue, !tool.isEmpty else {
+                throw ProposalStoreError.invalidArguments(
+                    "Operation \(index + 1): “tool” is required — the name of a staged write tool."
+                )
+            }
+            let entryArguments = entry["arguments"]?.objectValue
+            return BatchOperation(tool: tool, arguments: entryArguments)
+        }
+    }
 
     private static func triggerEventsProperty(_ description: String) -> Value {
         .object([

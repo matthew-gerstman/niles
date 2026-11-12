@@ -145,10 +145,16 @@ struct HomeScreen: View {
 
     private var queueSection: some View {
         Section {
-            if model.proposals.isEmpty {
+            // Optimistic swipe exit (2026-11-12): a row whose decision is
+            // in flight leaves the Queue immediately and synchronously —
+            // the pipeline runs behind it, never in front of it. The row
+            // renders on Activity as processing until it settles (or
+            // returns here with the failure note when the decision fails).
+            let visible = model.proposals.filter { model.decisionsInFlight[$0.id] == nil }
+            if visible.isEmpty {
                 emptyQueueState
             } else {
-                ForEach(model.proposals) { proposal in
+                ForEach(visible) { proposal in
                     QueueListRow(
                         proposal: proposal, model: model,
                         onOpen: { openDetail = proposal }

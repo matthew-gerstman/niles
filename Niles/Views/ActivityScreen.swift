@@ -8,8 +8,10 @@ import NilesCore
 /// most recent timestamp. Tapping opens a detail view with the full
 /// lifecycle timeline and structured read-back evidence. Recent executed
 /// rows offer Undo as a swipe action; undone entries stay marked Undone.
-/// A proposal appears here only once it has been decided — pending (staged)
-/// items stay in the Queue alone until approved or denied.
+/// A proposal appears here once it has been decided — pending (staged)
+/// items stay in the Queue alone, except an in-flight swipe decision,
+/// which renders here as a processing row (Deciding…/Executing…) while
+/// the pipeline runs.
 struct ActivityScreen: View {
     var model: any ActivityViewModel
 
@@ -22,12 +24,19 @@ struct ActivityScreen: View {
     @State private var autoOpenedDetail = false
 
     /// Pending (staged) proposals never render here — Activity starts at
-    /// the decision. A proposal no longer in memory (after a relaunch) is
-    /// settled history and always shows.
+    /// the decision — with one exception: a proposal whose swipe decision
+    /// is still in flight renders as a processing row (decided-in-progress,
+    /// the 2026-11-12 rule). A proposal no longer in memory (after a
+    /// relaunch) is settled history and always shows.
     private static func decidedGroups(
-        events: [ActivityEvent], proposals: [NilesProposal]
+        events: [ActivityEvent],
+        proposals: [NilesProposal],
+        decisionsInFlight: [String: ProposalDecision]
     ) -> [ActivityTimeline.Group] {
-        ActivityTimeline.groups(events: events, proposals: proposals).filter { group in
+        ActivityTimeline.groups(
+            events: events, proposals: proposals, decisionsInFlight: decisionsInFlight
+        ).filter { group in
+            if decisionsInFlight[group.proposalId] != nil { return true }
             guard let proposal = proposals.first(where: { $0.id == group.proposalId }) else { return true }
             return proposal.state != .staged
         }
@@ -36,7 +45,10 @@ struct ActivityScreen: View {
     var body: some View {
         NavigationStack {
             List {
-                let groups = Self.decidedGroups(events: model.activityEvents, proposals: model.proposals)
+                let groups = Self.decidedGroups(
+                    events: model.activityEvents, proposals: model.proposals,
+                    decisionsInFlight: model.decisionsInFlight
+                )
                 if groups.isEmpty {
                     ContentUnavailableView(
                         "No activity yet",
@@ -82,7 +94,8 @@ struct ActivityScreen: View {
                 // Rebuild the group from the model so the sheet reflects undo
                 // taps and refreshed evidence, like the approvals sheet does.
                 if let fresh = Self.decidedGroups(
-                    events: model.activityEvents, proposals: model.proposals
+                    events: model.activityEvents, proposals: model.proposals,
+                    decisionsInFlight: model.decisionsInFlight
                 ).first(where: { $0.proposalId == group.proposalId }) {
                     ActivityDetailView(
                         group: fresh,
@@ -96,7 +109,8 @@ struct ActivityScreen: View {
                 if !autoOpenedDetail,
                    LaunchArguments.uiActivityOpenDetail,
                    let newest = Self.decidedGroups(
-                       events: model.activityEvents, proposals: model.proposals
+                       events: model.activityEvents, proposals: model.proposals,
+                       decisionsInFlight: model.decisionsInFlight
                    ).first {
                     openDetail = newest
                     autoOpenedDetail = true
@@ -121,6 +135,18 @@ struct ActivityScreen: View {
                 }
                 Spacer()
                 VStack(alignment: .trailing, spacing: 4) {
+                    // A processing row spins beside its timestamp — the
+                    // pipeline is still running. The label names the phase
+                    // (Deciding…/Executing…) so the state is readable, not
+                    // just color and motion.
+                    if group.state == .deciding || group.state == .executing {
+                        HStack(spacing: 6) {
+                            ProgressView()
+                            Text(group.state.label)
+                                .font(.footnote)
+                                .foregroundStyle(group.state.tint)
+                        }
+                    }
                     Text(RelativeTime.label(for: group.latestAt))
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -158,17 +184,20 @@ extension ActivityTimeline.Verdict {
         case .failed: "xmark.octagon"
         case .expired: "clock.badge.xmark"
         case .undone: "arrow.uturn.backward.circle"
+        case .deciding, .executing: "arrow.triangle.2.circlepath"
         }
     }
 
     /// System status colors by meaning: red reserved for denial and failure,
-    /// gray for the terminal-but-neutral expired and undone states.
+    /// gray for the terminal-but-neutral expired and undone states, blue
+    /// for the in-flight processing states.
     var tint: Color {
         switch self {
         case .staged: .orange
         case .approved, .executed: .green
         case .denied, .failed: .red
         case .expired, .undone: .secondary
+        case .deciding, .executing: .blue
         }
     }
 
@@ -181,6 +210,8 @@ extension ActivityTimeline.Verdict {
         case .failed: "Failed"
         case .expired: "Expired"
         case .undone: "Undone"
+        case .deciding: "Deciding…"
+        case .executing: "Executing…"
         }
     }
 }
@@ -364,6 +395,8 @@ struct ActivityDetailView: View {
 final class FixtureActivityStore: ActivityViewModel {
     let activityEvents: [ActivityEvent]
     let proposals: [NilesProposal]
+    /// The fixture store settles synchronously — nothing is in flight.
+    let decisionsInFlight: [String: ProposalDecision] = [:]
     var undoFailures: [String: ActivityUndoFailure] = [:]
 
     func undo(_ id: String) {}
