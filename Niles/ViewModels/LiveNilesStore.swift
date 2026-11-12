@@ -784,6 +784,16 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
             if let index = proposals.firstIndex(where: { $0.id == id }) {
                 proposals[index].state = .approved
                 frozenProposalIds.insert(id)
+                // The first refresh after start() consumes a staged proposal
+                // as a launch-time existing row — no arrival event — so the
+                // Activity side would render nothing. Record the staged
+                // event the pipeline would have logged for it.
+                await appendActivity(
+                    .staged,
+                    proposalId: id,
+                    title: proposals[index].title,
+                    agentName: agentNamesByProposal[id]
+                )
             }
 
         case "decision_failed":
