@@ -204,23 +204,55 @@ struct ContentView: View {
 // MARK: - Wide pane normalization
 
 /// One modifier for BOTH wideLayout panes, so their horizontal list margins
-/// match regardless of which window edge a pane abuts. Diagnosis
-/// (art_RzbLOF98, Xcode 27.2 simulators): in landscape, SwiftUI distributes
+/// match regardless of which window edge a pane abuts, and so their bar
+/// geometry matches too. The scroll-content margins themselves live on each
+/// pane's List (ActivityScreen/HomeScreen): scoped to the NavigationStack
+/// they interfere with the bar's scroll-edge tracking in the wide layout
+/// (bisect cell 2, diagnosis art_LwUDWPuP).
+/// Diagnosis (art_RzbLOF98, Xcode 27.2 simulators): in landscape, SwiftUI distributes
 /// the window's horizontal safe area — the sensor-housing clearance (84 pt
 /// on the Duo) — to the edge-adjacent children of wideLayout's HStack, and
 /// an insetGrouped list folds that clearance into its item insets, leaving
 /// Activity's cells ~68 pt further from their leading edge than Home's.
-/// Explicit scroll-content margins cut that silent absorption and pin the
-/// shared base margin on both panes; the list style is pinned too so the
+/// The list style is pinned so the
 /// panes cannot drift apart. Not the #76 chrome class — no scene-level
 /// glass is involved, so there is nothing to move onto a pane's own bar.
 /// The clearance itself is physical: hardware verification governs whether
 /// the shared margin must instead be the housing width (never negative
 /// padding).
+///
+/// Bar geometry (bisect cell 3, diagnosis art_LwUDWPuP): in the wide layout
+/// the leading pane never registers the top scroll-edge effect — the system
+/// status pillar sits over the trailing pane's x-range — so its bar falls
+/// back to the legacy expanded large-title geometry (110 pt, title below an
+/// empty 58 pt inline zone) while the trailing pane compacts to 58 pt.
+/// Normalizing both panes with a shared inline title pin covers the class.
+/// The pin travels through the widePaneInlineTitle environment key rather
+/// than .navigationBarTitleDisplayMode() here: the latter cannot be set
+/// from outside a pane's NavigationStack (probed on the Duo simulator —
+/// the modifier on widePane() left the leading pane at 110 pt), so each
+/// pane's List reads the key and applies it inside its own stack.
 fileprivate extension View {
     func widePane() -> some View {
         listStyle(.insetGrouped)
-            .contentMargins(.horizontal, 20, for: .scrollContent)
+            .environment(\.widePaneInlineTitle, true)
+    }
+}
+
+private struct WidePaneInlineTitleKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    /// Whether a pane pins inline title mode on its bar. Set by widePane()
+    /// for the wide layout's two panes; the narrow layout reads the default
+    /// false (automatic title mode), keeping its large titles untouched.
+    /// A Bool rather than the title-mode type itself: the SDK type name
+    /// (NavigationBarTitleDisplayMode / NavigationBar.TitleDisplayMode) has
+    /// shifted across iOS SDKs, while the modifier call is stable.
+    var widePaneInlineTitle: Bool {
+        get { self[WidePaneInlineTitleKey.self] }
+        set { self[WidePaneInlineTitleKey.self] = newValue }
     }
 }
 

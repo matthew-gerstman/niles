@@ -11,6 +11,9 @@ import NilesCore
 struct ActivityScreen: View {
     var model: any ActivityViewModel
 
+    /// Inline-title pin for this pane's bar — set in the wide layout by
+    /// widePane(); false (automatic) in the narrow layout. See ContentView.
+    @Environment(\.widePaneInlineTitle) private var widePaneInlineTitle
     @State private var openDetail: ActivityTimeline.Group?
     /// Screenshot hook: `-UIActivityOpenDetail` presents the newest proposal's
     /// detail sheet on launch, so per-proposal captures need no UI automation.
@@ -37,6 +40,20 @@ struct ActivityScreen: View {
                 }
             }
             .navigationTitle("Activity")
+            // Shared bar modifier (bisect cell 3, diagnosis art_LwUDWPuP):
+            // in the wide layout the leading pane never registers the top
+            // scroll-edge effect — the system status pillar sits over the
+            // trailing pane's x-range — so its bar falls back to the legacy
+            // expanded large-title geometry (110 pt, title below an empty
+            // 58 pt inline zone). Each pane applies the shared inline pin
+            // from widePane()'s environment — pinned in the wide layout,
+            // automatic (untouched) in the narrow layout.
+            .navigationBarTitleDisplayMode(widePaneInlineTitle ? .inline : .automatic)
+            // Margins belong on the List, not on the NavigationStack
+            // wrapper (widePane): margins scoped to the stack interfere
+            // with the bar's scroll-edge tracking in the wide layout
+            // (bisect cell 2, diagnosis art_LwUDWPuP).
+            .contentMargins(.horizontal, 20, for: .scrollContent)
             .sheet(item: $openDetail) { group in
                 // Rebuild the group from the model so the sheet reflects undo
                 // taps and refreshed evidence, like the approvals sheet does.

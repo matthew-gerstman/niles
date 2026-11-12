@@ -19,6 +19,10 @@ struct HomeScreen: View {
     /// keeps chat on its own tab.
     var chatEntry: (() -> Void)? = nil
 
+    /// Inline-title pin for this pane's bar — set in the wide layout by
+    /// widePane(); false (automatic) in the narrow layout. See ContentView.
+    @Environment(\.widePaneInlineTitle) private var widePaneInlineTitle
+
     /// Trailing bar item: the wide-layout chat entry button, or nothing
     /// when chat lives on its own tab. Extracted as a ViewBuilder property —
     /// an immediately-invoked closure here typechecks as `()`, not a View.
@@ -71,12 +75,22 @@ struct HomeScreen: View {
                 }
                 .listStyle(.insetGrouped)
                 .navigationTitle("Home")
+                // Shared bar modifier (bisect cell 3, see widePane): each
+                // pane applies the inline pin widePane() publishes — pinned
+                // in the wide layout, automatic (untouched) in the narrow
+                // layout.
+                .navigationBarTitleDisplayMode(widePaneInlineTitle ? .inline : .automatic)
                 // Chat entry via navigationBarItems, not .toolbar: iOS 26
                 // hoists topBarTrailing items into a scene-level glass layer
                 // on iPad, which pins the button over the Activity pane and
                 // opens a blank band above both panes' titles. A bar item
                 // stays on the Home pane's own bar at title height.
                 .navigationBarItems(trailing: chatEntryButton)
+                // Scroll-content margins belong on the List, not on the
+                // NavigationStack wrapper (widePane): margins scoped to the
+                // stack interfere with the bar's scroll-edge tracking in the
+                // wide layout (bisect cell 2, diagnosis art_LwUDWPuP).
+                .contentMargins(.horizontal, 20, for: .scrollContent)
                 .onAppear {
                     consumeScrollRequest(proxy)
                     openPendingProposalIfRequested()
