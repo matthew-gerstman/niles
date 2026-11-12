@@ -319,6 +319,30 @@ final class InMemoryNilesStore: DashboardViewModel, QueueViewModel, HomeGraphVie
                 context: [],
                 state: .executed
             ),
+            // A multi-op batch: its per-operation summary and multi-check
+            // evidence tally stay on the row — the 2026-11-12 declutter
+            // touches single-op rows only, and this row is the unchanged
+            // control in QA captures.
+            NilesProposal(
+                id: "prop_8f61",
+                tool: "stage_batch",
+                title: "Batch: 3 changes",
+                agentName: "Claude Code",
+                createdAt: now.addingTimeInterval(-63 * minute),
+                isDestructive: false,
+                evidence: [
+                    ProposalEvidence(claim: "Room “Studio” exists", observed: "Confirmed in the live home", confirmed: true),
+                    ProposalEvidence(claim: "Zone “Downstairs” adds “Office”", observed: "Confirmed in the live home", confirmed: true),
+                    ProposalEvidence(claim: "Scene “Good Morning” updated", observed: "Confirmed in the live home", confirmed: true),
+                ],
+                diff: [
+                    ProposalDiffLine(.add, "+ Room “Studio”"),
+                    ProposalDiffLine(.add, "+ Downstairs · add room “Office”"),
+                    ProposalDiffLine(.add, "+ Scene “Good Morning” · set 3 actions"),
+                ],
+                context: [],
+                state: .executed
+            ),
         ]
         undoStates = ["prop_8f50": .idle]
 

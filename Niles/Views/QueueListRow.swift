@@ -3,7 +3,9 @@ import UIKit
 import NilesCore
 
 /// One queue row, shared by the Home tab's Queue section — severity glyph,
-/// title, one-line diff, evidence tally, and a trailing status (a spinner
+/// title, the batch's summary line and evidence tally when they say
+/// something the title does not (single-op rows render title + status +
+/// timestamp alone), and a trailing status (a spinner
 /// while a decision or undo is in flight, otherwise the settled SF Symbol
 /// status label). Decisions arrive as full swipe actions (leading Approve
 /// on the right, trailing Deny on the left — the swipe itself is the
@@ -45,11 +47,13 @@ struct QueueListRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(proposal.title)
                     .font(.headline)
-                Text(oneLineDiff(of: proposal))
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                if let summary = summaryLine(of: proposal) {
+                    Text(summary)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
                 metadataLine(for: proposal)
                 failureNote(for: proposal)
             }
@@ -220,10 +224,17 @@ struct QueueListRow: View {
         }
     }
 
-    /// The first diff line stands in for the row's one-line summary; a
-    /// proposal without diff lines falls back to its title.
-    private func oneLineDiff(of proposal: NilesProposal) -> String {
-        proposal.diff.first?.text ?? proposal.title
+    /// The row's summary line: the first diff line of a batch, which
+    /// describes the batch's first operation — something its title
+    /// ("Batch: 2 changes") does not. A single-op proposal's first diff
+    /// line merely restates the title ("Scene “Starlight” · created…"
+    /// under Create scene “Starlight”), so the row renders title + status
+    /// + timestamp with nothing duplicative (Matthew, 2026-11-12). A
+    /// batch with no diff lines renders nothing rather than the title
+    /// twice.
+    private func summaryLine(of proposal: NilesProposal) -> String? {
+        guard proposal.isBatch, let first = proposal.diff.first else { return nil }
+        return first.text
     }
 
     /// Settled state → SF Symbol + label. Staged and approved rows are still
@@ -241,11 +252,15 @@ struct QueueListRow: View {
     /// "N of M checks confirmed" — the app's core trust signal. Green when
     /// the read-back agreed on every check, amber the moment it didn't. An
     /// aborted batch's unreached entries are called out separately — they
-    /// never ran, so they are not failed checks.
+    /// never ran, so they are not failed checks. One fully-confirmed check
+    /// is the ordinary outcome and restates the obvious on the row, so the
+    /// tally only renders when there is more than one check or any check
+    /// did not confirm (2026-11-12 declutter).
     private func evidenceTally(of proposal: NilesProposal) -> (text: String, symbol: String, color: Color)? {
         guard !proposal.evidence.isEmpty else { return nil }
         let confirmed = proposal.evidence.filter(\.confirmed).count
         let allConfirmed = confirmed == proposal.evidence.count
+        guard proposal.evidence.count > 1 || !allConfirmed else { return nil }
         var text = "\(confirmed) of \(proposal.evidence.count) checks confirmed"
         let notRun = proposal.evidence.filter(\.notRun).count
         if notRun > 0 {

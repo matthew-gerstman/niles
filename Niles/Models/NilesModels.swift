@@ -48,6 +48,14 @@ struct NilesProposal: Identifiable, Hashable {
     /// the queue row; nil for everything else.
     var staleReason: String? = nil
 
+    /// True for a batch proposal (`stage_batch`): one review card for many
+    /// staged writes. A batch's first diff line is the first operation's
+    /// own summary — information the batch title ("Batch: 2 changes") does
+    /// not carry — so rows render it. A single-op proposal's first diff
+    /// line merely restates the title, so its row renders title + status +
+    /// timestamp with nothing duplicative (2026-11-12 declutter).
+    var isBatch: Bool { tool == ProposalStore.batchToolName }
+
     var isPending: Bool { state == .staged }
     /// Defaults to staged — every proposal enters the pipeline staged.
     var state: ProposalState = .staged
