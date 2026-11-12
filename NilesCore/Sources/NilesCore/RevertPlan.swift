@@ -3,7 +3,7 @@ import Foundation
 /// The members an undo restores into an object its revert re-creates. A
 /// re-created room, zone, or group gets a fresh id at revert time, so the
 /// restore is applied against that id after the re-create runs.
-public enum MemberRestore: Sendable, Equatable {
+public enum MemberRestore: Codable, Sendable, Equatable {
     /// Accessory ids moved back into the re-created room.
     case roomAccessories(homeId: String, accessoryIds: [String])
     /// Room ids added back to the re-created zone.
@@ -30,12 +30,12 @@ public enum MemberRestore: Sendable, Equatable {
 /// restores, the prior names a re-create must find free again, and the
 /// executed operations plus created ids — what the undo conflict-check
 /// re-runs against the current home.
-public struct RevertPlan: Sendable, Equatable {
-    public enum RecreatedKind: String, Sendable {
+public struct RevertPlan: Codable, Sendable, Equatable {
+    public enum RecreatedKind: String, Codable, Sendable {
         case room, zone, scene, serviceGroup
     }
 
-    struct RecreatedName: Sendable, Equatable {
+    struct RecreatedName: Codable, Sendable, Equatable {
         let kind: RecreatedKind
         let name: String
     }

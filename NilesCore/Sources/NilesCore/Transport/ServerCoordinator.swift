@@ -41,18 +41,32 @@ public final class ServerCoordinator {
         port: UInt16 = LANServer.defaultPort,
         tokenStore: any TokenStoring = KeychainTokenStore(),
         homeKitService: (any HomeKitWriting)? = nil,
-        pairingCodes: PairingCodeManager = PairingCodeManager()
+        pairingCodes: PairingCodeManager = PairingCodeManager(),
+        proposalStoreFile: ProposalStoreFile? = ProposalStoreFile()
     ) {
         self.port = port
         self.tokenStore = tokenStore
         self.pairingCodes = pairingCodes
-        self.proposalStore = homeKitService.map { ProposalStore(homeKit: $0) }
+        self.proposalStore = homeKitService.map {
+            ProposalStore(homeKit: $0, persistence: proposalStoreFile)
+        }
+    }
+
+    /// Revalidates persisted proposal state before the server can accept a
+    /// staging or decision call. The store loads from disk at init; this
+    /// pass reads the current home once and flags staged proposals whose
+    /// target object is gone. Idempotent, so every start path can call it.
+    public func revalidateProposals() async {
+        await proposalStore?.revalidateAtLaunch()
     }
 
     /// Starts serving if not already running; on failure records `.failed` with the
     /// cause (the listener is retryable — the next foreground tries again).
     public func start() async {
         guard server == nil else { return }
+        // Before anything can stage or decide: revalidate what the launch
+        // loaded, so the queue reflects the live home from the first read.
+        await proposalStore?.revalidateAtLaunch()
         do {
             // Bootstrap the credential set (fresh installs have no Keychain
             // items yet); the gate itself re-reads the live set on every

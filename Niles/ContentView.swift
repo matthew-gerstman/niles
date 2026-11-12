@@ -103,6 +103,7 @@ struct ContentView: View {
             store.start()
             AgentGate.toggleFixtureIfRequested()
             await store.seedQueueFixtureIfRequested()
+            await store.seedProposalsFixtureIfRequested()
             // Screenshot hook: open one proposal's detail sheet directly.
             let args = ProcessInfo.processInfo.arguments
             if let i = args.firstIndex(of: "-UIProposalDetail"), i + 1 < args.count {

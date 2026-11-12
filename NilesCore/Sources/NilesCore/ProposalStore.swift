@@ -50,9 +50,19 @@ public actor ProposalStore {
     /// envelope intentionally omits. Cleared once terminal.
     private var operations: [String: [HomeKitOperation]] = [:]
     /// The paired revert captured at execution time for each executed
-    /// proposal that can be undone. In-memory, like the proposals
-    /// themselves; a relaunch loses history either way.
+    /// proposal that can be undone. Persisted alongside the proposals, so
+    /// undo survives a relaunch.
     private var revertPlans: [String: RevertPlan] = [:]
+
+    /// Write-through persistence for the store's state. Nil keeps everything
+    /// in-memory — tests, previews, and the pipeline's own unit seams.
+    private let persistence: ProposalStoreFile?
+    /// Staged proposals the load-time sweep expired. The app layer takes
+    /// them once to record their activity events — the poll diff never saw
+    /// the expiry, it happened while the app was dead.
+    private var expiredAtLoad: [Proposal] = []
+    /// The one launch-time revalidation pass over reloaded staged proposals.
+    private var hasRevalidated = false
 
     /// Decision serialization: one decision's HomeKit operations and its
     /// read-back run as a unit, and the next decision (including a second
@@ -89,12 +99,38 @@ public actor ProposalStore {
         homeKit: any HomeKitWriting,
         planWith: @escaping PlanFunction,
         now: @escaping @Sendable () -> Date = { Date() },
-        lifetime: TimeInterval = 24 * 60 * 60
+        lifetime: TimeInterval = 24 * 60 * 60,
+        persistence: ProposalStoreFile? = nil
     ) {
         self.homeKit = homeKit
         self.planWith = planWith
         self.now = now
         self.lifetime = lifetime
+        self.persistence = persistence
+        // Load before the first actor method can run: the disk read makes
+        // no HomeKit call, and staged/decided history must be in place
+        // before the server accepts a staging or decision call. The expiry
+        // sweep runs here too — a proposal staged before a relaunch that is
+        // already past its TTL comes back expired, stamped with this
+        // sweep's instant (the app layer records its activity event).
+        if let persistence {
+            var state = persistence.load()
+            let current = now()
+            var expired: [Proposal] = []
+            for index in state.proposals.indices
+            where state.proposals[index].state == .staged
+                && state.proposals[index].expiresAt <= current {
+                state.proposals[index].state = .expired
+                expired.append(state.proposals[index])
+            }
+            if !expired.isEmpty {
+                persistence.persist(state)
+            }
+            proposals = state.proposals
+            operations = state.operations
+            revertPlans = state.revertPlans
+            expiredAtLoad = expired
+        }
     }
 
     // MARK: - Staging
@@ -117,10 +153,19 @@ public actor ProposalStore {
     /// (the spec's dedupe) instead of stacking duplicate cards.
     @discardableResult
     public func stage(plan: Plan) -> Proposal {
+        stage(plan: plan, expiresAt: now().addingTimeInterval(lifetime))
+    }
+
+    /// Fixture seam for launch-argument QA: stages with an explicit expiry
+    /// instant, so a fixture can seed a proposal that is staged on disk but
+    /// already past its TTL when the app relaunches — exactly what the
+    /// load-time sweep exists for. Normal staging computes the expiry from
+    /// the store's lifetime.
+    @discardableResult
+    public func stage(plan: Plan, expiresAt: Date) -> Proposal {
         expireSweep()
         if let pending = pendingMatch(of: plan) { return pending }
 
-        let timestamp = now()
         let proposal = Proposal(
             id: Self.newId(),
             tool: plan.tool,
@@ -130,11 +175,12 @@ public actor ProposalStore {
             entries: plan.entries,
             card: plan.card,
             validation: plan.validation,
-            createdAt: timestamp,
-            expiresAt: timestamp.addingTimeInterval(lifetime)
+            createdAt: now(),
+            expiresAt: expiresAt
         )
         proposals.append(proposal)
         operations[proposal.id] = plan.operations
+        persistSnapshot()
         return proposal
     }
 
@@ -236,6 +282,7 @@ public actor ProposalStore {
                preGraph: preGraph, postGraph: postGraph
            ) {
             revertPlans[id] = plan
+            persistSnapshot()
         }
         return approved
     }
@@ -299,6 +346,7 @@ public actor ProposalStore {
             // was captured) is dropped too; undoing a revert is not offered.
             revertPlans[proposalId] = nil
             revertPlans[revert.id] = nil
+            persistSnapshot()
         }
         return executed
     }
@@ -353,17 +401,24 @@ public actor ProposalStore {
         let updated = await execute(proposals[index], operations[id] ?? [])
         proposals[index] = updated
         operations[id] = nil
+        persistSnapshot()
         return updated
     }
 
     /// Marks every staged proposal past its TTL as `.expired` (a legal
-    /// `staged -> expired` transition) and drops its operations.
+    /// `staged -> expired` transition) and drops its operations. A sweep
+    /// that changed something is a mutation batch — the new state persists.
     private func expireSweep() {
         let current = now()
+        var expiredAny = false
         for index in proposals.indices
         where proposals[index].state == .staged && proposals[index].expiresAt <= current {
             proposals[index].state = .expired
             operations[proposals[index].id] = nil
+            expiredAny = true
+        }
+        if expiredAny {
+            persistSnapshot()
         }
     }
 
@@ -373,6 +428,82 @@ public actor ProposalStore {
                 && pending.tool == plan.tool
                 && operations[pending.id] == plan.operations
         }
+    }
+
+    // MARK: - Launch reload
+
+    /// Revalidates proposals loaded from disk against the current home,
+    /// before the server accepts a staging or decision call. One graph read
+    /// at launch — the load itself (init) makes none. Every staged proposal
+    /// whose target object has vanished from the home stays in the Queue,
+    /// marked with the named reason on the same error channel execution
+    /// failures use; it is never dropped and never auto-executed. The human
+    /// still decides — and approval re-checks against the live graph, so a
+    /// stale flag can never let an operation through. Idempotent.
+    public func revalidateAtLaunch() async {
+        guard !hasRevalidated else { return }
+        hasRevalidated = true
+        guard proposals.contains(where: { $0.state == .staged }) else { return }
+        let graph: HomeGraph
+        do {
+            graph = try await homeKit.snapshot()
+        } catch {
+            // An unreadable home leaves every staged proposal unflagged and
+            // staged; the next approval still validates against the graph.
+            NSLog("ProposalStore: launch revalidation skipped, home read failed: \(error)")
+            return
+        }
+        for index in proposals.indices where proposals[index].state == .staged {
+            if let reason = Self.missingTargetReason(for: proposals[index], in: graph) {
+                proposals[index].error = reason
+            }
+        }
+        persistSnapshot()
+    }
+
+    /// The reason a reloaded staged proposal can no longer be approved: its
+    /// first diffed object (every operation but a create must resolve
+    /// against the live graph) is gone from the home. Names the object the
+    /// way execution's error record does.
+    static func missingTargetReason(for proposal: Proposal, in graph: HomeGraph) -> String? {
+        for entry in proposal.entries {
+            guard entry.op != .create, !entry.object.id.isEmpty else { continue }
+            guard !Self.exists(entry.object, in: graph) else { continue }
+            let name = entry.object.name ?? entry.object.id
+            return "\(entry.object.kind.rawValue.capitalized) “\(name)” no longer exists in the home — approving this change would fail."
+        }
+        return nil
+    }
+
+    private static func exists(_ object: ProposalObjectRef, in graph: HomeGraph) -> Bool {
+        let home = graph.homes.first
+        switch object.kind {
+        case .room: return home?.rooms.contains { $0.id == object.id } ?? false
+        case .zone: return home?.zones.contains { $0.id == object.id } ?? false
+        case .scene: return home?.scenes.contains { $0.id == object.id } ?? false
+        case .serviceGroup: return home?.serviceGroups.contains { $0.id == object.id } ?? false
+        case .accessory: return home?.rooms.contains { $0.accessories.contains { $0.id == object.id } } ?? false
+        case .trigger: return home?.triggers.contains { $0.id == object.id } ?? false
+        }
+    }
+
+    /// The staged proposals the load-time sweep expired, for the app layer
+    /// to record as activity; taken once.
+    public func takeProposalsExpiredAtLoad() -> [Proposal] {
+        defer { expiredAtLoad = [] }
+        return expiredAtLoad
+    }
+
+    /// Rewrites the persisted state after a mutation batch. Write failures
+    /// are logged by the file, never thrown — the in-memory store stays
+    /// authoritative for the session.
+    private func persistSnapshot() {
+        guard let persistence else { return }
+        persistence.persist(ProposalPersistedState(
+            proposals: proposals,
+            operations: operations,
+            revertPlans: revertPlans
+        ))
     }
 
     /// `prop_` + 12 hex characters, e.g. `prop_8f2a01b3c4d5`.

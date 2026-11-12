@@ -99,17 +99,24 @@ struct QueueListRow: View {
 
     // MARK: - Row pieces
 
-    /// Severity label, evidence tally, and no-revert note as caption text —
-    /// the words carry the meaning, the colors only reinforce it.
+    /// Severity label, evidence tally, launch-revalidation flag, and
+    /// no-revert note as caption text — the words carry the meaning, the
+    /// colors only reinforce it.
     @ViewBuilder
     private func metadataLine(for proposal: NilesProposal) -> some View {
         let undoState = model.undoStates[proposal.id]
-        if proposal.isDestructive || !proposal.evidence.isEmpty || undoState == .notRevertable {
+        if proposal.isDestructive || !proposal.evidence.isEmpty || undoState == .notRevertable
+            || proposal.staleReason != nil {
             HStack(spacing: 12) {
                 if proposal.isDestructive {
                     Text("Destructive")
                         .font(.caption)
                         .foregroundStyle(Color.red)
+                }
+                if let staleReason = proposal.staleReason {
+                    Label(staleReason, systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(Color.orange)
                 }
                 if let tally = evidenceTally(of: proposal) {
                     Label(tally.text, systemImage: tally.symbol)

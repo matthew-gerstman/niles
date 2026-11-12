@@ -210,10 +210,14 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
     func handleScene(isActive: Bool) async {
         isAppActive = isActive
         if isActive {
-            start()
+            // Before anything can stage, decide, or even poll: revalidate
+            // what the launch loaded from disk, so the queue's first render
+            // already reflects the live home.
+            await coordinator.revalidateProposals()
             if !userStoppedServer {
                 await coordinator.start()
             }
+            start()
         } else {
             stop()
             await coordinator.stop()
@@ -734,6 +738,88 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
         await refresh()
     }
 
+    /// Relaunch QA fixture (`-UIProposalsFixture seed`): seeds proposal
+    /// state whose survival the NEXT launch must show, then the app is
+    /// terminated and relaunched plain. Stages four proposals through the
+    /// real store — a normal staged one, one whose target room never existed
+    /// (launch revalidation must flag it), one already past its TTL staged
+    /// on disk (the load-time sweep must expire it, and the relaunch records
+    /// the timestamped event), and one that is approved and executed (its
+    /// activity history and revert plan must survive, so the relaunched
+    /// Activity still shows the card and the row still offers Undo).
+    /// No-op without the argument; any mode but `seed` is logged and ignored.
+    func seedProposalsFixtureIfRequested() async {
+        let args = ProcessInfo.processInfo.arguments
+        guard let index = args.firstIndex(of: "-UIProposalsFixture"), index + 1 < args.count else { return }
+        guard args[index + 1] == "seed" else {
+            logger.error("Unknown -UIProposalsFixture mode: \(args[index + 1], privacy: .public)")
+            return
+        }
+        guard let store = coordinator.proposalStore else {
+            logger.error("Proposals fixture requested but no proposal store is running")
+            return
+        }
+        func room(_ id: String, _ name: String?) -> ProposalObjectRef {
+            ProposalObjectRef(kind: .room, id: id, name: name)
+        }
+        // 1. A normal staged proposal — survives relaunch as staged.
+        _ = await store.stage(plan: Plan(
+            tool: "create_room",
+            title: "Create room Studio",
+            summary: "Adds the Studio room to the home.",
+            isDestructive: false,
+            operations: [.addRoom(homeId: "home-1", name: "Studio")],
+            entries: [.init(object: room("", "Studio"), op: .create, before: nil, after: "Studio")],
+            card: [.init(.add, "Add room Studio")]
+        ))
+        // 2. A staged proposal whose target never existed: launch
+        //    revalidation flags it and the Queue keeps showing it.
+        _ = await store.stage(plan: Plan(
+            tool: "rename_room",
+            title: "Rename room to Attic",
+            summary: "Renames room-99 to Attic.",
+            isDestructive: false,
+            operations: [.renameRoom(homeId: "home-1", roomId: "room-99", to: "Attic")],
+            entries: [.init(object: room("room-99", "Attic"), op: .rename, before: nil, after: "Attic")],
+            card: [.init(.plain, "Rename room to Attic")]
+        ))
+        // 3. Staged with an expiry seconds away: run 1 terminates long
+        //    before it passes, so the proposal is STAGED on disk and past
+        //    its TTL at relaunch — the load-time sweep's exact input.
+        _ = await store.stage(
+            plan: Plan(
+                tool: "set_zone_rooms",
+                title: "Move Office into Upstairs",
+                summary: "Adds room-3 to zone-1.",
+                isDestructive: false,
+                operations: [.setZoneRooms(homeId: "home-1", zoneId: "zone-1", addRoomIds: ["room-3"], removeRoomIds: [])],
+                entries: [.init(object: ProposalObjectRef(kind: .zone, id: "zone-1", name: "Upstairs"), op: .addMembers, before: nil, after: "Office")],
+                card: [.init(.plain, "Move Office into Upstairs")]
+            ),
+            expiresAt: Date().addingTimeInterval(90)
+        )
+        // 4. Approved and executed: decided history plus a paired revert
+        //    plan — the relaunched Activity card and the row's Undo
+        //    affordance both come back from disk.
+        let workshop = await store.stage(plan: Plan(
+            tool: "create_room",
+            title: "Create room Workshop",
+            summary: "Adds the Workshop room to the home.",
+            isDestructive: false,
+            operations: [.addRoom(homeId: "home-1", name: "Workshop")],
+            entries: [.init(object: room("", "Workshop"), op: .create, before: nil, after: "Workshop")],
+            card: [.init(.add, "Add room Workshop")]
+        ))
+        // Refresh before the approval: `pendingProposals` reads the UI
+        // array, which a stale refresh left empty — deciding on a stale
+        // lookup would silently skip the execution this fixture exists for.
+        await refresh()
+        if workshop.state == .staged {
+            await approveAndWait(workshop.id)
+        }
+        await refresh()
+    }
+
     // MARK: - Refresh
 
     /// Pulls one consistent view from the coordinator, proposal store, and
@@ -768,57 +854,87 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
                 // log already holds (or that predates this launch).
                 recordedStates[proposal.id] = proposal.state
             }
+            // Proposals the load-time sweep expired: their expiry happened
+            // while the app was dead, so no poll ever saw the transition —
+            // record the event now, stamped with this launch instant.
+            for proposal in await store.takeProposalsExpiredAtLoad() {
+                await appendActivity(
+                    .expired,
+                    proposalId: proposal.id,
+                    title: proposal.title,
+                    agentName: nil,
+                    detail: "Expired after 24 hours — never executed"
+                )
+            }
             hasSeededExistingProposals = true
         } else {
-            for proposal in live where agentNamesByProposal[proposal.id] == nil {
-                agentNamesByProposal[proposal.id] = newestClientName(from: sessions) ?? "MCP agent"
+            // One synchronous scan: every first-seen and state transition is
+            // recorded and its event collected BEFORE any await. Concurrent
+            // refreshes interleave at await points; a scan that suspends
+            // mid-way lets a second pass see the same proposals as
+            // first-seen and announce them twice.
+            var arrivals: [Proposal] = []
+            var executedTransitions: [Proposal] = []
+            var expiredTransitions: [Proposal] = []
+            for proposal in live {
+                let previous = recordedStates[proposal.id]
+                recordedStates[proposal.id] = proposal.state
+                if agentNamesByProposal[proposal.id] == nil {
+                    agentNamesByProposal[proposal.id] = newestClientName(from: sessions) ?? "MCP agent"
+                }
                 // A revert proposal is the user's own Undo tap, staged and
                 // executed inside one store call — a poll can catch it
                 // mid-flight in .staged. It is never an agent arrival:
                 // no notification, no staged event.
-                if proposal.state == .staged, proposal.revertsProposalId == nil {
-                    notifier.proposalArrived(title: proposal.title, summary: proposal.summary)
-                    await appendActivity(
-                        .staged,
-                        proposalId: proposal.id,
-                        title: proposal.title,
-                        agentName: agentNamesByProposal[proposal.id]
-                    )
+                if previous == nil, proposal.state == .staged, proposal.revertsProposalId == nil {
+                    arrivals.append(proposal)
                 }
-            }
-            // The poll diff: state changes become activity events. Decisions
-            // and undos are recorded by their verbs; execution and expiry
-            // happen inside the store, so only the next poll can see them.
-            for proposal in live {
-                let previous = recordedStates[proposal.id]
-                recordedStates[proposal.id] = proposal.state
-                guard previous != proposal.state else { continue }
+                // Decisions and undos are recorded by their verbs; execution
+                // and expiry happen inside the store, so only a later poll
+                // can see the transition. A proposal first seen already in a
+                // terminal state has no observable transition here.
+                guard previous != nil, previous != proposal.state else { continue }
                 switch proposal.state {
                 case .executed, .failed:
-                    var detail = Self.executionOutcome(of: proposal) ?? ""
-                    if let originalId = proposal.revertsProposalId {
-                        let originalTitle = live.first { $0.id == originalId }?.title ?? originalId
-                        detail += (detail.isEmpty ? "" : " — ") + "revert of “\(originalTitle)”"
-                    }
-                    await appendActivity(
-                        .executed,
-                        proposalId: proposal.id,
-                        title: proposal.title,
-                        agentName: agentNamesByProposal[proposal.id],
-                        detail: detail.isEmpty ? nil : detail,
-                        evidence: proposal.evidence
-                    )
+                    executedTransitions.append(proposal)
                 case .expired:
-                    await appendActivity(
-                        .expired,
-                        proposalId: proposal.id,
-                        title: proposal.title,
-                        agentName: agentNamesByProposal[proposal.id],
-                        detail: "Expired after 24 hours — never executed"
-                    )
+                    expiredTransitions.append(proposal)
                 case .staged, .approved, .denied:
                     break
                 }
+            }
+            for proposal in arrivals {
+                notifier.proposalArrived(title: proposal.title, summary: proposal.summary)
+                await appendActivity(
+                    .staged,
+                    proposalId: proposal.id,
+                    title: proposal.title,
+                    agentName: agentNamesByProposal[proposal.id]
+                )
+            }
+            for proposal in executedTransitions {
+                var detail = Self.executionOutcome(of: proposal) ?? ""
+                if let originalId = proposal.revertsProposalId {
+                    let originalTitle = live.first { $0.id == originalId }?.title ?? originalId
+                    detail += (detail.isEmpty ? "" : " — ") + "revert of “\(originalTitle)”"
+                }
+                await appendActivity(
+                    .executed,
+                    proposalId: proposal.id,
+                    title: proposal.title,
+                    agentName: agentNamesByProposal[proposal.id],
+                    detail: detail.isEmpty ? nil : detail,
+                    evidence: proposal.evidence
+                )
+            }
+            for proposal in expiredTransitions {
+                await appendActivity(
+                    .expired,
+                    proposalId: proposal.id,
+                    title: proposal.title,
+                    agentName: agentNamesByProposal[proposal.id],
+                    detail: "Expired after 24 hours — never executed"
+                )
             }
         }
 
@@ -966,7 +1082,11 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
             .filter { $0.kind == .note || $0.kind == .plain }
             .map { ProposalDiffLine(ProposalDiffLine.Kind($0.kind), $0.text) }
         if let error = proposal.error {
-            context.append(ProposalDiffLine(.note, "⚠ HomeKit error: \(error)"))
+            // A still-staged proposal's error is the launch revalidation's
+            // missing-target flag, not an execution failure — label it as
+            // what it is, and surface it on the queue row too.
+            let prefix = proposal.state == .staged ? "⚠ " : "⚠ HomeKit error: "
+            context.append(ProposalDiffLine(.note, "\(prefix)\(error)"))
         }
 
         return NilesProposal(
@@ -981,6 +1101,7 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
                 .filter { $0.kind == .add || $0.kind == .remove }
                 .map { ProposalDiffLine(ProposalDiffLine.Kind($0.kind), $0.text) },
             context: context,
+            staleReason: proposal.state == .staged ? proposal.error : nil,
             state: proposal.state,
             revertsProposalId: proposal.revertsProposalId
         )
