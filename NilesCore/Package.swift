@@ -8,9 +8,11 @@ import PackageDescription
 /// `Value` type never appears in the app-facing API.
 let package = Package(
     name: "NilesCore",
-    // iOS 17 is the app's floor. macOS 13 exists so the package can be
-    // built standalone on a Mac host (`swift build`) — the MCP SDK's floor.
-    platforms: [.iOS(.v17), .macOS(.v13)],
+    // iOS 17 is the app's floor. Standalone verification builds against the
+    // iOS Simulator SDK via a destination file — HomeKit does not exist in
+    // the macOS SDK, so there is no meaningful Mac-host build of this
+    // package.
+    platforms: [.iOS(.v17)],
     products: [
         // Dynamic to keep the framework-shaped embedding the app target
         // had when NilesCore was an XcodeGen framework.
