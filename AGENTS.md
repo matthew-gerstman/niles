@@ -2,7 +2,7 @@
 
 ## Project layout
 
-- `project.yml` — XcodeGen spec (app targets iOS 17, depends on `modelcontextprotocol/swift-sdk` 0.12.1). **`Niles.xcodeproj` is generated, not committed** — always run `xcodegen generate` before building.
+- `project.yml` — XcodeGen spec (app targets iOS 17, links the local `NilesCore` SwiftPM package; `modelcontextprotocol/swift-sdk` 0.12.1 is a package-internal dependency, not linked by the app). **`Niles.xcodeproj` is generated, not committed** — always run `xcodegen generate` before building.
 - **Verification is manual on device — there is no CI and the repo ships without tests by policy.** Every change is validated by Debug/Release simulator builds plus device QA (see below); nothing runs in GitHub Actions.
 - Builds use ad-hoc signing (`CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO`) where a test host would be needed; unsigned test hosts fail Keychain with `errSecMissingEntitlement` (-34018). (Note: the repo ships without tests, so this mainly matters if a test suite is ever restored.)
 
