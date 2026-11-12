@@ -1,5 +1,4 @@
 import Foundation
-import MCP
 import NilesCore
 
 /// One line of a proposal's human-readable diff, as rendered on review cards.
@@ -164,13 +163,14 @@ struct HomeRow: Identifiable, Hashable {
         }
     }
 
-    /// The staged write tool this action maps to, with its MCP arguments —
-    /// the same call the agent's write tool would make, so the proposal
-    /// lands in the queue as a normal review card. Nil when the row kind
-    /// has no tool for the action (e.g. HomeKit has no trigger rename).
-    func stageRequest(for action: HomeRowAction, newName: String?) -> (tool: String, arguments: [String: MCP.Value])? {
+    /// The staged write tool this action maps to, with its decoded
+    /// arguments — the same call the agent's write tool would make, so the
+    /// proposal lands in the queue as a normal review card. Nil when the
+    /// row kind has no tool for the action (e.g. HomeKit has no trigger
+    /// rename).
+    func stageRequest(for action: HomeRowAction, newName: String?) -> (tool: String, arguments: [String: ToolArgument])? {
         guard let kind, let entityId else { return nil }
-        let id = MCP.Value.string(entityId)
+        let id = ToolArgument.string(entityId)
         switch (kind, action) {
         case (.scene, .run):
             return ("execute_scene", ["sceneId": id])

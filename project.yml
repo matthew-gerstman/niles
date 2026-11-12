@@ -6,9 +6,11 @@ options:
     iOS: "17.0"
 
 packages:
-  MCPSwift:
-    url: https://github.com/modelcontextprotocol/swift-sdk
-    exactVersion: 0.12.1
+  # Local SwiftPM package: proposal pipeline, HomeKit adapters, LAN MCP
+  # transport, and agent layer (cleanup W1). The MCP SDK is a package-
+  # internal dependency of NilesCore — the app links only this product.
+  NilesCore:
+    path: NilesCore
 
 settings:
   base:
@@ -47,11 +49,7 @@ targets:
         NSBonjourServices:
           - "_niles-mcp._tcp"
     dependencies:
-      - target: NilesCore
-      # The store's stage path takes MCP.Value arguments, so the app target
-      # links the package directly instead of reaching through NilesCore.
-      - package: MCPSwift
-        product: MCP
+      - package: NilesCore
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.gerstman.niles
@@ -61,19 +59,6 @@ targets:
         # Team scoped to the app target: frameworks and tests stay unsigned, and
         # other contributors can override their own team without editing this file.
         DEVELOPMENT_TEAM: DVM2MJ6Z3Q
-
-  NilesCore:
-    type: framework
-    platform: iOS
-    sources:
-      - path: NilesCore/Sources
-    dependencies:
-      - package: MCPSwift
-        product: MCP
-    info:
-      path: NilesCore/Info.plist
-      properties:
-        CFBundleDisplayName: NilesCore
 
 schemes:
   Niles:
