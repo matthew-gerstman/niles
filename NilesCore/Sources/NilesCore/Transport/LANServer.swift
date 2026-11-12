@@ -1,11 +1,53 @@
 import Foundation
 import MCP
 import Network
+#if os(iOS)
+import UIKit
+#endif
 
 /// Bonjour identity for the MCP endpoint, advertised only while the listener runs.
 public enum NilesBonjour {
-    public static let instanceName = "Niles"
+    /// The service's base name. The advertised instance qualifies it with the
+    /// device name so two Niles instances on one LAN are distinguishable in a
+    /// browse — a leftover simulator fixture advertising plain "Niles" once
+    /// soaked up a pairing code meant for the real phone.
+    public static let baseName = "Niles"
     public static let serviceType = "_niles-mcp._tcp"
+
+    /// Launch arguments that pin screenshot/preview capture fixtures (parsed
+    /// alongside these in `Niles/ContentView.swift`).
+    static let captureFixtureArguments = [
+        "-UIWideLayout", "-UIHomeFixtures", "-UIActivityFixtures",
+    ]
+
+    /// True when the app launched with a capture-fixture argument. A capture
+    /// instance must never advertise: a fixture visible in a browse as "Niles"
+    /// can impersonate a real endpoint and capture pairing codes.
+    public static var isCaptureFixture: Bool {
+        let arguments = ProcessInfo.processInfo.arguments
+        return captureFixtureArguments.contains { arguments.contains($0) }
+    }
+
+    /// The device-qualified instance name, e.g. `Niles (Matthew's iPhone)`.
+    /// Derived from the device's current name, so it stays stable across
+    /// relaunches — it only changes if the user renames the device.
+    public static var instanceName: String {
+        #if os(iOS)
+        let deviceName = UIDevice.current.name
+        #elseif os(macOS)
+        let deviceName = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
+        #else
+        let deviceName = ""
+        #endif
+        return deviceName.isEmpty ? baseName : "\(baseName) (\(deviceName))"
+    }
+
+    /// The name a LANServer should advertise, or nil for a capture fixture —
+    /// fixtures may serve locally but never advertise. This is LANServer's
+    /// default, so fixture hygiene holds even if a caller forgets to opt out.
+    public static var advertisedInstanceName: String? {
+        isCaptureFixture ? nil : instanceName
+    }
 
     /// Discovery keys agents read to use the server without out-of-band
     /// documentation: the MCP endpoint path, the pairing protocol version,
@@ -72,7 +114,7 @@ public actor LANServer {
         gateway: MCPGateway,
         pairingService: PairingService? = nil,
         port: UInt16 = LANServer.defaultPort,
-        bonjourName: String? = NilesBonjour.instanceName,
+        bonjourName: String? = NilesBonjour.advertisedInstanceName,
         bonjourType: String? = NilesBonjour.serviceType
     ) {
         self.gateway = gateway
@@ -94,13 +136,14 @@ public actor LANServer {
         let listener = try NWListener(using: parameters, on: endpointPort)
 
         // Advertising lives with the listener: cancelling it unregisters the service,
-        // so `_niles-mcp._tcp` disappears the moment serving stops. The TXT record
-        // tells agents where the MCP and pairing endpoints live without
-        // out-of-band documentation. The app's Info.plist declares the type in
-        // NSBonjourServices (local-network prompt).
-        if let bonjourType {
+        // so `_niles-mcp._tcp` disappears the moment serving stops. Both a name and
+        // a type are required — a nil name (capture fixture) means no registration
+        // at all, never a default-named one. The TXT record tells agents where the
+        // MCP and pairing endpoints live without out-of-band documentation. The
+        // app's Info.plist declares the type in NSBonjourServices (local-network prompt).
+        if let bonjourName, let bonjourType {
             listener.service = NWListener.Service(
-                name: bonjourName ?? "Niles",
+                name: bonjourName,
                 type: bonjourType,
                 txtRecord: NilesBonjour.serviceTXT
             )
