@@ -180,8 +180,8 @@ struct ContentView: View {
     /// the left, Home on the right — each keeping its own NavigationStack
     /// title, with no tab bar. The gated agent chat stays reachable through
     /// a trailing toolbar button on the Home pane. Both panes pass through
-    /// `widePane()` so their horizontal list margins match (diagnosis
-    /// art_RzbLOF98: landscape safe-area clearance otherwise folds into the
+    /// `widePane()` so their horizontal list margins match (observed in
+    /// simulation: landscape safe-area clearance otherwise folds into the
     /// edge-adjacent pane's list item insets).
     private var wideLayout: some View {
         HStack(spacing: 0) {
@@ -215,9 +215,8 @@ struct ContentView: View {
 /// match regardless of which window edge a pane abuts, and so their bar
 /// geometry matches too. The scroll-content margins themselves live on each
 /// pane's List (ActivityScreen/HomeScreen): scoped to the NavigationStack
-/// they interfere with the bar's scroll-edge tracking in the wide layout
-/// (bisect cell 2, diagnosis art_LwUDWPuP).
-/// Diagnosis (art_RzbLOF98, Xcode 27.2 simulators): in landscape, SwiftUI distributes
+/// they interfere with the bar's scroll-edge tracking in the wide layout.
+/// Observed on Xcode 27.2 simulators: in landscape, SwiftUI distributes
 /// the window's horizontal safe area — the sensor-housing clearance (84 pt
 /// on the Duo) — to the edge-adjacent children of wideLayout's HStack, and
 /// an insetGrouped list folds that clearance into its item insets, leaving
@@ -229,7 +228,7 @@ struct ContentView: View {
 /// the shared margin must instead be the housing width (never negative
 /// padding).
 ///
-/// Bar geometry (bisect cell 3, diagnosis art_LwUDWPuP): in the wide layout
+/// Bar geometry: in the wide layout
 /// the leading pane never registers the top scroll-edge effect — the system
 /// status pillar sits over the trailing pane's x-range — so its bar falls
 /// back to the legacy expanded large-title geometry (110 pt, title below an

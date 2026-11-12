@@ -68,7 +68,7 @@ struct HomeScreen: View {
                 }
                 .listStyle(.insetGrouped)
                 .navigationTitle("Home")
-                // Shared bar modifier (bisect cell 3, see widePane): each
+                // Shared bar modifier (see widePane): each
                 // pane applies the inline pin widePane() publishes — pinned
                 // in the wide layout, automatic (untouched) in the narrow
                 // layout.
@@ -82,12 +82,12 @@ struct HomeScreen: View {
                 // No explicit .contentMargins on the List: an explicit
                 // horizontal scroll-content margin REPLACES the
                 // safe-area-derived one, and on the Duo that is the 84 pt
-                // sensor-housing/status-pillar clearance (device-measured,
-                // todo_5nDqe0he — with the margin set, cards rendered ~66 pt
+                // sensor-housing/status-pillar clearance (device-measured —
+                // with the margin set, cards rendered ~66 pt
                 // under the pillar). The default grouped-list margins already
                 // give the 20 pt gutters, and keeping margins off the stack
-                // wrapper avoids the bar scroll-edge interference of bisect
-                // cell 2 (diagnosis art_LwUDWPuP).
+                // wrapper avoids the bar scroll-edge interference seen in the
+                // wide layout.
                 // Safe-area diagnostics: -UISafeAreaProbe overlays the
                 // List's measured insets and boundary lines.
                 .overlay(alignment: .bottomLeading) {

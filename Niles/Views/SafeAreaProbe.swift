@@ -5,7 +5,7 @@ import SwiftUI
 /// edge — on the root view and each pane's List, so the insets a device
 /// actually reports can be read straight off a screenshot. Same family as the
 /// other `-UI…` screenshot hooks (inert without the argument); built for the
-/// status-pillar clearance diagnosis, todo_5nDqe0he.
+/// status-pillar clearance diagnosis.
 enum SafeAreaProbe {
     static let active = ProcessInfo.processInfo.arguments.contains("-UISafeAreaProbe")
 }
