@@ -53,6 +53,10 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
     /// round-trip is still running. Set synchronously in the tap handler,
     /// cleared when the pipeline settles (or the decision fails).
     private(set) var decisionsInFlight: [String: ProposalDecision] = [:]
+    /// Screenshot-fixture freeze (see `seedQueueFixtureIfRequested`): ids
+    /// whose UI proposal state `refresh` must not remap from the store —
+    /// the planted state has no live counterpart behind it.
+    private(set) var frozenProposalIds: Set<String> = []
     /// Per-row failures from each proposal's most recent swipe decision,
     /// surfaced as a row-level note (the row is back in the Queue) until
     /// the next attempt or dismissal — never only a log line.
@@ -768,6 +772,20 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
             guard let id = await stage(createRoomPlan()) else { return }
             decisionsInFlight[id] = .approving
 
+        case "approved_in_flight":
+            // Screenshot fixture: store-driven in-flight — the proposal the
+            // pipeline has decided and is executing, its persisted state
+            // `approved`, with no local swipe marker. This is the shape a
+            // poll or a relaunch mid-execution surfaces: it renders in
+            // Activity as Executing… and never in the Queue. Planted
+            // directly (and frozen against the poll) for the same
+            // too-fast-to-capture reason as `in_flight`.
+            guard let id = await stage(createRoomPlan()) else { return }
+            if let index = proposals.firstIndex(where: { $0.id == id }) {
+                proposals[index].state = .approved
+                frozenProposalIds.insert(id)
+            }
+
         case "decision_failed":
             // Screenshot fixture: a failed decision — the row is back in
             // the Queue with its typed error note and re-enabled swipes.
@@ -983,7 +1001,14 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
         }
 
         proposals = live.map { proposal in
-            Self.uiProposal(
+            // Screenshot-fixture freeze: the frozen row's planted state has
+            // no live counterpart in the proposal store, so the poll must
+            // not remap it out from under the capture.
+            if frozenProposalIds.contains(proposal.id),
+               let frozen = proposals.first(where: { $0.id == proposal.id }) {
+                return frozen
+            }
+            return Self.uiProposal(
                 for: proposal,
                 agentName: agentNamesByProposal[proposal.id] ?? "MCP agent"
             )
