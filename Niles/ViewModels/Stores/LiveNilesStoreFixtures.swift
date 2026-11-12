@@ -120,7 +120,7 @@ extension LiveNilesStore {
                 // The Undo tap, performed exactly as the row's button does it.
                 await queue.undoAndWait(id)
             } catch {
-                logger.error("Conflict fixture diverge failed: \\(String(describing: error))")
+                logger.error("Conflict fixture diverge failed: \(String(describing: error))")
             }
 
         case "in_flight":
@@ -198,7 +198,7 @@ extension LiveNilesStore {
             queue.plantDecisionFailure(id, approve: true, reason: "the proposal was already decided")
 
         default:
-            logger.error("Unknown -UISeedQueue fixture: \\(fixture, privacy: .public)")
+            logger.error("Unknown -UISeedQueue fixture: \(fixture, privacy: .public)")
         }
         await refresh()
     }
@@ -216,7 +216,7 @@ extension LiveNilesStore {
     func seedProposalsFixtureIfRequested() async {
         guard let mode = LaunchArguments.uiProposalsFixture else { return }
         guard mode == "seed" else {
-            logger.error("Unknown -UIProposalsFixture mode: \\(mode, privacy: .public)")
+            logger.error("Unknown -UIProposalsFixture mode: \(mode, privacy: .public)")
             return
         }
         guard let store = coordinator.proposalStore else {

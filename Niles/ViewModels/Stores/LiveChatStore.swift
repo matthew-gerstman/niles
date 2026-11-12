@@ -55,7 +55,7 @@ final class LiveChatStore: ChatViewModel {
         // in AgentService (and the dispatcher) once the run starts. The
         // composed request is what the agent receives — log that.
         AgentRunTrace.logger.info(
-            "Ask Niles run start: entry=in-app chat request: \\(AgentRunTrace.truncated(request, to: 500), privacy: .public)"
+            "Ask Niles run start: entry=in-app chat request: \(AgentRunTrace.truncated(request, to: 500), privacy: .public)"
         )
         await AgentRunTraceStore.shared.recordRunStart(entryPoint: "In-App Chat", request: request)
         entries.append(ChatEntry(id: UUID(), role: .user, text: text))

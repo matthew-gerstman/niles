@@ -289,8 +289,8 @@ final class LiveNilesStore {
     /// operations ran, the recorded HomeKit error when they failed mid-list.
     private static func executionOutcome(of proposal: Proposal) -> String? {
         if let error = proposal.error { return "Failed — \(error)" }
-        let confirmed = proposal.evidence.filter(\\.confirmed).count
-        return "\\(confirmed) of \\(proposal.evidence.count) checks confirmed"
+        let confirmed = proposal.evidence.filter(\.confirmed).count
+        return "\(confirmed) of \(proposal.evidence.count) checks confirmed"
     }
 
     // MARK: - Live -> UI mapping
@@ -360,10 +360,10 @@ final class LiveNilesStore {
                 )
             }),
             HomeSection(title: "Scenes", rows: (home?.scenes ?? []).map { scene in
-                let accessories = Set(scene.actions.compactMap(\\.accessoryId)).count
+                let accessories = Set(scene.actions.compactMap(\.accessoryId)).count
                 return HomeRow(
                     name: scene.name,
-                    subtitle: "\\(scene.actions.count) actions · \\(accessories) accessories",
+                    subtitle: "\(scene.actions.count) actions · \(accessories) accessories",
                     systemImage: "film",
                     trailingCount: scene.actions.count,
                     kind: .scene,
@@ -387,20 +387,20 @@ final class LiveNilesStore {
         switch detail {
         case .timer(let fireDate, let recurrence):
             let time = fireDate.formatted(date: .omitted, time: .shortened)
-            if recurrence.isEmpty { return "Timer · \\(time)" }
+            if recurrence.isEmpty { return "Timer · \(time)" }
             var parts: [String] = []
             if let weekday = recurrence["weekday"] { parts.append(Self.weekdayLetter(for: weekday)) }
             if let hour = recurrence["hour"], let minute = recurrence["minute"] {
                 parts.append(String(format: "%02d:%02d", hour, minute))
             }
             let schedule = parts.joined(separator: " ")
-            return schedule.isEmpty ? "Timer · \\(time)" : "Timer · \\(schedule)"
+            return schedule.isEmpty ? "Timer · \(time)" : "Timer · \(schedule)"
         case .event(let event):
             let readableSuffix = event.readable ? "" : " · parts unreadable"
-            let predicateSuffix = event.predicate.map { " · \\($0)" } ?? ""
-            return "Event · \\(event.events.count) event\\(event.events.count == 1 ? "" : "s")\\(predicateSuffix)\\(readableSuffix)"
+            let predicateSuffix = event.predicate.map { " · \($0)" } ?? ""
+            return "Event · \(event.events.count) event\(event.events.count == 1 ? "" : "s")\(predicateSuffix)\(readableSuffix)"
         case .unknown(let kind):
-            return "\\(kind) · unsupported trigger kind"
+            return "\(kind) · unsupported trigger kind"
         }
     }
 

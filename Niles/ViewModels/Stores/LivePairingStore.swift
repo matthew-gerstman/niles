@@ -45,7 +45,7 @@ final class LivePairingStore: PairingViewModel {
             try tokenStore.revoke(id: id)
             await coordinator.closeSessions(tokenId: id)
         } catch {
-            logger.error("Revoke failed for \\(id.uuidString, privacy: .public): \\(String(describing: error))")
+            logger.error("Revoke failed for \(id.uuidString, privacy: .public): \(String(describing: error))")
         }
         await refreshState(sessions: await coordinator.sessionInfos())
     }
@@ -73,7 +73,7 @@ final class LivePairingStore: PairingViewModel {
         } catch {
             // The Keychain read failing keeps the previous list on screen —
             // logged, never silently dropped.
-            logger.error("Paired-agent read failed, keeping previous list: \\(String(describing: error))")
+            logger.error("Paired-agent read failed, keeping previous list: \(String(describing: error))")
         }
     }
 
@@ -84,7 +84,7 @@ final class LivePairingStore: PairingViewModel {
         do {
             _ = try await coordinator.pairingCodes.mintCode()
         } catch {
-            logger.error("Pairing code mint failed: \\(String(describing: error))")
+            logger.error("Pairing code mint failed: \(String(describing: error))")
         }
     }
 

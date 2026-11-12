@@ -37,11 +37,11 @@ final class LiveHomeGraphStore: HomeGraphViewModel {
     /// the queue and nothing touches HomeKit until it is approved.
     func stage(row: HomeRow, action: HomeRowAction, newName: String? = nil) async {
         guard let request = row.stageRequest(for: action, newName: newName) else {
-            logger.error("No write tool maps to \\(String(describing: action), privacy: .public) on “\\(row.name, privacy: .public)”")
+            logger.error("No write tool maps to \(String(describing: action), privacy: .public) on “\(row.name, privacy: .public)”")
             return
         }
         guard let store = coordinator.proposalStore else {
-            logger.error("Cannot stage \\(request.tool, privacy: .public): no proposal store")
+            logger.error("Cannot stage \(request.tool, privacy: .public): no proposal store")
             return
         }
         do {
@@ -54,7 +54,7 @@ final class LiveHomeGraphStore: HomeGraphViewModel {
         } catch {
             // Staging rejections (validation, HomeKit state) surface here;
             // nothing was applied either way — the queue stays authoritative.
-            logger.error("Staging \\(request.tool, privacy: .public) for “\\(row.name, privacy: .public)” failed: \\(String(describing: error))")
+            logger.error("Staging \(request.tool, privacy: .public) for “\(row.name, privacy: .public)” failed: \(String(describing: error))")
         }
     }
 

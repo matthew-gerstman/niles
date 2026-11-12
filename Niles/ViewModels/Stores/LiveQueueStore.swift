@@ -48,7 +48,7 @@ final class LiveQueueStore: QueueViewModel, ActivityViewModel {
     private(set) var undoFailures: [String: ActivityUndoFailure] = [:]
 
     var pendingProposals: [NilesProposal] {
-        proposals.filter(\\.isPending)
+        proposals.filter(\.isPending)
     }
 
     private let coordinator: ServerCoordinator
@@ -111,7 +111,7 @@ final class LiveQueueStore: QueueViewModel, ActivityViewModel {
     private func decide(approve: Bool, id: String) async {
         guard let store = coordinator.proposalStore else {
             let verb = approve ? "approve" : "deny"
-            logger.error("Cannot \\(verb, privacy: .public) \\(id, privacy: .public): no proposal store")
+            logger.error("Cannot \(verb, privacy: .public) \(id, privacy: .public): no proposal store")
             // The decision did not land — hand the row back to the Queue
             // with a visible failure note, not only the log line.
             decisionsInFlight[id] = nil
@@ -139,7 +139,7 @@ final class LiveQueueStore: QueueViewModel, ActivityViewModel {
             // surface the failure as a row-level note (the swipe re-enables
             // and the row returns to the Queue), and let the next refresh
             // render the store's real state.
-            logger.error("Decision failed for \\(id): \\(String(describing: error))")
+            logger.error("Decision failed for \(id): \(String(describing: error))")
             decisionsInFlight[id] = nil
             decisionFailures[id] = Self.decisionFailureMessage(
                 approve: approve, reason: String(describing: error)
@@ -212,7 +212,7 @@ final class LiveQueueStore: QueueViewModel, ActivityViewModel {
 
     func undoAndWait(_ id: String) async {
         guard let store = coordinator.proposalStore else {
-            logger.error("Cannot undo \\(id, privacy: .public): no proposal store")
+            logger.error("Cannot undo \(id, privacy: .public): no proposal store")
             return
         }
         undosInFlight.insert(id)
@@ -227,7 +227,7 @@ final class LiveQueueStore: QueueViewModel, ActivityViewModel {
                 proposalId: id,
                 title: proposals.first { $0.id == id }?.title ?? id,
                 agentName: root?.agentName(for: id),
-                detail: "Reverted — \\(revert.title)"
+                detail: "Reverted — \(revert.title)"
             )
         } catch let error as ProposalStoreError {
             switch error {
@@ -240,17 +240,17 @@ final class LiveQueueStore: QueueViewModel, ActivityViewModel {
                 // coverage, or a spent plan): the affordance goes away.
                 notRevertableIds.insert(id)
             case .proposalNotFound, .proposalNotPending, .homeReadFailed:
-                logger.error("Undo failed for \\(id, privacy: .public): \\(String(describing: error))")
+                logger.error("Undo failed for \(id, privacy: .public): \(String(describing: error))")
             case .unknownTool, .invalidArguments, .validationFailed:
                 // Unreachable from undo — staging errors surface to agents,
                 // not to this tap path. Never silently swallowed: logged.
-                logger.error("Undo failed for \\(id, privacy: .public): \\(String(describing: error))")
+                logger.error("Undo failed for \(id, privacy: .public): \(String(describing: error))")
             }
             // The typed failure surfaces inline on the activity card too —
             // a conflict names the divergences; nothing was applied either way.
             undoFailures[id] = Self.undoFailure(for: error)
         } catch {
-            logger.error("Undo failed for \\(id, privacy: .public): \\(String(describing: error))")
+            logger.error("Undo failed for \(id, privacy: .public): \(String(describing: error))")
             // The typed failure surfaces inline on the card — a conflict
             // names the divergences; nothing was applied either way.
             undoFailures[id] = Self.undoFailure(for: error)
@@ -330,7 +330,7 @@ final class LiveQueueStore: QueueViewModel, ActivityViewModel {
             )
         default:
             return ActivityUndoFailure(
-                message: "Undo failed — nothing was changed. (\\(storeError))",
+                message: "Undo failed — nothing was changed. (\(storeError))",
                 divergences: []
             )
         }
@@ -372,7 +372,7 @@ final class LiveQueueStore: QueueViewModel, ActivityViewModel {
     /// batch runs. Returns the staged ids whose chips must settle.
     @discardableResult
     private func beginApproveAllBatch() -> [String] {
-        let stagedIds = proposals.filter(\\.isPending).map(\\.id)
+        let stagedIds = proposals.filter(\.isPending).map(\.id)
         guard !stagedIds.isEmpty else { return stagedIds }
         for id in stagedIds {
             decisionsInFlight[id] = .approving
@@ -398,7 +398,7 @@ final class LiveQueueStore: QueueViewModel, ActivityViewModel {
                 )
             }
         } catch {
-            logger.error("Approve all failed: \\(String(describing: error))")
+            logger.error("Approve all failed: \(String(describing: error))")
         }
         await root?.refresh()
         // Settled: the refreshed states are authoritative.
