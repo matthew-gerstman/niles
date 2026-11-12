@@ -260,6 +260,50 @@ final class InMemoryNilesStore: DashboardViewModel, QueueViewModel, HomeGraphVie
         ]
 
         proposals = [
+            // The two declutter-QA capture subjects lead the fixture: the
+            // executed single-op row (decluttered) and the multi-op batch
+            // row (unchanged control) are the first two Queue rows on
+            // screen.
+            // An already-executed change: the Queue row renders the executed
+            // chip with read-back evidence and the Undo affordance.
+            NilesProposal(
+                id: "prop_8f50",
+                tool: "create_room",
+                title: "Create room “Studio”",
+                agentName: "Obvious Agent",
+                createdAt: now.addingTimeInterval(-52 * minute),
+                isDestructive: false,
+                evidence: [
+                    ProposalEvidence(claim: "Room “Studio” exists", observed: "Confirmed in the live home", confirmed: true),
+                ],
+                diff: [ProposalDiffLine(.add, "+ Room “Studio”")],
+                context: [],
+                state: .executed
+            ),
+            // A multi-op batch: its per-operation summary and multi-check
+            // evidence tally stay on the row — the 2026-11-12 declutter
+            // touches single-op rows only, and this row is the unchanged
+            // control in QA captures.
+            NilesProposal(
+                id: "prop_8f61",
+                tool: "stage_batch",
+                title: "Batch: 3 changes",
+                agentName: "Claude Code",
+                createdAt: now.addingTimeInterval(-63 * minute),
+                isDestructive: false,
+                evidence: [
+                    ProposalEvidence(claim: "Room “Studio” exists", observed: "Confirmed in the live home", confirmed: true),
+                    ProposalEvidence(claim: "Zone “Downstairs” adds “Office”", observed: "Confirmed in the live home", confirmed: true),
+                    ProposalEvidence(claim: "Scene “Good Morning” updated", observed: "Confirmed in the live home", confirmed: true),
+                ],
+                diff: [
+                    ProposalDiffLine(.add, "+ Room “Studio”"),
+                    ProposalDiffLine(.add, "+ Downstairs · add room “Office”"),
+                    ProposalDiffLine(.add, "+ Scene “Good Morning” · set 3 actions"),
+                ],
+                context: [],
+                state: .executed
+            ),
             NilesProposal(
                 id: "prop_8f2a",
                 tool: "set_zone_rooms",
@@ -302,46 +346,6 @@ final class InMemoryNilesStore: DashboardViewModel, QueueViewModel, HomeGraphVie
                     "⚠ HomeKit moves its 3 accessories to the Default Room. Siri, the Home app, and any "
                         + "automations referencing this room will see the change immediately."
                 )]
-            ),
-            // An already-executed change: the Queue row renders the executed
-            // chip with read-back evidence and the Undo affordance.
-            NilesProposal(
-                id: "prop_8f50",
-                tool: "create_room",
-                title: "Create room “Studio”",
-                agentName: "Obvious Agent",
-                createdAt: now.addingTimeInterval(-52 * minute),
-                isDestructive: false,
-                evidence: [
-                    ProposalEvidence(claim: "Room “Studio” exists", observed: "Confirmed in the live home", confirmed: true),
-                ],
-                diff: [ProposalDiffLine(.add, "+ Room “Studio”")],
-                context: [],
-                state: .executed
-            ),
-            // A multi-op batch: its per-operation summary and multi-check
-            // evidence tally stay on the row — the 2026-11-12 declutter
-            // touches single-op rows only, and this row is the unchanged
-            // control in QA captures.
-            NilesProposal(
-                id: "prop_8f61",
-                tool: "stage_batch",
-                title: "Batch: 3 changes",
-                agentName: "Claude Code",
-                createdAt: now.addingTimeInterval(-63 * minute),
-                isDestructive: false,
-                evidence: [
-                    ProposalEvidence(claim: "Room “Studio” exists", observed: "Confirmed in the live home", confirmed: true),
-                    ProposalEvidence(claim: "Zone “Downstairs” adds “Office”", observed: "Confirmed in the live home", confirmed: true),
-                    ProposalEvidence(claim: "Scene “Good Morning” updated", observed: "Confirmed in the live home", confirmed: true),
-                ],
-                diff: [
-                    ProposalDiffLine(.add, "+ Room “Studio”"),
-                    ProposalDiffLine(.add, "+ Downstairs · add room “Office”"),
-                    ProposalDiffLine(.add, "+ Scene “Good Morning” · set 3 actions"),
-                ],
-                context: [],
-                state: .executed
             ),
         ]
         undoStates = ["prop_8f50": .idle]
