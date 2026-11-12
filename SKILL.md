@@ -68,7 +68,9 @@ Deep-read one object at a time: `get_details(kind, id)` where kind is `home`, `r
 
 ### One request, one batch
 
-A human request is one batch: stage dependent proposals **in order** and report every `proposalId`. Poll `get_proposal(proposalId)` to learn each outcome (`staged`, `approved`, `executed`, `denied`, `expired`, `failed`) and read execution evidence — do not re-read the home to guess whether a write landed. Staging an identical change twice creates duplicate review cards.
+A human request touching many objects — "make five scenes", "rename these twelve lamps" — is **one batch proposal** via `stage_batch`, never a stream of singles: one notification, one review card, one approval. It takes 1–20 entries, each `{tool, arguments}` naming a staged write tool with its normal arguments. Every entry is planned against the same home snapshot: if any entry would fail — unknown object, bad value — the whole batch is rejected with per-entry errors and nothing is staged. Fix the named entry and re-send the whole batch. Approval applies every operation in order, and if one fails partway the read-back evidence shows which applied — there is no rollback. `set_trigger_state` is never a batch member: arming is always its own proposal and its own approval.
+
+For changes that genuinely depend on each other — a rename whose new object id a later call needs — stage separate proposals **in order** and report every `proposalId`. Poll `get_proposal(proposalId)` to learn each outcome (`staged`, `approved`, `executed`, `denied`, `expired`, `failed`) and read execution evidence — do not re-read the home to guess whether a write landed. Staging an identical change twice returns the existing proposal instead of stacking duplicate cards.
 
 ### Declarative means destructive
 
@@ -101,7 +103,7 @@ Triggers are **created disabled** — both `create` kinds (`timer`, `event`) and
 | `rename` | `entityId`, `newName` | room, zone, scene, group, accessory |
 | `delete` | `entityId`, `deleteLinkedTriggers?` | destructive; per-type consequences on the review card |
 
-**Dedicated, not deprecated (7):** `execute_scene` and `write_characteristic` (device-immediate), `set_trigger_state` (arm/disarm — never absorbed into `update`), `identify_accessory`, `unblock_accessory`, `assign_accessory_to_room`, `get_proposal`.
+**Dedicated, not deprecated (8):** `stage_batch` (many operations, ONE proposal — 1–20 entries, all-or-nothing planning, no `set_trigger_state` members), `execute_scene` and `write_characteristic` (device-immediate), `set_trigger_state` (arm/disarm — never absorbed into `update`), `identify_accessory`, `unblock_accessory`, `assign_accessory_to_room`, `get_proposal`.
 
 **Deprecated per-type predecessors (27):**
 - Reads: `get_homes`, `get_rooms`, `get_zones`, `get_scenes`, `get_service_groups`, `get_triggers`
