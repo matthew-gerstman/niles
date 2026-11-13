@@ -144,8 +144,11 @@ struct ActivitySections: View {
             openDetail = group
         } label: {
             HStack(alignment: .firstTextBaseline) {
-                Image(systemName: group.state.symbol)
-                    .foregroundStyle(group.state.tint)
+                // Destructive rows always carry the red trash can (Matthew,
+                // 2026-11-13) — keyed off the proposal's destructive
+                // classification, never a name match.
+                Image(systemName: group.isDestructive ? "trash" : group.state.symbol)
+                    .foregroundStyle(group.isDestructive ? Color.red : group.state.tint)
                 VStack(alignment: .leading, spacing: 4) {
                     // The human-readable summary is the headline; the tool
                     // name and prop_ id live in the detail sheet only.

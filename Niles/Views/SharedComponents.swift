@@ -54,18 +54,10 @@ enum ProposalCardLayout {
     }
 
     /// The banner line `ProposalStoreBatching.merge()` opens every batch
-    /// operation with: '— Operation 2 of 4: Set “X” Brightness to 50 —'.
-    /// Persisted proposals expire after 24h, but old ones legitimately
-    /// still carry this exact string — parse it, never special-case by age.
+    /// operation with — parsed in NilesCore (`ProposalCardBanner`), next to
+    /// the code that produces the format.
     static func bannerFields(of text: String) -> (number: Int, count: Int, title: String)? {
-        guard text.hasPrefix("— Operation "), text.hasSuffix(" —") else { return nil }
-        let inner = text.dropFirst("— Operation ".count).dropLast(" —".count)
-        guard let ofRange = inner.range(of: " of "),
-              let number = Int(inner[..<ofRange.lowerBound]) else { return nil }
-        let rest = inner[ofRange.upperBound...]
-        guard let colonRange = rest.range(of: ": "),
-              let count = Int(rest[..<colonRange.lowerBound]) else { return nil }
-        return (number, count, String(rest[colonRange.upperBound...]))
+        ProposalCardBanner.fields(of: text)
     }
 
     /// SF Symbol for a member operation, inferred from its title's leading
