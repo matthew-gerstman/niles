@@ -70,6 +70,32 @@ extension LiveNilesStore {
                 card: [.init(.remove, "Delete room-3"), .init(.note, "Accessories in this room become unassigned.")]
             ))
 
+        case "scene_delete":
+            // Screenshot fixture: the scene-deletion card (Matthew,
+            // 2026-11-13) — a REAL planner delete_scene against the fake
+            // home, with one linked trigger so the dangling-trigger warning
+            // renders. The card must show the deleted line, the warning and
+            // the explainer — and no scene-action rows. Never approved;
+            // the fixture only stages for capture. Capture with
+            // `-UISeedQueue scene_delete -UIProposalDetail delete_scene`.
+            do {
+                let graph = try await store.homeKit.snapshot()
+                let home = graph.homes.first
+                _ = try await store.homeKit.perform(.addTimerTrigger(
+                    homeId: home?.id ?? "", name: "Morning coffee",
+                    fireDate: Date(timeIntervalSinceNow: 3600), recurrence: [:], sceneId: "scene-1"
+                ))
+                let linked = try await store.homeKit.snapshot()
+                let plan = try ProposalPlanner.plan(
+                    .deleteScene(sceneId: "scene-1", deleteLinkedTriggers: false),
+                    graph: linked
+                )
+                _ = await store.stage(plan: plan)
+                await refresh()
+            } catch {
+                logger.error("Scene-delete fixture staging failed: \(String(describing: error))")
+            }
+
         case "undo":
             guard let id = await stage(createRoomPlan()) else { return }
             await queue.approveAndWait(id)
