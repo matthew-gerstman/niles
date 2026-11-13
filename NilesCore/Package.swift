@@ -33,5 +33,15 @@ let package = Package(
             name: "NilesCore",
             dependencies: [.product(name: "MCP", package: "swift-sdk")]
         ),
+        // The staging-validation suite (PR #15's validation-test pattern):
+        // pure fixtures over FakeHomeKitService — no HMHomeManager. The
+        // package has no CI; run against the iOS Simulator SDK (HomeKit is
+        // not in the macOS SDK):
+        //   xcodebuild test -scheme NilesCore \
+        //     -destination 'platform=iOS Simulator,name=iPhone 17'
+        .testTarget(
+            name: "NilesCoreTests",
+            dependencies: ["NilesCore"]
+        ),
     ]
 )

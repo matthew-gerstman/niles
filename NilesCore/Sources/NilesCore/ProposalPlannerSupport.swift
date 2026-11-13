@@ -276,7 +276,20 @@ extension ProposalPlanner {
             }
             switch capability(characteristic: action.characteristic, service: action.service, in: accessory) {
             case .supported:
-                break
+                // Capability alone is not enough — the value must fit the
+                // characteristic's declared metadata (the shared check the
+                // executor's resolution runs over the same derived kind and
+                // metadata mapping). The Power State '0' QA failure passed
+                // capability and died at execution; this closes that gap.
+                if let ref = accessory.characteristic(action.characteristic, service: action.service) {
+                    let kind = DeviceHomeView.ValueKind(format: ref.metadata?.format)
+                    if let why = DeviceWriteResolver.valueViolation(action.value, kind: kind, metadata: ref.metadata) {
+                        failures.append(
+                            "Action \(index + 1): Characteristic \(action.characteristic) on “\(accessory.name)” "
+                                + "cannot take \(action.value.rendered): \(why)."
+                        )
+                    }
+                }
             case .unverifiable:
                 notes.append(ProposalCardLine(
                     .note,

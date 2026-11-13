@@ -336,14 +336,24 @@ extension HomeManagerHomeKitService: HomeKitWriting {
         _ value: HomeKitValue, kind: DeviceHomeView.ValueKind, characteristicType: String
     ) throws -> CocoaWriteValue {
         switch (kind, value) {
-        case (.string, .string(let string)): .string(string as NSString)
-        case (.number, .bool(let value)): .number(NSNumber(value: value))
-        case (.number, .int(let value)): .number(NSNumber(value: value))
-        case (.number, .double(let value)): .number(NSNumber(value: value))
-        case (.unknown, .string(let string)): .string(string as NSString)
-        case (.unknown, .bool(let value)): .number(NSNumber(value: value))
-        case (.unknown, .int(let value)): .number(NSNumber(value: value))
-        case (.unknown, .double(let value)): .number(NSNumber(value: value))
+        case (.string, .string(let string)): return .string(string as NSString)
+        case (.number, .bool(let value)): return .number(NSNumber(value: value))
+        case (.number, .int(let value)): return .number(NSNumber(value: value))
+        case (.number, .double(let value)): return .number(NSNumber(value: value))
+        case (.number, .string(let string)):
+            // The widened numeric string the shared check accepted at
+            // staging ('30' for a brightness int) writes as its converted
+            // number — the same conversion `DeviceWriteResolver` ran.
+            guard let converted = DeviceWriteResolver.numericValue(in: string) else {
+                throw HomeKitWriteError.invalidOperation(
+                    "Characteristic \(characteristicType) cannot take the value \(string)."
+                )
+            }
+            return .number(NSNumber(value: converted))
+        case (.unknown, .string(let string)): return .string(string as NSString)
+        case (.unknown, .bool(let value)): return .number(NSNumber(value: value))
+        case (.unknown, .int(let value)): return .number(NSNumber(value: value))
+        case (.unknown, .double(let value)): return .number(NSNumber(value: value))
         case (_, let wrong):
             // The resolver pre-checks this; a drift between resolve and run
             // must not send a wrong-typed value into HomeKit.
