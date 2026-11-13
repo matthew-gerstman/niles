@@ -6,16 +6,11 @@ import NilesCore
 /// with no tab bar — Activity left, Home right — with the pane split
 /// aligned to the device's crease when one is reported (Duo, iOS 27.1+).
 /// At compact widths there is also no tab bar: a single page with Home
-/// above Activity. The gated agent chat (AgentGate) is reachable from
-/// either layout through a trailing button on Home's bar, opening the chat
-/// as a sheet. Holds the live store; previews substitute the in-memory one
-/// behind the same protocols.
+/// above Activity. Holds the live store; previews substitute the in-memory
+/// one behind the same protocols.
 struct ContentView: View {
     @State private var store: LiveNilesStore
     @State private var navigation = AppNavigation.shared
-    /// The agent feature gate, bound live: toggling it in Settings re-renders
-    /// Home's chat entry here without a relaunch.
-    @AppStorage(AgentGate.storageKey) private var agentEnabled = AgentGate.bundledDefault
     /// Screenshot/preview hook: `-UIActivityFixtures` renders the Activity
     /// pane on the fixture store instead of the live one, so a fresh
     /// simulator has a populated timeline to capture.
@@ -46,10 +41,6 @@ struct ContentView: View {
     private static let wideLayoutMinWidth: CGFloat = 600
     /// Live measured width of the root view; drives the adaptive layout.
     @State private var measuredWidth: CGFloat = 0
-    /// Presents the gated agent chat as a sheet: the trailing button on
-    /// Home's bar opens it in both layouts (the compact single page has no
-    /// Niles tab either).
-    @State private var showChatSheet = false
 
     init(store: LiveNilesStore) {
         _store = State(initialValue: store)
@@ -79,7 +70,6 @@ struct ContentView: View {
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { measuredWidth = $0 }
         .task {
             store.start()
-            AgentGate.toggleFixtureIfRequested()
             await store.seedQueueFixtureIfRequested()
             await store.seedProposalsFixtureIfRequested()
             // Screenshot hook: open one proposal's detail sheet directly.
@@ -91,14 +81,6 @@ struct ContentView: View {
                     // executed proposal matches, so executed stays preferred.
                     ?? store.queue.proposals.first { $0.tool == target }
             }
-            // Test/screenshot hook: `simctl launch ... -UITabSelect niles`
-            // opens the agent chat so its capture doesn't need UI
-            // automation. There are no tabs anymore — the single page shows
-            // Home and Activity together — so niles is the only meaningful
-            // value; home/activity are no-ops (both panes already visible).
-            if LaunchArguments.uiTabSelect == "niles" {
-                showChatSheet = true
-            }
             // Deep link from OpenQueueIntent: a cold launch lands on the
             // page whose Home pane holds the staged proposals awaiting
             // approval. Consuming the selection here leaves the
@@ -109,9 +91,6 @@ struct ContentView: View {
         }
         .sheet(item: $fixtureDetailProposal) { proposal in
             ProposalDetailSheet(proposal: proposal, undoState: store.queue.undoStates[proposal.id])
-        }
-        .sheet(isPresented: $showChatSheet) {
-            NavigationStack { AgentChatScreen(chat: store.chat, agentStatus: store.agentStatus, queue: store.queue) }
         }
         // Deep link from OpenQueueIntent while the app is already running:
         // consume the selection so HomeScreen's scroll-to-Queue signal
@@ -128,16 +107,13 @@ struct ContentView: View {
     /// panes each confined to half the screen. That half-and-half structure
     /// is what read as "a weird half thing" on the folded Duo — not a
     /// misclassification: the folded window is compact-width and correctly
-    /// chose this layout. The gated agent chat stays reachable through the
-    /// same trailing button on Home's bar the wide layout uses (chatEntry).
+    /// chose this layout.
     private var compactLayout: some View {
         if let fixtureHomeStore {
             HomeScreen(dashboard: fixtureHomeStore, pairing: fixtureHomeStore, queue: fixtureHomeStore,
-                       chatEntry: chatEntry,
                        activityModel: fixtureActivityStore ?? store.queue)
         } else {
             HomeScreen(dashboard: store.dashboard, pairing: store.pairing, queue: store.queue,
-                       chatEntry: chatEntry,
                        activityModel: fixtureActivityStore ?? store.queue)
         }
     }
@@ -146,11 +122,9 @@ struct ContentView: View {
     /// the left, Home on the right — each keeping its own NavigationStack
     /// title, with no tab bar. The pane split follows the device's crease
     /// when one is reported (`activityPaneWidth`); otherwise it is equal.
-    /// The gated agent chat stays reachable through a trailing toolbar
-    /// button on the Home pane. Both panes pass through `widePane()` so
-    /// their horizontal list margins match (observed in simulation:
-    /// landscape safe-area clearance otherwise folds into the
-    /// edge-adjacent pane's list item insets).
+    /// Both panes pass through `widePane()` so their horizontal list margins
+    /// match (observed in simulation: landscape safe-area clearance otherwise
+    /// folds into the edge-adjacent pane's list item insets).
     private var wideLayout: some View {
         GeometryReader { proxy in
             let activityWidth = activityPaneWidth(in: proxy)
@@ -166,10 +140,10 @@ struct ContentView: View {
                 }
                 Divider()
                 if let fixtureHomeStore {
-                    HomeScreen(dashboard: fixtureHomeStore, pairing: fixtureHomeStore, queue: fixtureHomeStore, chatEntry: chatEntry)
+                    HomeScreen(dashboard: fixtureHomeStore, pairing: fixtureHomeStore, queue: fixtureHomeStore)
                         .widePane()
                 } else {
-                    HomeScreen(dashboard: store.dashboard, pairing: store.pairing, queue: store.queue, chatEntry: chatEntry)
+                    HomeScreen(dashboard: store.dashboard, pairing: store.pairing, queue: store.queue)
                         .widePane()
                 }
             }
@@ -205,11 +179,6 @@ struct ContentView: View {
             }
         }
         return width / 2
-    }
-
-    /// The chat entry shared by both layouts: gated, opening the sheet above.
-    private var chatEntry: (() -> Void)? {
-        agentEnabled ? { showChatSheet = true } : nil
     }
 }
 
