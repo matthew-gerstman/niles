@@ -730,7 +730,7 @@ extension HomeManagerHomeKitService: HomeKitWriting {
         do {
             try await Self.add(service, to: group)
         } catch {
-            let label = service.name.map { "“\($0)”" } ?? service.uniqueIdentifier.uuidString
+            let label = service.name.isEmpty ? service.uniqueIdentifier.uuidString : "“\(service.name)”"
             throw HomeKitWriteError.invalidOperation(
                 HomeKitErrorNarrative.groupRefusal(service: label, group: groupName, error: error)
             )
