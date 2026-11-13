@@ -55,7 +55,7 @@ final class LiveNilesStore {
     private var recordedStates: [String: ProposalState] = [:]
     /// Proposal id -> the agent that staged it, attributed from the newest
     /// session at detection time. In-memory only, like the proposal store.
-    private var agentNamesByProposal: [String: String] = [:]
+    private(set) var agentNamesByProposal: [String: String] = [:]
     /// The first refresh seeds every proposal already in the store (e.g. ones
     /// staged before a background/foreground cycle) without notifying — only
     /// arrivals after launch get banners.
