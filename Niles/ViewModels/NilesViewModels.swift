@@ -52,22 +52,22 @@ enum ProposalDecision: Hashable {
 
 extension QueueViewModel {
     /// Pure gate: whether a proposal may render as a Queue row right now.
-    /// In-flight work never renders in the Queue — it lives in Activity:
+    /// The Queue is undecided work only — a proposal the user has not acted
+    /// on. Three gates, one row:
     ///
     /// - a swipe decision's pipeline round-trip is running (the local
-    ///   optimistic marker), or
-    /// - the store has already moved the proposal past staged into
-    ///   execution (`approved` — the state machine's only non-terminal
-    ///   post-staged state). Any client of the pipeline can drive that
-    ///   transition and a poll surfaces it between taps, so the row must
-    ///   disappear the moment the state flips, not on the next local tap.
+    ///   optimistic marker) — in-flight work lives in Activity as a
+    ///   processing row, never the Queue (#102);
+    /// - the proposal is no longer undecided (`isPending` is false): any
+    ///   decision — approved (any pipeline client, incl. MCP execution),
+    ///   denied, executed, expired, execution-failed — moves the row to
+    ///   Activity the moment the state flips, not on the next local tap.
     ///
-    /// A failed decision drops the marker and the proposal stays staged,
-    /// so the row returns to the Queue with its error note (the #94
-    /// contract); `.failed` and other terminal rows keep rendering here
-    /// as before — they are outcomes, not running work.
+    /// A failed *decision* (the round-trip errored) leaves the proposal
+    /// staged and drops the marker, so the row returns to the Queue with
+    /// its error note (the #94 contract).
     func isQueueVisible(_ proposal: NilesProposal) -> Bool {
-        decisionsInFlight[proposal.id] == nil && proposal.state != .approved
+        decisionsInFlight[proposal.id] == nil && proposal.isPending
     }
 
     /// The rows the Queue renders, in queue order.
@@ -260,12 +260,13 @@ final class InMemoryNilesStore: DashboardViewModel, QueueViewModel, HomeGraphVie
         ]
 
         proposals = [
-            // The two declutter-QA capture subjects lead the fixture: the
-            // executed single-op row (decluttered) and the multi-op batch
-            // row (unchanged control) are the first two Queue rows on
-            // screen.
-            // An already-executed change: the Queue row renders the executed
-            // chip with read-back evidence and the Undo affordance.
+            // Two already-decided rows: the executed single-op row
+            // (decluttered) and the multi-op batch row (unchanged control).
+            // The queue-only-undecided gate filters both out of the Queue —
+            // they render in Activity with their evidence — so the first
+            // Queue rows on screen are the staged ones below.
+            // An already-executed change: Activity renders the executed chip
+            // with read-back evidence and the Undo affordance.
             NilesProposal(
                 id: "prop_8f50",
                 tool: "create_room",
