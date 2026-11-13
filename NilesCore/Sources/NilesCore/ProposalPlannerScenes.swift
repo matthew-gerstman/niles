@@ -116,11 +116,15 @@ extension ProposalPlanner {
         )
     }
 
-    /// Spec (destructive staging): the card lists the scene's current actions
-    /// and every trigger that links it — a dangling automation is the silent
-    /// blast radius of a scene delete. The `deleteLinkedTriggers` flag is the
-    /// spec's “delete trigger too / keep trigger” offer, and the card says
-    /// which way it goes.
+    /// Spec (destructive staging): the card lists every trigger that links
+    /// the scene — a dangling automation is the silent blast radius of a
+    /// scene delete — plus the immediate-stop explainer. The scene's saved
+    /// actions are deliberately absent (Matthew, 2026-11-13): they are the
+    /// scene's CONTENT — what it did when it ran — not an effect of the
+    /// deletion, and reading them as change rows made a deletion look like
+    /// a device write. The `deleteLinkedTriggers` flag is the spec's
+    /// "delete trigger too / keep trigger" offer, and the card says which
+    /// way it goes.
     static func deleteScene(
         sceneId: String, deleteLinkedTriggers: Bool, graph: HomeGraph
     ) throws -> Plan {
@@ -133,11 +137,9 @@ extension ProposalPlanner {
         }
 
         var card: [ProposalCardLine] = [ProposalCardLine(.remove, "Scene “\(scene.name)” · deleted")]
-        if scene.actions.isEmpty {
-            card.append(ProposalCardLine(.plain, "The scene has no actions."))
-        } else {
-            card += scene.actions.map { ProposalCardLine(.remove, describe(action: $0, home: home)) }
-        }
+        // No per-action rows here: the scene's saved actions describe what
+        // the scene did when it ran — content, not a deletion effect (see
+        // the doc comment above).
         for trigger in linked {
             if deleteLinkedTriggers {
                 card.append(ProposalCardLine(.remove, "Trigger “\(trigger.name)” · deleted too — it runs this scene"))

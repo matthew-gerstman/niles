@@ -42,18 +42,15 @@ struct QueueListRow: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
-            Image(systemName: proposal.isDestructive ? "exclamationmark.triangle" : "doc.text")
+            // Destructive rows always carry the red trash can (Matthew,
+            // 2026-11-13) — keyed off the proposal's destructive
+            // classification, never a name match.
+            Image(systemName: proposal.isDestructive ? "trash" : "doc.text")
                 .foregroundStyle(proposal.isDestructive ? Color.red : .primary)
             VStack(alignment: .leading, spacing: 3) {
                 Text(proposal.title)
                     .font(.headline)
-                if let summary = summaryLine(of: proposal) {
-                    Text(summary)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
+                batchBullets(for: proposal)
                 metadataLine(for: proposal)
                 failureNote(for: proposal)
             }
@@ -227,17 +224,38 @@ struct QueueListRow: View {
         }
     }
 
-    /// The row's summary line: the first diff line of a batch, which
-    /// describes the batch's first operation — something its title
-    /// ("Batch: 2 changes") does not. A single-op proposal's first diff
-    /// line merely restates the title ("Scene “Starlight” · created…"
-    /// under Create scene “Starlight”), so the row renders title + status
-    /// + timestamp with nothing duplicative (Matthew, 2026-11-12). A
-    /// batch with no diff lines renders nothing rather than the title
-    /// twice.
-    private func summaryLine(of proposal: NilesProposal) -> String? {
-        guard proposal.isBatch, let first = proposal.diff.first else { return nil }
-        return first.text
+    /// The batch's per-operation bullet lines (Matthew, 2026-11-13): one
+    /// one-line bullet per member operation — the same succinct titles the
+    /// detail card groups on — capped with a '+N more' overflow line so an
+    /// 18-op batch stays compact. A single-op proposal renders no bullets
+    /// (its first diff line merely restates the title, so the row renders
+    /// title + status + timestamp with nothing duplicative — the
+    /// 2026-11-12 declutter). A legacy batch with no banner lines falls
+    /// back to the old first-diff-line summary rather than rendering
+    /// nothing.
+    private func batchBullets(for proposal: NilesProposal) -> some View {
+        let bullets = ProposalQueueSummary.bullets(from: proposal.orderedChanges.map(\.text))
+        let lines: [String]
+        if bullets.lines.isEmpty, proposal.isBatch, let first = proposal.diff.first {
+            lines = [first.text]
+        } else {
+            lines = bullets.lines
+        }
+        return VStack(alignment: .leading, spacing: 2) {
+            ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                Text("•  " + line)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            if bullets.overflowCount > 0 {
+                Text("+\(bullets.overflowCount) more")
+                    .font(.subheadline)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+        }
     }
 
     /// Settled state → SF Symbol + label. Staged and approved rows are still
