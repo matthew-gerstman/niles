@@ -127,7 +127,10 @@ extension HomeManagerHomeKitService: HomeKitWriting {
             let home = try Self.home(homeId, in: homes)
             let group = try await home.addServiceGroup(named: name)
             for serviceId in serviceIds {
-                try await Self.add(try Self.service(serviceId, in: home), to: group)
+                // Named refusal: a bare HMError on this call gave the first
+                // blind-grouping batch an unactionable code; evidence must
+                // say which service and which group.
+                try await Self.add(try Self.service(serviceId, in: home), to: group, groupName: name)
             }
             return try await group.uniqueIdentifier.uuidString
 
@@ -140,7 +143,7 @@ extension HomeManagerHomeKitService: HomeKitWriting {
             }
             for serviceId in addServiceIds {
                 guard !group.services.contains(where: { $0.uniqueIdentifier.uuidString == serviceId }) else { continue }
-                try await Self.add(try Self.service(serviceId, in: home), to: group)
+                try await Self.add(try Self.service(serviceId, in: home), to: group, groupName: group.name)
             }
             return nil
 
@@ -717,6 +720,20 @@ extension HomeManagerHomeKitService: HomeKitWriting {
             group.addService(service) { error in
                 if let error { continuation.resume(throwing: error) } else { continuation.resume() }
             }
+        }
+    }
+
+    /// The group-member add with failure context: HomeKit returns a bare
+    /// `HMError`, so this rethrows through the narrative naming the service
+    /// and the group. The shim above stays logic-free.
+    private static func add(_ service: HMService, to group: HMServiceGroup, groupName: String) async throws {
+        do {
+            try await Self.add(service, to: group)
+        } catch {
+            let label = service.name.isEmpty ? service.uniqueIdentifier.uuidString : "“\(service.name)”"
+            throw HomeKitWriteError.invalidOperation(
+                HomeKitErrorNarrative.groupRefusal(service: label, group: groupName, error: error)
+            )
         }
     }
 

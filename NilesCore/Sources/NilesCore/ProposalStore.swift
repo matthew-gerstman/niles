@@ -307,7 +307,7 @@ public actor ProposalStore {
                         createdIds[index] = try await homeKit.perform(operation)
                         ranFlags[index] = true
                     } catch {
-                        failureMessage = String(describing: error)
+                        failureMessage = HomeKitErrorNarrative.describe(error)
                         throw error
                     }
                 }
@@ -319,7 +319,7 @@ public actor ProposalStore {
                             _ = try await homeKit.perform(restoreOperation)
                             restoreFlags[index] = true
                         } catch {
-                            failureMessage = String(describing: error)
+                            failureMessage = HomeKitErrorNarrative.describe(error)
                             throw error
                         }
                     }
@@ -349,7 +349,7 @@ public actor ProposalStore {
                         ranFlags: ranFlags, failureMessage: failureMessage
                     )
                 }
-                updated.error = String(describing: error)
+                updated.error = HomeKitErrorNarrative.describe(error)
                 updated.state = .failed
             }
             recordedCreatedIds = createdIds
