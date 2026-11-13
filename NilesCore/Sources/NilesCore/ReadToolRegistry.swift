@@ -696,7 +696,10 @@ public struct ReadToolRegistry: Sendable {
                         kind: kind.rawValue, id: id, nextCursor: nextCursor, note: note,
                         object: ServiceGroupSummary(
                             id: group.id, homeId: home.id, homeName: home.name, name: group.name,
-                            services: slice
+                            services: slice,
+                            // Noted from the full membership, not the page — a
+                            // populated group stays un-noted even when paginated.
+                            membershipNote: Self.membershipNote(for: group.services)
                         )
                     )
                 }
@@ -1195,6 +1198,9 @@ public struct ReadToolRegistry: Sendable {
         var homeName: String
         var name: String
         var services: [HomeGraph.ServiceRef]
+        /// Set when HomeKit reports the group holds no member services —
+        /// see `membershipNote(for:)`.
+        var membershipNote: String?
     }
 
     struct TriggersProjection: Codable, Sendable, Equatable {
