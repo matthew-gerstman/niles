@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import MCP
 @testable import NilesCore
 
 /// Service-group membership read depth (Blueprint art_H3kJluSG, PR A): the
@@ -62,13 +63,13 @@ import Testing
             name: "get_details",
             arguments: ["kind": .string("group"), "id": .string(id)]
         )
-        #expect(!result.isError)
+        #expect(result.isError != true)
         return try Self.decode(Self.textContent(result))
     }
 
     private static func textContent(_ result: CallTool.Result) -> String {
         guard case let .text(text, _, _) = result.content.first else {
-            Issue.record("Expected a text content block, got \(result.content)")
+            Issue.record("Expected a text content block, got \(String(describing: result.content))")
             return ""
         }
         return text
@@ -118,8 +119,8 @@ import Testing
     @Test func leanSummaryGroupsCarryNoteWhenEmpty() async throws {
         let registry = ReadToolRegistry(service: FakeHomeKitService(graph: fixtureGraph()))
         let result = await registry.call(name: "get_details", arguments: nil)
-        #expect(!result.isError)
-        let projection = try Self.decode(ReadToolRegistry.SummaryProjection.self, from: Self.textContent(result))
+        #expect(result.isError != true)
+        let projection = try Self.decode(Self.textContent(result), as: ReadToolRegistry.SummaryProjection.self)
         let overview = try #require(projection.homes.first)
         #expect(overview.serviceGroups == [
             ReadToolRegistry.HomeOverview.GroupLine(
