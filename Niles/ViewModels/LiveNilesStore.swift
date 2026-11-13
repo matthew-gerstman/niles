@@ -16,9 +16,6 @@ import OSLog
 ///   (`QueueViewModel` + `ActivityViewModel`: one pipeline, two windows)
 /// - `LiveHomeGraphStore` — read-only home sections and swipe-to-stage
 /// - `LivePairingStore` — the pairing code, paired credentials, revocation
-/// - `LiveAgentStatusStore` — agent availability, usage, and the runner
-///   both the chat and the Siri intent compose through
-/// - `LiveChatStore` — the in-app chat transcript and its send path
 ///
 /// The proposal store is an actor with no change callbacks, so the poll
 /// loop here fans out on a short interval: `refresh()` pulls one consistent
@@ -36,8 +33,6 @@ final class LiveNilesStore {
     let queue: LiveQueueStore
     let homeGraph: LiveHomeGraphStore
     let pairing: LivePairingStore
-    let agentStatus: LiveAgentStatusStore
-    let chat: LiveChatStore
 
     // MARK: - Engine
 
@@ -66,33 +61,21 @@ final class LiveNilesStore {
         notifier: ProposalNotifier,
         tokenStore: any TokenStoring = KeychainTokenStore(),
         pollInterval: Duration = .seconds(1),
-        activityLog: ActivityLog? = nil,
-        agentRunner: (any AgentRunning)? = nil,
-        agentAvailability: AgentAvailability? = nil
+        activityLog: ActivityLog? = nil
     ) {
         self.coordinator = coordinator
         self.notifier = notifier
         self.pollInterval = pollInterval
         let activityLog = activityLog ?? ActivityLog()
 
-        // Construction order follows the stores' own dependencies: the chat
-        // reads the runner from agent status; the dashboard's badge derives
-        // from the queue.
         let queue = LiveQueueStore(coordinator: coordinator, activityLog: activityLog)
         self.queue = queue
-        let agentStatus = LiveAgentStatusStore(
-            agentRunner: agentRunner,
-            agentAvailability: agentAvailability,
-            coordinator: coordinator
-        )
-        self.agentStatus = agentStatus
         self.dashboard = LiveDashboardStore(coordinator: coordinator)
         self.homeGraph = LiveHomeGraphStore(coordinator: coordinator)
         self.pairing = LivePairingStore(coordinator: coordinator, tokenStore: tokenStore)
-        self.chat = LiveChatStore(agentStatus: agentStatus)
 
         // Fully initialized: wire the stores' weak back-references to the
-        // poll loop and the shared agent attribution before anything can run.
+        // poll loop before anything can run.
         dashboard.root = self
         queue.root = self
         homeGraph.root = self
@@ -148,8 +131,6 @@ final class LiveNilesStore {
         let sessions = await coordinator.sessionInfos()
         dashboard.applySessions(sessions)
         await pairing.refreshState(sessions: sessions)
-
-        await agentStatus.refreshUsage()
 
         guard let store = coordinator.proposalStore else { return }
         let live = await store.allProposals()

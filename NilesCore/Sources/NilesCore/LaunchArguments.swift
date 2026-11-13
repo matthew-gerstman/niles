@@ -15,8 +15,6 @@ public enum LaunchArguments {
     private enum Name: String {
         case activityFixtures = "-UIActivityFixtures"
         case activityOpenDetail = "-UIActivityOpenDetail"
-        case agentGateToggle = "-UIAgentGateToggle"
-        case chatFixtures = "-UIChatFixtures"
         case creasePosition = "-UICreasePosition"
         case homeFixtures = "-UIHomeFixtures"
         case homeScroll = "-UIHomeScroll"
@@ -51,11 +49,6 @@ public enum LaunchArguments {
     public static var uiActivityFixtures: Bool { isPresent(.activityFixtures) }
     /// `-UIHomeFixtures` — render the Home tab on the in-memory fixture store.
     public static var uiHomeFixtures: Bool { isPresent(.homeFixtures) }
-    /// `-UIChatFixtures` — stand-in agent runner for the chat flow.
-    public static var uiChatFixtures: Bool { isPresent(.chatFixtures) }
-    /// `-UIAgentGateToggle` — flip the agent gate in-process a few seconds
-    /// after launch.
-    public static var uiAgentGateToggle: Bool { isPresent(.agentGateToggle) }
     /// `-UIActivityOpenDetail` — open the newest decided activity group.
     public static var uiActivityOpenDetail: Bool { isPresent(.activityOpenDetail) }
     /// `-UIProposalDetailEvidence` — jump the proposal detail sheet to the

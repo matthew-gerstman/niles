@@ -15,12 +15,6 @@ struct HomeScreen: View {
     var pairing: any PairingViewModel
     var queue: any QueueViewModel
 
-    /// Wide-layout chat entry: when set, a trailing toolbar button on
-    /// Home's navigation bar opens the gated agent chat as a sheet (the
-    /// wide layout has no Niles tab). The tab layout passes nothing and
-    /// keeps chat on its own tab.
-    var chatEntry: (() -> Void)? = nil
-
     /// Compact single page: when set, Activity's timeline sections render
     /// below the Server section in THIS list — one scrolling page, Home
     /// above Activity — instead of Activity living in a second pane pinned
@@ -32,21 +26,9 @@ struct HomeScreen: View {
     /// widePane(); false (automatic) in the narrow layout. See ContentView.
     @Environment(\.widePaneInlineTitle) private var widePaneInlineTitle
 
-    /// Trailing bar item: the wide-layout chat entry button, or nothing
-    /// when chat lives on its own tab. Extracted as a ViewBuilder property —
-    /// an immediately-invoked closure here typechecks as `()`, not a View.
-    @ViewBuilder
-    private var chatEntryButton: some View {
-        if let chatEntry {
-            Button(action: chatEntry) {
-                Label("Niles", systemImage: "sparkles")
-            }
-        }
-    }
 
-    /// The shared navigation signal: proposal deep links from the chat open
-    /// the detail sheet here, and the queue request scrolls to the Queue
-    /// section (the deep link used to land on the Queue tab).
+    /// The shared navigation signal: the queue request scrolls to the
+    /// Queue section (the deep link used to land on the Queue tab).
     @State private var navigation = AppNavigation.shared
     @State private var openDetail: NilesProposal?
     /// The paired agent whose revoke confirmation is showing, if any.
@@ -85,12 +67,6 @@ struct HomeScreen: View {
                 // in the wide layout, automatic (untouched) in the narrow
                 // layout.
                 .navigationBarTitleDisplayMode(widePaneInlineTitle ? .inline : .automatic)
-                // Chat entry via navigationBarItems, not .toolbar: iOS 26
-                // hoists topBarTrailing items into a scene-level glass layer
-                // on iPad, which pins the button over the Activity pane and
-                // opens a blank band above both panes' titles. A bar item
-                // stays on the Home pane's own bar at title height.
-                .navigationBarItems(trailing: chatEntryButton)
                 // No explicit .contentMargins on the List: an explicit
                 // horizontal scroll-content margin REPLACES the
                 // safe-area-derived one, and on the Duo that is the 84 pt
@@ -351,27 +327,6 @@ struct HomeScreen: View {
     /// the wording is directly testable.
     static func pairedSinceText(_ pairedAt: Date) -> String {
         "paired \(pairedAt.formatted(date: .omitted, time: .shortened))"
-    }
-
-    /// Footer text for the on-device agent: it states what is missing and
-    /// nothing else — no fallback is ever implied, per the spec's
-    /// no-degraded-mode invariant. Shared with the chat toolbar's status
-    /// row. Pure, so the wording is directly testable.
-    static func agentFooterText(_ availability: AgentAvailability) -> String {
-        switch availability {
-        case .available:
-            return "Ask Niles by voice via Siri. Every change becomes a proposal awaiting your approval in the Queue — nothing applies until you approve it."
-        case .unavailable(.needsIOS27):
-            return "The on-device agent needs iOS 27 or later. Update your iPhone to use it."
-        case .unavailable(.deviceNotEligible):
-            return "The on-device agent needs Apple Intelligence hardware, which this device does not have."
-        case .unavailable(.appleIntelligenceNotEnabled):
-            return "Turn on Apple Intelligence in Settings to use the on-device agent."
-        case .unavailable(.modelNotReady):
-            return "Apple Intelligence is still downloading the on-device model. Check back soon."
-        case .unavailable(.unknown):
-            return "The on-device agent is unavailable on this device."
-        }
     }
 
     private var revokeTitle: String {
