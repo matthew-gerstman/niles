@@ -8,6 +8,11 @@ import NilesCore
 /// glyph and the evidence copy. Executed proposals that still offer Undo
 /// carry the Undo action, and a conflicted undo renders its divergences as a
 /// native error list — nothing was changed.
+///
+/// Verdict buttons render only while the proposal is staged: a decided
+/// proposal (approved, denied, executed, expired, failed) has no
+/// approve/deny affordance at all — not greyed-out ones (user report
+/// Nov 13), matching the queue rows' conditional swipes.
 struct ProposalDetailSheet: View {
     let proposal: NilesProposal
     var undoState: UndoState?
@@ -42,7 +47,11 @@ struct ProposalDetailSheet: View {
                 .navigationTitle("Proposal")
                 .navigationBarTitleDisplayMode(.inline)
                 .safeAreaInset(edge: .bottom) {
-                    verdictButtons
+                    // Decided proposals get no verdict bar at all — the inset
+                    // collapses to zero rather than reserving an empty bar.
+                    if proposal.isPending {
+                        verdictButtons
+                    }
                 }
                 .task {
                     // Screenshot hook: jump past the summary to the evidence.
@@ -173,12 +182,12 @@ struct ProposalDetailSheet: View {
     // MARK: - Verdicts
 
     /// Deny (destructive red) and Approve (prominent green, matching the
-    /// queue's approve swipe) over a bar material; disabled once the
-    /// proposal is past staging. The explicit tints matter: the app-wide
-    /// `.tint(.white)` otherwise starves both standard styles of their
-    /// semantic colors, rendering them as washed-out neutral pills (the
-    /// same white-tint class as the pairing row's white-on-white labels).
-    /// Dismissal itself is the sheet's native drag gesture.
+    /// queue's approve swipe) over a bar material. Rendered only for staged
+    /// proposals — see the safeAreaInset call. The explicit tints matter:
+    /// the app-wide `.tint(.white)` otherwise starves both standard styles
+    /// of their semantic colors, rendering them as washed-out neutral pills
+    /// (the same white-tint class as the pairing row's white-on-white
+    /// labels). Dismissal itself is the sheet's native drag gesture.
     private var verdictButtons: some View {
         HStack(spacing: 12) {
             Button(role: .destructive) {
@@ -200,7 +209,6 @@ struct ProposalDetailSheet: View {
             .buttonStyle(.borderedProminent)
             .tint(.green)
         }
-        .disabled(!proposal.isPending)
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
         .background(.bar)
@@ -245,20 +253,26 @@ struct ProposalDetailSheet: View {
 }
 
 #Preview("Detail — zone move") {
-    ProposalDetailSheet(proposal: InMemoryNilesStore().proposals[0])
+    ProposalDetailSheet(proposal: InMemoryNilesStore().proposals[2])
 }
 
 #Preview("Detail — timer trigger") {
-    ProposalDetailSheet(proposal: InMemoryNilesStore().proposals[1])
+    ProposalDetailSheet(proposal: InMemoryNilesStore().proposals[3])
 }
 
 #Preview("Detail — destructive delete") {
-    ProposalDetailSheet(proposal: InMemoryNilesStore().proposals[2])
+    ProposalDetailSheet(proposal: InMemoryNilesStore().proposals[4])
+}
+
+#Preview("Detail — decided, executed") {
+    // The user report this sheet fixes: an executed proposal must render
+    // with no verdict bar — evidence and (when available) Undo only.
+    ProposalDetailSheet(proposal: InMemoryNilesStore().proposals[0])
 }
 
 #Preview("Detail — conflicted undo") {
     ProposalDetailSheet(
-        proposal: InMemoryNilesStore().proposals[2],
+        proposal: InMemoryNilesStore().proposals[1],
         undoState: .conflict([
             ProposalEvidence(
                 claim: "Room “Studio” exists",
