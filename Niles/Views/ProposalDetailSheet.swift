@@ -34,10 +34,10 @@ struct ProposalDetailSheet: View {
                         LabeledContent("Proposal", value: proposal.id)
                         LabeledContent("Agent", value: proposal.agentName)
                     }
-                    if !proposal.diff.isEmpty || !proposal.context.isEmpty {
+                    if !proposal.orderedChanges.isEmpty {
                         Section("Changes") {
-                            DiffLineList(lines: proposal.diff + proposal.context)
-                                .listRowInsets(EdgeInsets())
+                            ProposalChangesView(lines: proposal.orderedChanges)
+                                .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
                                 .listRowBackground(Color.clear)
                         }
                     }
@@ -250,6 +250,45 @@ struct ProposalDetailSheet: View {
         }
         return footer
     }
+}
+
+/// Matthew's design fixture (prop_85e8a149853b): a realistic 4-op batch —
+/// scene create, device-immediate brightness write, identify with an
+/// unverifiable-support warning, scene rename — in the exact card format
+/// `ProposalStoreBatching.merge()` persists, banners included, so the
+/// group-header parsing renders it identically.
+private let fourOpBatchFixture = NilesProposal(
+    id: "prop_85e8a149853b",
+    tool: ProposalStore.batchToolName,
+    title: "Batch: 4 changes",
+    agentName: "obvious design fixture",
+    createdAt: Date(timeIntervalSinceNow: -4 * 60),
+    isDestructive: false,
+    evidence: [],
+    diff: [ProposalDiffLine(.add, "Scene “QA Design Round Scene” · created with 1 action")],
+    context: [],
+    changes: [
+        ProposalDiffLine(.note, "— Operation 1 of 4: Create scene “QA Design Round Scene” —"),
+        ProposalDiffLine(.add, "Scene “QA Design Round Scene” · created with 1 action"),
+        ProposalDiffLine(.add, "Living Room Accent Lights: Power State → 1"),
+        ProposalDiffLine(.note, "⚠ To run this scene later, use execute_scene after approval."),
+        ProposalDiffLine(.note, "— Operation 2 of 4: Set “Living Room Accent Lights” Brightness to 50 —"),
+        ProposalDiffLine(.add, "Living Room Accent Lights: Brightness 73 → 50"),
+        ProposalDiffLine(.note, "⚠ Device-immediate — the value applies to the device the moment this is approved."),
+        ProposalDiffLine(.note, "— Operation 3 of 4: Identify accessory “Living Room Accent Lights” —"),
+        ProposalDiffLine(.add, "Accessory “Living Room Accent Lights” · identified (flash/beep)"),
+        ProposalDiffLine(
+            .note,
+            "⚠ Could not verify identify support — “Living Room Accent Lights”'s capability data "
+                + "is unavailable; approval may still fail at execution."
+        ),
+        ProposalDiffLine(.note, "— Operation 4 of 4: Rename scene “QA E2E Single A” —"),
+        ProposalDiffLine(.add, "Scene “QA E2E Single A” → “QA Design Round Renamed”"),
+    ]
+)
+
+#Preview("Detail — 4-op batch") {
+    ProposalDetailSheet(proposal: fourOpBatchFixture)
 }
 
 #Preview("Detail — zone move") {
