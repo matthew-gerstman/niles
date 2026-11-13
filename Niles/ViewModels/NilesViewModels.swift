@@ -13,6 +13,10 @@ protocol DashboardViewModel: Observable {
     var endpoint: String { get }
     var bonjourService: String { get }
     var connectedAgents: [AgentConnection] { get }
+    /// The persisted serving-consent answer. The dashboard renders a
+    /// pointed-at-the-toggle note in the Server section while it is `.denied`
+    /// — denial never re-prompts, so this note is the only explanation.
+    var servingApproval: ServingApproval { get }
     func setServerRunning(_ running: Bool)
 }
 
@@ -148,6 +152,10 @@ final class InMemoryNilesStore: DashboardViewModel, QueueViewModel, HomeGraphVie
     let endpoint = "http://192.168.1.24:8901/mcp"
     let bonjourService = "_niles-mcp._tcp.local"
     private(set) var connectedAgents: [AgentConnection] = []
+
+    /// Previews render as consented: the in-memory store predates the consent
+    /// sheet and must not be blocked by one.
+    var servingApproval: ServingApproval = .approved
 
     private(set) var proposals: [NilesProposal] = []
     /// The in-memory store settles decisions synchronously, so nothing is

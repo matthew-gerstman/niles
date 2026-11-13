@@ -92,6 +92,20 @@ struct ContentView: View {
         .sheet(item: $fixtureDetailProposal) { proposal in
             ProposalDetailSheet(proposal: proposal, undoState: store.queue.undoStates[proposal.id])
         }
+        // First-open serving consent: presented at the root until the
+        // question is answered (fresh installs only — the persisted answer
+        // is never re-asked). Not interactively dismissible: an unanswered
+        // question means the scene guard keeps serving off, so swiping the
+        // sheet away would leave the app silent about why nothing serves.
+        // The answer itself (Approve/Not Now) dismisses it by flipping the
+        // store state the binding reads.
+        .sheet(isPresented: Binding(
+            get: { store.dashboard.needsServingConsent },
+            set: { _ in }
+        )) {
+            ServingConsentSheet(dashboard: store.dashboard)
+                .interactiveDismissDisabled()
+        }
         // Deep link from OpenQueueIntent while the app is already running:
         // consume the selection so HomeScreen's scroll-to-Queue signal
         // fires (HomeScreen observes it directly).
