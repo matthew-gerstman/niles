@@ -43,6 +43,13 @@ struct NilesProposal: Identifiable, Hashable {
     let diff: [ProposalDiffLine]
     /// Extra context lines shown only in the detail sheet.
     var context: [ProposalDiffLine] = []
+    /// The proposal's change lines in original card order — the detail
+    /// sheet's single source of order. Batches stage one banner line per
+    /// operation followed by that operation's lines; the sheet groups on
+    /// exactly that sequence. Live proposals always carry it; fixtures
+    /// predating the redesign set only diff/context, which the computed
+    /// fallback below keeps rendering.
+    var changes: [ProposalDiffLine] = []
     /// The launch-revalidation reason a reloaded staged proposal can no
     /// longer be approved — its target object left the home. Rendered on
     /// the queue row; nil for everything else.
@@ -55,6 +62,11 @@ struct NilesProposal: Identifiable, Hashable {
     /// line merely restates the title, so its row renders title + status +
     /// timestamp with nothing duplicative (2026-11-12 declutter).
     var isBatch: Bool { tool == ProposalStore.batchToolName }
+
+    /// Ordered change lines for the detail sheet: the card order when the
+    /// store supplied it, else the legacy diff-then-context concatenation
+    /// (pre-redesign fixtures).
+    var orderedChanges: [ProposalDiffLine] { changes.isEmpty ? diff + context : changes }
 
     var isPending: Bool { state == .staged }
     /// Defaults to staged — every proposal enters the pipeline staged.

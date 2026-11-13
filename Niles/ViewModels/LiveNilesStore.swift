@@ -810,6 +810,36 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
                 approve: true, reason: "the proposal was already decided"
             )
 
+        case "batch4":
+            // Screenshot fixture: a 4-op batch (scene create, device-immediate
+            // brightness write, identify with an unverifiable-support warning,
+            // scene rename) in exactly the card format merge() persists —
+            // banners included — so the detail sheet's group parsing renders
+            // against real persisted shapes. Capture with
+            // `-UIProposalDetail stage_batch`.
+            _ = await stage(Plan(
+                tool: ProposalStore.batchToolName,
+                title: "Batch: 4 changes",
+                summary: "Batch: 4 changes — 1 scene create, 1 device write, 1 identify, 1 scene rename.",
+                isDestructive: false,
+                operations: [],
+                entries: [],
+                card: [
+                    .init(.note, "— Operation 1 of 4: Create scene “QA Design Round Scene” —"),
+                    .init(.add, "Scene “QA Design Round Scene” · created with 1 action"),
+                    .init(.add, "Living Room Accent Lights: Power State → 1"),
+                    .init(.note, "⚠ To run this scene later, use execute_scene after approval."),
+                    .init(.note, "— Operation 2 of 4: Set “Living Room Accent Lights” Brightness to 50 —"),
+                    .init(.add, "Living Room Accent Lights: Brightness 73 → 50"),
+                    .init(.note, "⚠ Device-immediate — the value applies to the device the moment this is approved."),
+                    .init(.note, "— Operation 3 of 4: Identify accessory “Living Room Accent Lights” —"),
+                    .init(.add, "Accessory “Living Room Accent Lights” · identified (flash/beep)"),
+                    .init(.note, "⚠ Could not verify identify support — “Living Room Accent Lights”'s capability data is unavailable; approval may still fail at execution."),
+                    .init(.note, "— Operation 4 of 4: Rename scene “QA E2E Single A” —"),
+                    .init(.add, "Scene “QA E2E Single A” → “QA Design Round Renamed”"),
+                ]
+            ))
+
         default:
             logger.error("Unknown -UISeedQueue fixture: \(fixture, privacy: .public)")
         }
@@ -1159,18 +1189,20 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
     // MARK: - Live -> UI mapping
 
     private static func uiProposal(for proposal: Proposal, agentName: String) -> NilesProposal {
-        // Context lines are the card's own notes; read-back evidence rides
-        // on NilesProposal.evidence in its structured form — no more "✓ …"
-        // strings glued into prose.
-        var context: [ProposalDiffLine] = proposal.card
-            .filter { $0.kind == .note || $0.kind == .plain }
+        // The card in its original order is the single source of change
+        // order: batches carry one banner line per operation followed by
+        // that operation's lines, and the detail sheet groups on exactly
+        // that sequence. diff/context remain derived views of the same
+        // lines — the queue row's summary and evidence inputs — never an
+        // ordering source again (the old split scrambled batch order).
+        var changes: [ProposalDiffLine] = proposal.card
             .map { ProposalDiffLine(ProposalDiffLine.Kind($0.kind), $0.text) }
         if let error = proposal.error {
             // A still-staged proposal's error is the launch revalidation's
             // missing-target flag, not an execution failure — label it as
             // what it is, and surface it on the queue row too.
             let prefix = proposal.state == .staged ? "⚠ " : "⚠ HomeKit error: "
-            context.append(ProposalDiffLine(.note, "\(prefix)\(error)"))
+            changes.append(ProposalDiffLine(.note, "\(prefix)\(error)"))
         }
 
         return NilesProposal(
@@ -1181,10 +1213,9 @@ final class LiveNilesStore: DashboardViewModel, QueueViewModel, ActivityViewMode
             createdAt: proposal.createdAt,
             isDestructive: proposal.isDestructive,
             evidence: proposal.evidence,
-            diff: proposal.card
-                .filter { $0.kind == .add || $0.kind == .remove }
-                .map { ProposalDiffLine(ProposalDiffLine.Kind($0.kind), $0.text) },
-            context: context,
+            diff: changes.filter { $0.kind == .add || $0.kind == .remove },
+            context: changes.filter { $0.kind == .note || $0.kind == .plain },
+            changes: changes,
             staleReason: proposal.state == .staged ? proposal.error : nil,
             state: proposal.state,
             revertsProposalId: proposal.revertsProposalId
