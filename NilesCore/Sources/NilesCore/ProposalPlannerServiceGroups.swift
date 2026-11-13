@@ -23,6 +23,11 @@ extension ProposalPlanner {
         let memberAccessories = home.rooms.flatMap(\.accessories)
             .filter { accessory in accessory.services.contains { serviceIds.contains($0.id) } }
         let memberNames = memberAccessories.map(\.name)
+        // The planner half of the cross-group rule the device resolver also
+        // runs (the `valueViolation` pattern): a member-add whose service
+        // already belongs to another group fails here, in band, before a
+        // proposal ever exists.
+        try rejectAlreadyGrouped(serviceIds, excluding: nil, in: home)
         return Plan(
             tool: "create_service_group",
             title: "Create service group “\(trimmed)”",
@@ -100,6 +105,11 @@ extension ProposalPlanner {
         if additions.isEmpty && removals.isEmpty {
             throw PlannerError.noChange("service group “\(group.name)” already has exactly these members.")
         }
+        // The planner half of the cross-group rule the device resolver also
+        // runs (the `valueViolation` pattern): a member-add whose service
+        // already belongs to another group fails here, in band, before a
+        // proposal ever exists.
+        try rejectAlreadyGrouped(additions, excluding: group, in: home)
 
         let groupRef = ProposalObjectRef(kind: .serviceGroup, id: group.id, name: group.name)
         let entries: [ProposalDiffEntry] =
@@ -163,5 +173,30 @@ extension ProposalPlanner {
                 ProposalCardLine(.plain, "Devices are unaffected — a group is a label over services."),
             ]
         )
+    }
+
+    /// The cross-group rule, planner half: HomeKit refuses a service that
+    /// already belongs to another group (HMError 3 felled the first
+    /// blind-grouping batch at execution). Reject the member-add here,
+    /// naming the service and the group that holds it, so the failure lands
+    /// in band at staging instead.
+    ///
+    /// Honest limit: HomeKit reports group membership empty in this process
+    /// and offers no public refresh API (see the read-side note PR #117
+    /// added), so this check is only as good as the graph's projection —
+    /// it is not a categorical guarantee.
+    private static func rejectAlreadyGrouped(
+        _ serviceIds: [String], excluding excluded: HomeGraph.ServiceGroup?, in home: HomeGraph.Home
+    ) throws {
+        for serviceId in serviceIds {
+            for other in home.serviceGroups
+            where other.id != excluded?.id && other.services.contains(where: { $0.id == serviceId }) {
+                let label = home.rooms.flatMap(\.accessories).flatMap(\.services)
+                    .first(where: { $0.id == serviceId })?.name ?? serviceId
+                throw PlannerError.invalidInput(
+                    "\(label) already belongs to group “\(other.name)”. Remove it there first."
+                )
+            }
+        }
     }
 }

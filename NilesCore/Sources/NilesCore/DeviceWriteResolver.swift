@@ -306,6 +306,8 @@ enum DeviceWriteResolver {
                     "No service \(unknown.joined(separator: ", ")) in “\(home.name)”."
                 )
             }
+            // The new group holds no members yet — nothing to exclude.
+            try rejectAlreadyGrouped(serviceIds, in: home, excluding: nil)
             return [.addServiceGroup(homeId: home.id, name: name, serviceIds: serviceIds)]
         case .setServiceGroupMembers(let homeId, let groupId, let addServiceIds, let removeServiceIds):
             return [try resolveServiceGroupMembers(homeId: homeId, groupId: groupId, addServiceIds: addServiceIds, removeServiceIds: removeServiceIds, in: view)]
@@ -496,9 +498,33 @@ enum DeviceWriteResolver {
         for serviceId in addServiceIds where service(id: serviceId, in: home) == nil {
             throw HomeKitWriteError.invalidOperation("No service \(serviceId) in any accessory of this home.")
         }
+        try rejectAlreadyGrouped(addServiceIds, in: home, excluding: group)
         return .updateServiceGroupMembers(
             homeId: home.id, groupId: group.id, addServiceIds: addServiceIds, removeServiceIds: removeServiceIds
         )
+    }
+
+    /// The cross-group rule: HomeKit refuses a service that already belongs
+    /// to another group (HMError 3 felled the first blind-grouping batch at
+    /// execution). Reject the member-add here, naming the service and the
+    /// group that holds it, so the failure lands in band at staging instead.
+    ///
+    /// Honest limit: HomeKit reports group membership empty in this process
+    /// and offers no public refresh API (see the read-side note PR #117
+    /// added), so this check is only as good as the view's projection —
+    /// it is not a categorical guarantee.
+    private static func rejectAlreadyGrouped(
+        _ serviceIds: [String], in home: DeviceHomeView.Home, excluding excluded: DeviceHomeView.ServiceGroup?
+    ) throws {
+        for serviceId in serviceIds {
+            for other in home.serviceGroups
+            where other.id != excluded?.id && other.serviceIds.contains(serviceId) {
+                let label = service(id: serviceId, in: home)?.name ?? serviceId
+                throw HomeKitWriteError.invalidOperation(
+                    "\(label) already belongs to group “\(other.name)”. Remove it there first."
+                )
+            }
+        }
     }
 
     private static func resolveCreateTimerTrigger(
