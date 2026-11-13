@@ -146,11 +146,12 @@ struct HomeScreen: View {
     private var queueSection: some View {
         Section {
             // Queue exclusivity: the row set comes from the store layer's
-            // `queueProposals` gate — a proposal whose decision pipeline
-            // is running (the optimistic swipe marker) or that the store
-            // has already moved into execution (`approved`, any pipeline
-            // client) never renders here. Activity owns in-flight work;
-            // a failed decision returns the row with its error note.
+            // `queueProposals` gate — undecided proposals only. A proposal
+            // whose decision pipeline is running (the optimistic swipe
+            // marker) or that any pipeline client has decided (approved,
+            // denied, executed, expired, execution-failed) never renders
+            // here. Activity owns decided and in-flight work; a failed
+            // decision returns the row with its error note.
             let visible = model.queueProposals
             if visible.isEmpty {
                 emptyQueueState
