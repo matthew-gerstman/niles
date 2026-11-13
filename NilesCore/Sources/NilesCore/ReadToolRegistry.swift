@@ -487,7 +487,7 @@ public struct ReadToolRegistry: Sendable {
                 GroupLine(
                     id: $0.id, name: $0.name,
                     services: $0.services.map { NameRef(id: $0.id, name: $0.name) },
-                    membershipNote: Self.membershipNote(for: $0.services)
+                    membershipNote: ReadToolRegistry.membershipNote(for: $0.services)
                 )
             }
             self.triggers = home.triggers.map {
