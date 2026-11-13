@@ -84,6 +84,27 @@ enum ProposalCardLayout {
         return "wrench.and.screwdriver"
     }
 
+    /// Semantic tint for a member operation's header symbol — the single
+    /// source of truth for icon color (pass 3). Matching order mirrors
+    /// symbolName's verb-first rules so symbol and tint never disagree.
+    /// System colors only, consistent with the Activity verdict tints and
+    /// PR #110's swipe colors (approve green, deny red, undo orange):
+    /// scene ops green, characteristic writes (device-immediate) orange,
+    /// identify blue, delete red, rename mint, zone indigo, room teal,
+    /// service-group cyan, trigger purple.
+    static func tint(forOperationTitle title: String) -> Color {
+        if title.hasPrefix("Identify") { return .blue }
+        if title.hasPrefix("Rename") { return .mint }
+        if title.hasPrefix("Delete") { return .red }
+        if title.hasPrefix("Set ") { return .orange }
+        if title.contains("scene") { return .green }
+        if title.contains("room") { return .teal }
+        if title.contains("zone") { return .indigo }
+        if title.contains("group") { return .cyan }
+        if title.contains("trigger") { return .purple }
+        return .secondary
+    }
+
     // MARK: - Succinct filtering (review pass 2)
 
     /// The succinct card's per-group filter: the header already says what
@@ -121,12 +142,13 @@ enum ProposalCardLayout {
         return ProposalDiffLine(.plain, firstSentence(stripped))
     }
 
-    /// The ⚠ classes that survive as plain detail: physical-immediacy and
-    /// destructive-reference facts — what else this operation touches,
-    /// not how the agent should call it.
+    /// The ⚠ classes that survive as plain detail: destructive-reference
+    /// facts — what else this operation touches, not how the agent should
+    /// call it. Device-immediacy is deliberately absent (pass 3): the
+    /// change row's current → target values already say it, and the prose
+    /// footnote added nothing.
     static func isBlastRadiusNote(_ text: String) -> Bool {
-        text.hasPrefix("Device-immediate")
-            || text.contains(" will move to the default room")
+        text.contains(" will move to the default room")
             || text.contains(" no longer runs anything")
             || text.contains(" loses ")
             || text.contains("will stop working")
@@ -167,14 +189,6 @@ enum ProposalCardLayout {
 
     private static func commonPrefixLength(_ a: String, _ b: String) -> Int {
         zip(a, b).prefix(while: { $0.0 == $0.1 }).count
-    }
-
-    /// 'identify_accessory' → 'Identify accessory' — tool names never
-    /// render raw in the sheet.
-    static func humanizedTool(_ tool: String) -> String {
-        tool.split(separator: "_")
-            .map { $0.prefix(1).capitalized + $0.dropFirst().lowercased() }
-            .joined(separator: " ")
     }
 
     /// One run of styled text inside a change line.
@@ -249,27 +263,44 @@ private struct ProposalOperationGroupView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if let title = group.title {
-                HStack(spacing: 8) {
-                    Image(systemName: ProposalCardLayout.symbolName(forOperationTitle: title))
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    Text(title)
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                    // The caption keeps its natural fixed width at the
-                    // trailing edge; the title gets everything else and
-                    // only truncates when the two actually collide.
-                    Spacer(minLength: 8)
-                    if let number = group.operationNumber, let count = group.operationCount {
-                        Text("\(number) of \(count)")
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
-                            .fixedSize()
+                header(title)
+                // Detail nests under the header text: an invisible copy of
+                // the header's own symbol reserves exactly the icon column
+                // (spacing included), at any Dynamic Type size — the same
+                // rule for every line, no hard-coded inset.
+                ForEach(group.lines) { line in
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Image(systemName: ProposalCardLayout.symbolName(forOperationTitle: title))
+                            .font(.subheadline)
+                            .hidden()
+                        detailLine(line)
                     }
                 }
+            } else {
+                ForEach(group.lines) { line in
+                    detailLine(line)
+                }
             }
-            ForEach(group.lines) { line in
-                detailLine(line)
+        }
+    }
+
+    private func header(_ title: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: ProposalCardLayout.symbolName(forOperationTitle: title))
+                .font(.subheadline)
+                .foregroundStyle(ProposalCardLayout.tint(forOperationTitle: title))
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+            // The caption keeps its natural fixed width at the
+            // trailing edge; the title gets everything else and
+            // only truncates when the two actually collide.
+            Spacer(minLength: 8)
+            if let number = group.operationNumber, let count = group.operationCount {
+                Text("\(number) of \(count)")
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .fixedSize()
             }
         }
     }

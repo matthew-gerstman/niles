@@ -30,27 +30,21 @@ struct ProposalDetailSheet: View {
             ScrollViewReader { proxy in
                 List {
                     if !proposal.orderedChanges.isEmpty {
-                        // Changes lead the sheet — the summary is one
-                        // compact footer line under them (tool + agent,
-                        // humanized; no raw prop_ id). Section ("Summary")
-                        // with three LabeledContents was the slop Matthew
-                        // called out (Nov 12).
+                        // Changes lead the sheet. The tool·agent footer line
+                        // from pass 2 is gone (pass 3, user call: slop) —
+                        // the changes and the read-back evidence ARE the
+                        // content; the summary repeated the title.
                         Section {
                             ProposalChangesView(lines: proposal.orderedChanges)
                                 .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
                                 .listRowBackground(Color.clear)
                         } header: {
                             Text("Changes")
-                        } footer: {
-                            Text(compactSummary)
-                        }
-                    } else {
-                        Section {
-                            Text(compactSummary)
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
                         }
                     }
+                    // (A proposal with no diff lines renders no Changes
+                    // section at all — there is nothing to summarize it
+                    // with now that the footer is gone.)
                     // Evidence appears only when it exists — a pending
                     // proposal shows no section at all, not a placeholder
                     // promising what will appear (Nov 12 pass 2).
@@ -219,13 +213,6 @@ struct ProposalDetailSheet: View {
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
         .background(.bar)
-    }
-
-    /// The collapsed summary line: humanized tool name and the agent —
-    /// never a raw prop_ id. Lives in the Changes section's footer so the
-    /// change cards are the first thing the eye lands on.
-    private var compactSummary: String {
-        "\(ProposalCardLayout.humanizedTool(proposal.tool)) · \(proposal.agentName)"
     }
 
     /// The one-line caption above the evidence list: what a check IS.
