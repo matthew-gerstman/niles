@@ -185,6 +185,8 @@ struct ActivitySections: View {
                 } label: {
                     Label("Undo", systemImage: "arrow.uturn.backward")
                 }
+                // Orange: a reversal, not a deletion — caution without destructive red.
+                .tint(.orange) // the app-wide .tint(.white) otherwise overrides system styling
             }
         }
     }
