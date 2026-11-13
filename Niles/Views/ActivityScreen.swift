@@ -18,52 +18,11 @@ struct ActivityScreen: View {
     /// Inline-title pin for this pane's bar — set in the wide layout by
     /// widePane(); false (automatic) in the narrow layout. See ContentView.
     @Environment(\.widePaneInlineTitle) private var widePaneInlineTitle
-    @State private var openDetail: ActivityTimeline.Group?
-    /// Screenshot hook: `-UIActivityOpenDetail` presents the newest proposal's
-    /// detail sheet on launch, so per-proposal captures need no UI automation.
-    @State private var autoOpenedDetail = false
-
-    /// Pending (staged) proposals never render here — Activity starts at
-    /// the decision — with one exception: a proposal whose swipe decision
-    /// is still in flight renders as a processing row (decided-in-progress,
-    /// the 2026-11-12 rule). A proposal no longer in memory (after a
-    /// relaunch) is settled history and always shows.
-    private static func decidedGroups(
-        events: [ActivityEvent],
-        proposals: [NilesProposal],
-        decisionsInFlight: [String: ProposalDecision]
-    ) -> [ActivityTimeline.Group] {
-        ActivityTimeline.groups(
-            events: events, proposals: proposals, decisionsInFlight: decisionsInFlight
-        ).filter { group in
-            if decisionsInFlight[group.proposalId] != nil { return true }
-            guard let proposal = proposals.first(where: { $0.id == group.proposalId }) else { return true }
-            return proposal.state != .staged
-        }
-    }
 
     var body: some View {
         NavigationStack {
             List {
-                let groups = Self.decidedGroups(
-                    events: model.activityEvents, proposals: model.proposals,
-                    decisionsInFlight: model.decisionsInFlight
-                )
-                if groups.isEmpty {
-                    ContentUnavailableView(
-                        "No activity yet",
-                        systemImage: "clock.arrow.circlepath",
-                        description: Text("Proposals appear here once you approve or deny them — pending items wait in the Queue.")
-                    )
-                } else {
-                    ForEach(ActivityDaySections(groups: groups)) { section in
-                        Section(section.title) {
-                            ForEach(section.groups) { group in
-                                groupRow(group)
-                            }
-                        }
-                    }
-                }
+                ActivitySections(model: model)
             }
             .navigationTitle("Activity")
             // Shared bar modifier: in the wide layout the leading pane never registers the top
@@ -90,32 +49,93 @@ struct ActivityScreen: View {
                     SafeAreaOverlay(label: "activity.list", badgeAlignment: .topLeading)
                 }
             }
-            .sheet(item: $openDetail) { group in
-                // Rebuild the group from the model so the sheet reflects undo
-                // taps and refreshed evidence, like the approvals sheet does.
-                if let fresh = Self.decidedGroups(
-                    events: model.activityEvents, proposals: model.proposals,
-                    decisionsInFlight: model.decisionsInFlight
-                ).first(where: { $0.proposalId == group.proposalId }) {
-                    ActivityDetailView(
-                        group: fresh,
-                        failure: model.undoFailures[fresh.proposalId],
-                        onUndo: { model.undo(fresh.proposalId) },
-                        onDismissFailure: { model.clearUndoFailure(fresh.proposalId) }
-                    )
+        }
+    }
+}
+
+/// Activity's timeline as list sections — the content BOTH the wide
+/// layout's Activity pane and the compact single page (HomeScreen's list,
+/// which appends these below its Server section) render. Self-contained:
+/// owns the detail-sheet state (a row tap opens the sheet) and the
+/// `-UIActivityOpenDetail` fixture hook, so either host gets identical
+/// behavior with no extra wiring. The body is a Group of Sections, which
+/// flattens into the host List as one Section per calendar day.
+struct ActivitySections: View {
+    var model: any ActivityViewModel
+
+    @State private var openDetail: ActivityTimeline.Group?
+    /// Screenshot hook: `-UIActivityOpenDetail` presents the newest proposal's
+    /// detail sheet on launch, so per-proposal captures need no UI automation.
+    @State private var autoOpenedDetail = false
+
+    var body: some View {
+        Group {
+            let groups = Self.decidedGroups(
+                events: model.activityEvents, proposals: model.proposals,
+                decisionsInFlight: model.decisionsInFlight
+            )
+            if groups.isEmpty {
+                // A bare Group child (no Section): renders in the host List
+                // exactly as ActivityScreen's empty state always has.
+                ContentUnavailableView(
+                    "No activity yet",
+                    systemImage: "clock.arrow.circlepath",
+                    description: Text("Proposals appear here once you approve or deny them — pending items wait in the Queue.")
+                )
+            } else {
+                ForEach(ActivityDaySections(groups: groups)) { section in
+                    Section(section.title) {
+                        ForEach(section.groups) { group in
+                            groupRow(group)
+                        }
+                    }
                 }
             }
-            .task {
-                if !autoOpenedDetail,
-                   LaunchArguments.uiActivityOpenDetail,
-                   let newest = Self.decidedGroups(
-                       events: model.activityEvents, proposals: model.proposals,
-                       decisionsInFlight: model.decisionsInFlight
-                   ).first {
-                    openDetail = newest
-                    autoOpenedDetail = true
-                }
+        }
+        .sheet(item: $openDetail) { group in
+            // Rebuild the group from the model so the sheet reflects undo
+            // taps and refreshed evidence, like the approvals sheet does.
+            if let fresh = Self.decidedGroups(
+                events: model.activityEvents, proposals: model.proposals,
+                decisionsInFlight: model.decisionsInFlight
+            ).first(where: { $0.proposalId == group.proposalId }) {
+                ActivityDetailView(
+                    group: fresh,
+                    failure: model.undoFailures[fresh.proposalId],
+                    onUndo: { model.undo(fresh.proposalId) },
+                    onDismissFailure: { model.clearUndoFailure(fresh.proposalId) }
+                )
             }
+        }
+        .task {
+            if !autoOpenedDetail,
+               LaunchArguments.uiActivityOpenDetail,
+               let newest = Self.decidedGroups(
+                   events: model.activityEvents, proposals: model.proposals,
+                   decisionsInFlight: model.decisionsInFlight
+               ).first {
+                openDetail = newest
+                autoOpenedDetail = true
+            }
+        }
+    }
+
+    /// Pending (staged) proposals never render here — Activity starts at
+    /// the decision — with one exception: a proposal whose swipe decision
+    /// is still in flight renders as a processing row (decided-in-progress,
+    /// the 2026-11-12 rule). A proposal no longer in memory (after a
+    /// relaunch) is settled history and always shows.
+    private static func decidedGroups(
+        events: [ActivityEvent],
+        proposals: [NilesProposal],
+        decisionsInFlight: [String: ProposalDecision]
+    ) -> [ActivityTimeline.Group] {
+        ActivityTimeline.groups(
+            events: events, proposals: proposals, decisionsInFlight: decisionsInFlight
+        ).filter { group in
+            if decisionsInFlight[group.proposalId] != nil { return true }
+            guard let proposal = proposals.first(where: { $0.id == group.proposalId }) else { return true }
+            return proposal.state != .staged
         }
     }
 

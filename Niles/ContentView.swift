@@ -122,23 +122,21 @@ struct ContentView: View {
         }
     }
 
-    /// Compact layout: one page, no tab bar — Home on top, Activity on the
-    /// bottom, a Divider between them; each pane scrolls within its half of
-    /// the page. The gated agent chat stays reachable through the same
-    /// trailing button on Home's bar the wide layout uses (chatEntry).
+    /// Compact layout: ONE page, no tab bar — Home's sections with
+    /// Activity's appended below, all in a single list, so the page scrolls
+    /// like any phone page (Home above Activity) instead of two half-height
+    /// panes each confined to half the screen. That half-and-half structure
+    /// is what read as "a weird half thing" on the folded Duo — not a
+    /// misclassification: the folded window is compact-width and correctly
+    /// chose this layout. The gated agent chat stays reachable through the
+    /// same trailing button on Home's bar the wide layout uses (chatEntry).
     private var compactLayout: some View {
-        VStack(spacing: 0) {
-            if let fixtureHomeStore {
-                HomeScreen(model: fixtureHomeStore, chatEntry: chatEntry)
-            } else {
-                HomeScreen(model: store, chatEntry: chatEntry)
-            }
-            Divider()
-            if let fixture = fixtureActivityStore {
-                ActivityScreen(model: fixture)
-            } else {
-                ActivityScreen(model: store)
-            }
+        if let fixtureHomeStore {
+            HomeScreen(model: fixtureHomeStore, chatEntry: chatEntry,
+                       activityModel: fixtureActivityStore ?? store)
+        } else {
+            HomeScreen(model: store, chatEntry: chatEntry,
+                       activityModel: fixtureActivityStore ?? store)
         }
     }
 

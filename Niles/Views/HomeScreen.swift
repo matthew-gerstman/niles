@@ -19,6 +19,13 @@ struct HomeScreen: View {
     /// keeps chat on its own tab.
     var chatEntry: (() -> Void)? = nil
 
+    /// Compact single page: when set, Activity's timeline sections render
+    /// below the Server section in THIS list — one scrolling page, Home
+    /// above Activity — instead of Activity living in a second pane pinned
+    /// to the other half of the screen. The wide layout passes nothing and
+    /// keeps its separate Activity pane.
+    var activityModel: (any ActivityViewModel)? = nil
+
     /// Inline-title pin for this pane's bar — set in the wide layout by
     /// widePane(); false (automatic) in the narrow layout. See ContentView.
     @Environment(\.widePaneInlineTitle) private var widePaneInlineTitle
@@ -65,6 +72,9 @@ struct HomeScreen: View {
                     pairingSection
                     pairedAgentsSection
                     serverSection
+                    if let activityModel {
+                        ActivitySections(model: activityModel)
+                    }
                 }
                 .listStyle(.insetGrouped)
                 .navigationTitle("Home")
