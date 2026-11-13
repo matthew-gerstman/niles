@@ -201,6 +201,13 @@ public enum HomeKitWriteError: Error, Equatable, Sendable {
     }
 }
 
+extension HomeKitWriteError: CustomStringConvertible {
+    /// Evidence and logs carry the sentence, not the enum case —
+    /// `String(describing:)` on the bare enum prints
+    /// `invalidOperation("…")` around the words a human needs.
+    public var description: String { message }
+}
+
 extension HomeGraph.Accessory {
     /// The write side's shared graph lookup: one characteristic of this
     /// accessory, optionally within a named service, matched by type UUID or
