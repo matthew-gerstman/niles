@@ -106,6 +106,36 @@ extension LiveNilesStore {
                 await queue.approveAndWait(evidenceProposalId)
             }
 
+        case "moves":
+            // The move-echo QA fixture (Nov 13): a mixed batch over the
+            // demo home — two accessory moves plus a scene edit. The
+            // moves' detail rows are pure echoes of their headers; the
+            // scene edit's row IS its payload and must keep rendering.
+            // Staged through the real batch path (`stage_batch`), so the
+            // card is exactly what an agent's batch produces. Never
+            // approved here — the fixture only stages for capture.
+            do {
+                _ = try await store.stageBatch([
+                    BatchOperation(tool: "assign_accessory_to_room", arguments: [
+                        "accessoryId": .string("acc-1"), "roomId": .string("room-2"),
+                    ]),
+                    BatchOperation(tool: "assign_accessory_to_room", arguments: [
+                        "accessoryId": .string("acc-6"), "roomId": .string("room-1"),
+                    ]),
+                    BatchOperation(tool: "set_scene_actions", arguments: [
+                        "sceneId": .string("scene-1"),
+                        "actions": .array([.object([
+                            "accessoryId": .string("acc-1"),
+                            "characteristic": .string("Brightness"),
+                            "value": .int(30),
+                        ])]),
+                    ]),
+                ])
+                await refresh()
+            } catch {
+                logger.error("Moves fixture staging failed: \(String(describing: error))")
+            }
+
         case "conflict":
             guard let id = await stage(createRoomPlan()) else { return }
             await queue.approveAndWait(id)
