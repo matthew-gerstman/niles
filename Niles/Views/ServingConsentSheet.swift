@@ -1,3 +1,4 @@
+import NilesCore
 import SwiftUI
 
 /// The first-open serving consent sheet. Presented from the app root whenever
