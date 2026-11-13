@@ -336,6 +336,7 @@ struct HomeScreen: View {
                         Button("Revoke", role: .destructive) {
                             pendingRevoke = agent
                         }
+                        .tint(.red) // destructive red; the app-wide .tint(.white) otherwise overrides the role
                     }
                 }
             }

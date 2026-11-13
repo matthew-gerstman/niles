@@ -125,6 +125,7 @@ struct QueueListRow: View {
             } label: {
                 Label("Deny", systemImage: "xmark.circle")
             }
+            .tint(.red) // destructive red; the app-wide .tint(.white) otherwise overrides the role
             .disabled(decision != nil)
         } else if undoState != nil {
             Button {
@@ -132,6 +133,8 @@ struct QueueListRow: View {
             } label: {
                 Label("Undo", systemImage: "arrow.uturn.backward")
             }
+            // Orange: a reversal, not a deletion — caution without destructive red.
+            .tint(.orange)
             .disabled(undoState == .inFlight)
         }
     }
