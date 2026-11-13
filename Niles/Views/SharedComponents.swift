@@ -2,12 +2,14 @@ import SwiftUI
 import NilesCore
 
 // The proposal review card's Changes rendering: the card's own line order,
-// parsed into one compact group per operation. Batch cards open each
+// parsed into one succinct group per operation. Batch cards open each
 // operation with a '— Operation N of M: title —' banner line, so banners —
 // including those persisted by earlier releases — become group headers and
-// every line beneath one belongs to that operation. All styling is text
-// styles and semantic colors on clear backgrounds (Dynamic Type compliant);
-// monospace is reserved for value tokens, never sentences.
+// every line beneath one belongs to that operation. The header is the
+// operation: member lines survive only when they add detail the title does
+// not already say. All styling is text styles and semantic colors on clear
+// backgrounds (Dynamic Type compliant); monospace is reserved for value
+// tokens, never sentences.
 
 /// One operation group of a proposal's changes: the parsed banner header
 /// (nil for a single-op card, which has no banner) and the lines beneath it.
@@ -82,6 +84,99 @@ enum ProposalCardLayout {
         return "wrench.and.screwdriver"
     }
 
+    // MARK: - Succinct filtering (review pass 2)
+
+    /// The succinct card's per-group filter: the header already says what
+    /// the operation does, so a member line survives only when it adds
+    /// detail the title does not carry. Runs purely on the persisted card
+    /// text — serialization is untouched — so old proposals render
+    /// identically to fresh ones.
+    static func succinctLines(title: String?, lines: [ProposalDiffLine]) -> [ProposalDiffLine] {
+        lines.compactMap { line in succinctLine(line, title: title) }
+    }
+
+    private static func succinctLine(_ line: ProposalDiffLine, title: String?) -> ProposalDiffLine? {
+        switch line.kind {
+        case .note:
+            return noteLine(line.text)
+        default:
+            // Echo lines only exist under a header — a single-op card has
+            // no title to restate, so its lines all stand on their own.
+            guard let title, isEcho(line.text, ofTitle: title) else { return line }
+            return nil
+        }
+    }
+
+    /// A ⚠ note either carries a blast-radius fact the spec requires the
+    /// user to see — demoted to a plain detail line, no glyph — or it is
+    /// agent-facing slop and disappears entirely.
+    private static func noteLine(_ text: String) -> ProposalDiffLine? {
+        guard text.hasPrefix("⚠ ") else {
+            // Notes without the warning prefix (the revert card's
+            // 'Reverts “X” — …') are context, not warnings.
+            return ProposalDiffLine(.plain, text)
+        }
+        let stripped = String(text.dropFirst("⚠ ".count))
+        guard isBlastRadiusNote(stripped) else { return nil }
+        return ProposalDiffLine(.plain, firstSentence(stripped))
+    }
+
+    /// The ⚠ classes that survive as plain detail: physical-immediacy and
+    /// destructive-reference facts — what else this operation touches,
+    /// not how the agent should call it.
+    static func isBlastRadiusNote(_ text: String) -> Bool {
+        text.hasPrefix("Device-immediate")
+            || text.contains(" will move to the default room")
+            || text.contains(" no longer runs anything")
+            || text.contains(" loses ")
+            || text.contains("will stop working")
+            || text.contains("armed state")
+    }
+
+    /// Drops an agent-facing tail sentence ('Pass deleteLinkedTriggers to
+    /// delete it too.') — the user-facing first sentence is the detail.
+    static func firstSentence(_ text: String) -> String {
+        guard let range = text.range(of: ". ") else { return text }
+        return String(text[..<range.lowerBound]) + "."
+    }
+
+    /// True when the line merely restates the header: a lead of the form
+    /// 'Kind “Name”' that appears verbatim in the title, with a ' · ' tail
+    /// whose verb is the title's verb in past tense ('Create scene “X”' /
+    /// 'Scene “X” · created with 1 action'). A ' → ' transition line is
+    /// never an echo — its right side is information the title lacks
+    /// ('Scene “A” → “B”' under 'Rename scene “A”').
+    static func isEcho(_ text: String, ofTitle title: String) -> Bool {
+        guard !text.contains(" → ") else { return false }
+        guard let tailRange = text.range(of: " · ") else { return false }
+        let lead = String(text[..<tailRange.lowerBound])
+        // A bare '“Name” · add action …' line is real detail, not a
+        // restatement — only a lead carrying a kind word before the
+        // quoted name can duplicate a header.
+        guard !lead.hasPrefix("“"), title.localizedCaseInsensitiveContains(lead) else { return false }
+        let titleVerb = verbPrefix(title)
+        let tailVerb = verbPrefix(String(text[tailRange.upperBound...]))
+        // 'created'/'Create', 'identified'/'Identify', 'deleted'/'Delete',
+        // 'runs'/'Run', 'unblocked'/'Unblock' — a shared word stem.
+        return commonPrefixLength(titleVerb, tailVerb) >= 3
+    }
+
+    private static func verbPrefix(_ text: String) -> String {
+        String(text.prefix(while: { !$0.isWhitespace })).lowercased()
+    }
+
+    private static func commonPrefixLength(_ a: String, _ b: String) -> Int {
+        zip(a, b).prefix(while: { $0.0 == $0.1 }).count
+    }
+
+    /// 'identify_accessory' → 'Identify accessory' — tool names never
+    /// render raw in the sheet.
+    static func humanizedTool(_ tool: String) -> String {
+        tool.split(separator: "_")
+            .map { $0.prefix(1).capitalized + $0.dropFirst().lowercased() }
+            .joined(separator: " ")
+    }
+
     /// One run of styled text inside a change line.
     struct ChangeTextSegment {
         enum Style { case primary, secondary, semibold }
@@ -127,17 +222,24 @@ enum ProposalCardLayout {
     }
 }
 
-/// The Changes section body: one compact group per operation, in the
-/// card's original order.
+/// The Changes section body: one succinct group per operation, in the
+/// card's original order. Each group renders its header plus only the
+/// detail the header does not already say.
 struct ProposalChangesView: View {
     let lines: [ProposalDiffLine]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             ForEach(ProposalCardLayout.operationGroups(from: lines)) { group in
-                ProposalOperationGroupView(group: group)
+                ProposalOperationGroupView(group: succinct(group))
             }
         }
+    }
+
+    private func succinct(_ group: ProposalOperationGroup) -> ProposalOperationGroup {
+        var group = group
+        group.lines = ProposalCardLayout.succinctLines(title: group.title, lines: group.lines)
+        return group
     }
 }
 
@@ -147,57 +249,51 @@ private struct ProposalOperationGroupView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if let title = group.title {
-                HStack(spacing: 6) {
+                HStack(spacing: 8) {
                     Image(systemName: ProposalCardLayout.symbolName(forOperationTitle: title))
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     Text(title)
                         .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                    // The caption keeps its natural fixed width at the
+                    // trailing edge; the title gets everything else and
+                    // only truncates when the two actually collide.
                     Spacer(minLength: 8)
                     if let number = group.operationNumber, let count = group.operationCount {
                         Text("\(number) of \(count)")
                             .font(.caption.monospaced())
                             .foregroundStyle(.secondary)
+                            .fixedSize()
                     }
                 }
             }
             ForEach(group.lines) { line in
-                changeLine(line)
+                detailLine(line)
             }
         }
     }
 
+    /// The lines under a header: the change itself (any value transition
+    /// keeps PR #108's old-secondary/new-semibold styling) or a supporting
+    /// detail in the secondary color. No leading glyphs — the header is
+    /// the operation; pluses and minuses added nothing the colors of a
+    /// review card needed.
     @ViewBuilder
-    private func changeLine(_ line: ProposalDiffLine) -> some View {
+    private func detailLine(_ line: ProposalDiffLine) -> some View {
         switch line.kind {
-        case .note:
-            WarningRow(text: line.text)
-        default:
-            HStack(alignment: .center, spacing: 8) {
-                leadingAccent(for: line.kind)
+        case .add, .remove:
+            ChangeLineText(text: line.text)
+                .font(.callout)
+        case .plain, .note:
+            if line.text.contains(" → ") {
                 ChangeLineText(text: line.text)
                     .font(.callout)
+            } else {
+                Text(line.text)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
             }
-        }
-    }
-
-    /// A small leading accent instead of a full-width fill: plus/minus
-    /// glyphs for diff lines, a neutral 3pt bar for plain context.
-    @ViewBuilder
-    private func leadingAccent(for kind: ProposalDiffLine.Kind) -> some View {
-        switch kind {
-        case .add:
-            Text("+")
-                .font(.callout.weight(.bold))
-                .foregroundStyle(.green)
-        case .remove:
-            Text("−")
-                .font(.callout.weight(.bold))
-                .foregroundStyle(.red)
-        case .plain, .note:
-            Capsule()
-                .fill(Color.secondary.opacity(0.35))
-                .frame(width: 3, height: 14)
         }
     }
 }
@@ -220,27 +316,5 @@ private struct ChangeLineText: View {
         case .secondary: Text(segment.text).foregroundStyle(.secondary)
         case .semibold: Text(segment.text).fontWeight(.semibold)
         }
-    }
-}
-
-/// A blast-radius or validation warning: a compact footnote row with an
-/// orange glyph, no background fill. The card text's leading '⚠ ' is
-/// dropped — the glyph replaces it.
-private struct WarningRow: View {
-    let text: String
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Image(systemName: "exclamationmark.triangle")
-                .font(.footnote)
-                .foregroundStyle(.orange)
-            Text(Self.warningText(of: text))
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    static func warningText(of text: String) -> String {
-        text.hasPrefix("⚠ ") ? String(text.dropFirst(2)) : text
     }
 }

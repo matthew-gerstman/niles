@@ -29,19 +29,34 @@ struct ProposalDetailSheet: View {
         NavigationStack {
             ScrollViewReader { proxy in
                 List {
-                    Section("Summary") {
-                        LabeledContent("Tool", value: proposal.tool)
-                        LabeledContent("Proposal", value: proposal.id)
-                        LabeledContent("Agent", value: proposal.agentName)
-                    }
                     if !proposal.orderedChanges.isEmpty {
-                        Section("Changes") {
+                        // Changes lead the sheet — the summary is one
+                        // compact footer line under them (tool + agent,
+                        // humanized; no raw prop_ id). Section ("Summary")
+                        // with three LabeledContents was the slop Matthew
+                        // called out (Nov 12).
+                        Section {
                             ProposalChangesView(lines: proposal.orderedChanges)
                                 .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
                                 .listRowBackground(Color.clear)
+                        } header: {
+                            Text("Changes")
+                        } footer: {
+                            Text(compactSummary)
+                        }
+                    } else {
+                        Section {
+                            Text(compactSummary)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
                         }
                     }
-                    evidenceSection
+                    // Evidence appears only when it exists — a pending
+                    // proposal shows no section at all, not a placeholder
+                    // promising what will appear (Nov 12 pass 2).
+                    if !proposal.evidence.isEmpty {
+                        evidenceSection
+                    }
                     undoSection
                 }
                 .navigationTitle("Proposal")
@@ -73,51 +88,43 @@ struct ProposalDetailSheet: View {
 
     /// Read-back evidence as Expected/Found pairs — one ✓/✗ header per
     /// check, then what the change claimed and what the home actually
-    /// showed. Pending proposals carry none yet — say what will appear
-    /// instead of an empty block.
+    /// showed. Rendered only when evidence exists — the call site gates on
+    /// that, so a pending proposal shows no section at all.
     @ViewBuilder
     private var evidenceSection: some View {
         Section {
-            if proposal.evidence.isEmpty {
-                Text(Self.pendingEvidenceNote)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(Array(proposal.evidence.enumerated()), id: \.offset) { index, item in
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 6) {
-                            Image(systemName: Self.evidenceSymbol(for: item))
-                                .foregroundStyle(Self.evidenceColor(for: item))
-                            Text(Self.evidenceLabel(for: item))
-                                .font(.subheadline.weight(.semibold))
-                        }
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Expected")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Text(item.claim)
-                                .font(.subheadline)
-                        }
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Found")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Text(item.observed)
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
+            ForEach(Array(proposal.evidence.enumerated()), id: \.offset) { index, item in
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 6) {
+                        Image(systemName: Self.evidenceSymbol(for: item))
+                            .foregroundStyle(Self.evidenceColor(for: item))
+                        Text(Self.evidenceLabel(for: item))
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Expected")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(item.claim)
+                            .font(.subheadline)
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Found")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(item.observed)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
                 }
             }
         } header: {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Read-back evidence")
-                if !proposal.evidence.isEmpty {
-                    Text(Self.evidenceCaption)
-                        .font(.footnote)
-                        .fontWeight(.regular)
-                        .foregroundStyle(.secondary)
-                }
+                Text(Self.evidenceCaption)
+                    .font(.footnote)
+                    .fontWeight(.regular)
+                    .foregroundStyle(.secondary)
             }
         } footer: {
             if !proposal.evidence.isEmpty {
@@ -214,10 +221,12 @@ struct ProposalDetailSheet: View {
         .background(.bar)
     }
 
-    /// Shown in place of the evidence block while nothing has executed —
-    /// a pending proposal has no read-back to show yet.
-    private static let pendingEvidenceNote = "After approval, Niles re-reads the home from HomeKit and "
-        + "attaches the read-back evidence here. Denied and expired proposals never run anything."
+    /// The collapsed summary line: humanized tool name and the agent —
+    /// never a raw prop_ id. Lives in the Changes section's footer so the
+    /// change cards are the first thing the eye lands on.
+    private var compactSummary: String {
+        "\(ProposalCardLayout.humanizedTool(proposal.tool)) · \(proposal.agentName)"
+    }
 
     /// The one-line caption above the evidence list: what a check IS.
     private static let evidenceCaption = "Niles re-reads your home after executing. "
