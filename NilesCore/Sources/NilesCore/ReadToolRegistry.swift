@@ -428,6 +428,9 @@ public struct ReadToolRegistry: Sendable {
             var id: String
             var name: String
             var services: [NameRef]
+            /// Set when HomeKit reports the group holds no member services —
+            /// see `membershipNote(for:)`.
+            var membershipNote: String?
         }
 
         struct TriggerLine: Codable, Sendable, Equatable {
@@ -483,7 +486,8 @@ public struct ReadToolRegistry: Sendable {
             self.serviceGroups = home.serviceGroups.map {
                 GroupLine(
                     id: $0.id, name: $0.name,
-                    services: $0.services.map { NameRef(id: $0.id, name: $0.name) }
+                    services: $0.services.map { NameRef(id: $0.id, name: $0.name) },
+                    membershipNote: Self.membershipNote(for: $0.services)
                 )
             }
             self.triggers = home.triggers.map {
@@ -1164,6 +1168,23 @@ public struct ReadToolRegistry: Sendable {
         var actions: [HomeGraph.SceneAction]
     }
 
+    /// The note a group read carries when HomeKit reports no member
+    /// services. `HMServiceGroup.services` is a plain synchronous property
+    /// over the HomeKit daemon's state, and the framework's public surface
+    /// offers no refresh or reload on `HMServiceGroup` or `HMHome` — there
+    /// is no call that would force unhydrated membership to populate, so
+    /// `snapshot()` (which already walks the live manager) is all the read
+    /// path can do. An empty list is therefore ambiguous — genuinely empty,
+    /// or unhydrated in this process — and every group projection says so
+    /// instead of presenting bare emptiness as fact. Device evidence (all
+    /// 20 Syracuse groups reading `servicesPopulated: false`, 2026-11-10)
+    /// is what made this note necessary; the diagnostic proposal
+    /// (`prop_7fd0487e6054`) decides which of the two it is.
+    static func membershipNote(for services: [HomeGraph.ServiceRef]) -> String? {
+        guard services.isEmpty else { return nil }
+        return "membership unavailable — HomeKit reported no members"
+    }
+
     struct ServiceGroupsProjection: Codable, Sendable, Equatable {
         var serviceGroups: [ServiceGroupSummary]
     }
@@ -1331,7 +1352,8 @@ public struct ReadToolRegistry: Sendable {
                     homeId: home.id,
                     homeName: home.name,
                     name: group.name,
-                    services: group.services
+                    services: group.services,
+                    membershipNote: Self.membershipNote(for: group.services)
                 )
             }
         })
