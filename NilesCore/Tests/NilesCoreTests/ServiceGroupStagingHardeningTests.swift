@@ -223,4 +223,67 @@ import Testing
     @Test func writeErrorRendersItsMessage() {
         #expect(String(describing: HomeKitWriteError.invalidOperation("boom")) == "boom")
     }
+
+    // MARK: - The window-covering known-unknown (diagnostic verdict: categorical)
+
+    /// A non-covering service for the quiet-path assertions.
+    private static let lightbulb = "00000043-0000-1000-8000-0026BB765291"
+
+    /// The graph fixture gains one lightbulb service; existing tests above
+    /// never enumerate services, so the addition is inert for them.
+    private func fixtureGraphWithLight() -> HomeGraph {
+        var graph = fixtureGraph()
+        var blinds = graph.homes[0].rooms[0].accessories[0]
+        blinds.services.append(HomeGraph.AccessoryService(
+            id: "svc-light", name: "Lamp", serviceType: Self.lightbulb, characteristics: []
+        ))
+        graph.homes[0].rooms[0].accessories[0] = blinds
+        return graph
+    }
+
+    private static let warningText = "HomeKit may refuse this membership change"
+
+    @Test func membershipCardWarnsOnWindowCoveringAdd() throws {
+        let plan = try ProposalPlanner.plan(
+            .setServiceGroupMembers(groupId: "group-bedroom", serviceIds: ["svc-center"]),
+            graph: fixtureGraph()
+        )
+        let warned = plan.card.contains { line in
+            line.kind == .note && line.text.contains(Self.warningText)
+        }
+        #expect(warned)
+    }
+
+    @Test func membershipCardStaysQuietForNonCoveringAdd() throws {
+        let plan = try ProposalPlanner.plan(
+            .setServiceGroupMembers(groupId: "group-bedroom", serviceIds: ["svc-light"]),
+            graph: fixtureGraphWithLight()
+        )
+        let warned = plan.card.contains { line in
+            line.text.contains(Self.warningText)
+        }
+        #expect(!warned)
+    }
+
+    @Test func createGroupCardWarnsOnWindowCoveringMembers() throws {
+        let plan = try ProposalPlanner.plan(
+            .createServiceGroup(homeId: "home-1", name: "All Blinds", serviceIds: ["svc-center"]),
+            graph: fixtureGraph()
+        )
+        let warned = plan.card.contains { line in
+            line.kind == .note && line.text.contains(Self.warningText)
+        }
+        #expect(warned)
+    }
+
+    @Test func createGroupWithoutMembersCarriesNoWarning() throws {
+        let plan = try ProposalPlanner.plan(
+            .createServiceGroup(homeId: "home-1", name: "Empty Group", serviceIds: []),
+            graph: fixtureGraph()
+        )
+        let warned = plan.card.contains { line in
+            line.text.contains(Self.warningText)
+        }
+        #expect(!warned)
+    }
 }
