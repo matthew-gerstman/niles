@@ -132,8 +132,6 @@ final class LiveNilesStore {
         dashboard.applySessions(sessions)
         await pairing.refreshState(sessions: sessions)
 
-        await agentStatus.refreshUsage()
-
         guard let store = coordinator.proposalStore else { return }
         let live = await store.allProposals()
 
