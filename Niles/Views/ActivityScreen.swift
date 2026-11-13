@@ -102,6 +102,7 @@ struct ActivitySections: View {
                 ActivityDetailView(
                     group: fresh,
                     failure: model.undoFailures[fresh.proposalId],
+                    undoInFlight: model.undoStates[fresh.proposalId] == .inFlight,
                     onUndo: { model.undo(fresh.proposalId) },
                     onDismissFailure: { model.clearUndoFailure(fresh.proposalId) }
                 )
@@ -170,6 +171,17 @@ struct ActivitySections: View {
                                 .foregroundStyle(group.state.tint)
                         }
                     }
+                    // An undo in flight gets the same treatment: on a real
+                    // home the revert write plus read-back takes seconds, and
+                    // a silent row reads as a dead tap (the 2026-11-13 report).
+                    if model.undoStates[group.proposalId] == .inFlight {
+                        HStack(spacing: 6) {
+                            ProgressView()
+                            Text("Undoing…")
+                                .font(.footnote)
+                                .foregroundStyle(.orange)
+                        }
+                    }
                     Text(RelativeTime.label(for: group.latestAt))
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -190,6 +202,7 @@ struct ActivitySections: View {
                 }
                 // Orange: a reversal, not a deletion — caution without destructive red.
                 .tint(.orange) // the app-wide .tint(.white) otherwise overrides system styling
+                .disabled(model.undoStates[group.proposalId] == .inFlight)
             }
         }
     }
@@ -305,6 +318,7 @@ struct ActivityDaySections: RandomAccessCollection {
 struct ActivityDetailView: View {
     let group: ActivityTimeline.Group
     var failure: ActivityUndoFailure?
+    var undoInFlight: Bool = false
     var onUndo: () -> Void = {}
     var onDismissFailure: () -> Void = {}
 
@@ -313,6 +327,24 @@ struct ActivityDetailView: View {
     var body: some View {
         NavigationStack {
             List {
+                // Blocked undo leads the card: at the medium detent everything
+                // below the timeline scrolls out of view, and a failure that
+                // renders under the fold reads as a dead tap (2026-11-13).
+                if let failure {
+                    Section("Undo blocked") {
+                        Text(failure.message)
+                            .font(.callout)
+                            .foregroundStyle(.red)
+                        ForEach(Array(failure.divergences.enumerated()), id: \.offset) { _, item in
+                            Label("\(item.claim) — \(item.observed)", systemImage: "xmark.circle")
+                                .foregroundStyle(.red)
+                        }
+                        Button("Dismiss") {
+                            onDismissFailure()
+                            dismiss()
+                        }
+                    }
+                }
                 Section("Timeline") {
                     ForEach(Array(group.events.reversed().enumerated()), id: \.offset) { _, entry in
                         HStack(alignment: .firstTextBaseline) {
@@ -363,21 +395,8 @@ struct ActivityDetailView: View {
                             .truncationMode(.middle)
                     }
                 }
-                if let failure {
-                    Section("Undo blocked") {
-                        Text(failure.message)
-                            .font(.callout)
-                            .foregroundStyle(.red)
-                        ForEach(Array(failure.divergences.enumerated()), id: \.offset) { _, item in
-                            Label("\(item.claim) — \(item.observed)", systemImage: "xmark.circle")
-                                .foregroundStyle(.red)
-                        }
-                        Button("Dismiss") {
-                            onDismissFailure()
-                            dismiss()
-                        }
-                    }
-                }
+                // The old trailing "Undo blocked" section moved above the
+                // timeline so a failure is visible at the medium detent.
             }
             .navigationTitle(group.title)
             .navigationBarTitleDisplayMode(.inline)
@@ -387,6 +406,11 @@ struct ActivityDetailView: View {
                         Button("Undo", systemImage: "arrow.uturn.backward") {
                             onUndo()
                         }
+                        // Orange keeps the undo readable: the app-wide
+                        // .tint(.white) rendered this toolbar button white
+                        // on white, so the card looked Undo-less (2026-11-13).
+                        .tint(.orange)
+                        .disabled(undoInFlight)
                     } else {
                         Button("Done") { dismiss() }
                     }
@@ -427,6 +451,7 @@ final class FixtureActivityStore: ActivityViewModel {
     /// The fixture store settles synchronously — nothing is in flight.
     let decisionsInFlight: [String: ProposalDecision] = [:]
     var undoFailures: [String: ActivityUndoFailure] = [:]
+    var undoStates: [String: UndoState] = [:]
 
     func undo(_ id: String) {}
     func clearUndoFailure(_ id: String) { undoFailures[id] = nil }
