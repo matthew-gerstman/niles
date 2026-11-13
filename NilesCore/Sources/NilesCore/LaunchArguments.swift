@@ -23,6 +23,7 @@ public enum LaunchArguments {
         case proposalDetailEvidence = "-UIProposalDetailEvidence"
         case safeAreaProbe = "-UISafeAreaProbe"
         case seedQueue = "-UISeedQueue"
+        case servingConsent = "-UIServingConsent"
         case proposalsFixture = "-UIProposalsFixture"
         case tabSelect = "-UITabSelect"
         case wideLayout = "-UIWideLayout"
@@ -74,6 +75,12 @@ public enum LaunchArguments {
     public static var uiProposalsFixture: String? { value(after: .proposalsFixture) }
     /// `-UIHomeScroll <section>` — scroll the Home list to a section.
     public static var uiHomeScroll: String? { value(after: .homeScroll) }
+    /// `-UIServingConsent <approved|denied|unset>` — seed the persisted
+    /// serving-consent answer at launch, standing in for a prior consent
+    /// answer so relaunch flows capture without UI automation. The seeding
+    /// lives in `LiveDashboardStore.loadApproval` (the one consent-state
+    /// reader). Absent means: read the persisted answer normally.
+    public static var uiServingConsent: String? { value(after: .servingConsent) }
 
     /// `-UIWideLayout [on|off]` — pins the adaptive layout: bare or `on`
     /// forces the side-by-side panes, `off` forces the single-page compact

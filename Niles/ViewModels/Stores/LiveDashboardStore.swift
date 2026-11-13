@@ -4,6 +4,17 @@ import Observation
 import OSLog
 import UIKit
 
+/// The persisted answer to the first-open serving consent prompt. The state
+/// space is fixed by the serving-consent spec: `unset` (fresh install) means
+/// prompt on open; `approved` means serve when foregrounded unless the user
+/// stopped the server; `denied` means never serve automatically — the Serving
+/// toggle is the only re-enable path. Denial is never re-prompted.
+enum ServingApproval: String {
+    case unset
+    case approved
+    case denied
+}
+
 /// The Home tab's server state: serving status, endpoint, connected agents,
 /// and the home's display name — the `DashboardViewModel` seam of the former
 /// monolithic `LiveNilesStore`, split out per protocol seam (cleanup W3).
@@ -29,6 +40,24 @@ final class LiveDashboardStore: DashboardViewModel {
     /// set, foregrounding the app does not restart serving.
     private(set) var userStoppedServer = false
 
+    /// The consent answer, persisted across launches (defaults). Written by
+    /// `setServerRunning` and the consent sheet's answer; read by the scene
+    /// handoff's serving guard and the first-open sheet's presentation.
+    private(set) var servingApproval: ServingApproval = LiveDashboardStore.loadApproval()
+
+    /// The scene-handoff serving guard: foregrounded AND consented AND not
+    /// user-stopped. One gate — `LANServer.start()` binds the port and
+    /// registers `_niles-mcp._tcp` atomically.
+    var mayAutoServe: Bool {
+        servingApproval == .approved && !userStoppedServer
+    }
+
+    /// The consent sheet presents until the question is answered (first open
+    /// on a fresh install; the persisted answer is never re-asked).
+    var needsServingConsent: Bool {
+        servingApproval == .unset
+    }
+
     /// Set from the scene phase handoff in `LiveNilesStore.handleScene(isActive:)`;
     /// the keep-awake policy only holds the screen up while the app is frontmost.
     private(set) var isAppActive = false
@@ -51,9 +80,13 @@ final class LiveDashboardStore: DashboardViewModel {
     // MARK: - DashboardViewModel
 
     /// The server toggle's kill switch: off closes every connection and
-    /// unregisters Bonjour; on resumes serving while foregrounded.
+    /// unregisters Bonjour; on resumes serving while foregrounded. The
+    /// toggle is also a consent surface: turning it on records approval,
+    /// off records denial — both persisted, so a relaunch never auto-serves
+    /// after the user switched serving off.
     func setServerRunning(_ running: Bool) {
         userStoppedServer = !running
+        setServingApproval(running ? .approved : .denied)
         serverIsRunning = running
         Task {
             if running {
@@ -63,6 +96,49 @@ final class LiveDashboardStore: DashboardViewModel {
             }
             await root?.refresh()
         }
+    }
+
+    // MARK: - Serving consent
+
+    /// The consent sheet's Approve action: records approval and starts
+    /// serving immediately — the user action that anchors the iOS
+    /// local-network permission prompt.
+    func recordServingConsentApproved() {
+        setServingApproval(.approved)
+        setServerRunning(true)
+    }
+
+    /// The consent sheet's Not Now action: records denial. Serving stays
+    /// off and the prompt never returns; the Serving toggle re-enables.
+    func recordServingConsentDenied() {
+        setServingApproval(.denied)
+    }
+
+    private func setServingApproval(_ approval: ServingApproval) {
+        servingApproval = approval
+        UserDefaults.standard.set(approval.rawValue, forKey: Self.approvalKey)
+    }
+
+    private static let approvalKey = "servingApproval"
+
+    /// The persisted answer, or `.unset` on a fresh install. Capture fixtures
+    /// and test hosts never consent — they predate the prompt and their
+    /// captures (and test runs) must not be blocked by a sheet, so they read
+    /// as approved without writing defaults. `-UIServingConsent
+    /// <approved|denied|unset>` seeds the answer for relaunch captures: the
+    /// same code path as a real answer, no UI automation needed.
+    private static func loadApproval() -> ServingApproval {
+        if let seeded = LaunchArguments.uiServingConsent {
+            let seeded = ServingApproval(rawValue: seeded.lowercased()) ?? .unset
+            if seeded != .unset {
+                UserDefaults.standard.set(seeded.rawValue, forKey: approvalKey)
+            }
+            return seeded
+        }
+        if LaunchArguments.isCaptureFixture || LaunchArguments.isTestHost {
+            return .approved
+        }
+        return UserDefaults.standard.string(forKey: approvalKey).flatMap(ServingApproval.init(rawValue:)) ?? .unset
     }
 
     // MARK: - Scene phase (called by the composition root)

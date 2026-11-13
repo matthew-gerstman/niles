@@ -220,6 +220,14 @@ struct HomeScreen: View {
             .tint(.green)
             LabeledContent("Endpoint", value: dashboard.endpoint)
             LabeledContent("Bonjour", value: dashboard.bonjourService)
+            if dashboard.servingApproval == .denied {
+                // Denial never re-prompts (spec), so this note is the only
+                // pointer back to serving: the toggle above is the one way
+                // to enable it.
+                Text("Serving is off — it was declined on first open. Turn on the toggle above to allow paired devices on this network to connect.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
         } header: {
             Text("Server")
                 .id(ScrollTarget.server)

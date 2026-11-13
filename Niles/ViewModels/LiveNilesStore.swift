@@ -99,8 +99,9 @@ final class LiveNilesStore {
         pollingTask = nil
     }
 
-    /// Scene-phase handoff from the app entry: active means serving unless
-    /// the user's kill switch is on; anything else stops the server.
+    /// Scene-phase handoff from the app entry: active means serving only
+    /// with recorded consent (the first-open approval, `mayAutoServe`), and
+    /// never over the user's kill switch; anything else stops the server.
     func handleScene(isActive: Bool) async {
         dashboard.applySceneActive(isActive)
         if isActive {
@@ -108,7 +109,11 @@ final class LiveNilesStore {
             // what the launch loaded from disk, so the queue's first render
             // already reflects the live home.
             await coordinator.revalidateProposals()
-            if !dashboard.userStoppedServer {
+            // One gate covers both the socket and Bonjour: LANServer.start()
+            // binds the port and registers `_niles-mcp._tcp` atomically. An
+            // unanswered or denied consent means nothing binds on open — the
+            // first-open sheet's Approve is the user action that starts it.
+            if dashboard.mayAutoServe {
                 await coordinator.start()
             }
             start()
