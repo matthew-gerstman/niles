@@ -42,11 +42,11 @@ struct ProposalDetailSheet: View {
                         } header: {
                             Text("Changes")
                         } footer: {
-                            Text(Self.compactSummary)
+                            Text(compactSummary)
                         }
                     } else {
                         Section {
-                            Text(Self.compactSummary)
+                            Text(compactSummary)
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
