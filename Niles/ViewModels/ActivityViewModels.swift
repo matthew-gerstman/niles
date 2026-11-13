@@ -26,6 +26,10 @@ protocol ActivityViewModel: Observable {
     /// Proposal id -> the failure from that proposal's most recent Undo tap,
     /// surfaced inline until the next attempt or dismissal.
     var undoFailures: [String: ActivityUndoFailure] { get }
+    /// Per-row Undo affordance state (shared with the Queue): the Activity
+    /// row renders an in-flight undo as a spinning "Undoing…" note and
+    /// disables the swipe until the revert settles.
+    var undoStates: [String: UndoState] { get }
     /// Applies the paired revert immediately — the tap IS the approval.
     func undo(_ id: String)
     func clearUndoFailure(_ id: String)
