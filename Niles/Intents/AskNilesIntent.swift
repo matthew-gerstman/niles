@@ -117,7 +117,7 @@ struct AskNilesIntent: AppIntent {
     func perform() async throws -> some IntentResult & ProvidesDialog {
         // The same gated runner the UI holds — availability is decided once
         // at feature entry, not re-decided per request.
-        let outcome = await AskNilesRouter(runner: AppEnvironment.shared.agentRunner).run(prompt)
+        let outcome = await AskNilesRouter(runner: AppEnvironment.shared.agentStatus.agentRunner).run(prompt)
         return .result(dialog: "\(outcome.dialog)")
     }
 }

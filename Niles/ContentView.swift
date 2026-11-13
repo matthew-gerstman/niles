@@ -84,12 +84,12 @@ struct ContentView: View {
             await store.seedProposalsFixtureIfRequested()
             // Screenshot hook: open one proposal's detail sheet directly.
             if let target = LaunchArguments.uiProposalDetail {
-                fixtureDetailProposal = store.proposals.first { $0.id == target }
-                    ?? store.proposals.first { $0.tool == target && !$0.evidence.isEmpty }
-                    ?? store.proposals.first { !$0.evidence.isEmpty }
+                fixtureDetailProposal = store.queue.proposals.first { $0.id == target }
+                    ?? store.queue.proposals.first { $0.tool == target && !$0.evidence.isEmpty }
+                    ?? store.queue.proposals.first { !$0.evidence.isEmpty }
                     // Pendings have no evidence yet; only reached when no
                     // executed proposal matches, so executed stays preferred.
-                    ?? store.proposals.first { $0.tool == target }
+                    ?? store.queue.proposals.first { $0.tool == target }
             }
             // Test/screenshot hook: `simctl launch ... -UITabSelect niles`
             // opens the agent chat so its capture doesn't need UI
@@ -108,10 +108,10 @@ struct ContentView: View {
             }
         }
         .sheet(item: $fixtureDetailProposal) { proposal in
-            ProposalDetailSheet(proposal: proposal, undoState: store.undoStates[proposal.id])
+            ProposalDetailSheet(proposal: proposal, undoState: store.queue.undoStates[proposal.id])
         }
         .sheet(isPresented: $showChatSheet) {
-            NavigationStack { AgentChatScreen(model: store) }
+            NavigationStack { AgentChatScreen(chat: store.chat, agentStatus: store.agentStatus, queue: store.queue) }
         }
         // Deep link from OpenQueueIntent while the app is already running:
         // consume the selection so HomeScreen's scroll-to-Queue signal
@@ -132,11 +132,13 @@ struct ContentView: View {
     /// same trailing button on Home's bar the wide layout uses (chatEntry).
     private var compactLayout: some View {
         if let fixtureHomeStore {
-            HomeScreen(model: fixtureHomeStore, chatEntry: chatEntry,
-                       activityModel: fixtureActivityStore ?? store)
+            HomeScreen(dashboard: fixtureHomeStore, pairing: fixtureHomeStore, queue: fixtureHomeStore,
+                       chatEntry: chatEntry,
+                       activityModel: fixtureActivityStore ?? store.queue)
         } else {
-            HomeScreen(model: store, chatEntry: chatEntry,
-                       activityModel: fixtureActivityStore ?? store)
+            HomeScreen(dashboard: store.dashboard, pairing: store.pairing, queue: store.queue,
+                       chatEntry: chatEntry,
+                       activityModel: fixtureActivityStore ?? store.queue)
         }
     }
 
@@ -158,16 +160,16 @@ struct ContentView: View {
                         .widePane()
                         .frame(width: activityWidth)
                 } else {
-                    ActivityScreen(model: store)
+                    ActivityScreen(model: store.queue)
                         .widePane()
                         .frame(width: activityWidth)
                 }
                 Divider()
                 if let fixtureHomeStore {
-                    HomeScreen(model: fixtureHomeStore, chatEntry: chatEntry)
+                    HomeScreen(dashboard: fixtureHomeStore, pairing: fixtureHomeStore, queue: fixtureHomeStore, chatEntry: chatEntry)
                         .widePane()
                 } else {
-                    HomeScreen(model: store, chatEntry: chatEntry)
+                    HomeScreen(dashboard: store.dashboard, pairing: store.pairing, queue: store.queue, chatEntry: chatEntry)
                         .widePane()
                 }
             }
