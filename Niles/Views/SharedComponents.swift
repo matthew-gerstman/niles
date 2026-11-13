@@ -121,10 +121,15 @@ enum ProposalCardLayout {
         case .note:
             return noteLine(line.text)
         default:
-            // Echo lines only exist under a header — a single-op card has
+            // Echo rows only exist under a header — a single-op card has
             // no title to restate, so its lines all stand on their own.
-            guard let title, isEcho(line.text, ofTitle: title) else { return line }
-            return nil
+            // The accessory-move detail row is a ' → ' transition, the one
+            // shape isEcho never drops; its own predicate finishes the
+            // echo class for moves.
+            guard let title else { return line }
+            if ProposalCardEcho.isMoveEcho(line.text, ofTitle: title)
+                || ProposalCardEcho.isEcho(line.text, ofTitle: title) { return nil }
+            return line
         }
     }
 
@@ -162,34 +167,9 @@ enum ProposalCardLayout {
         return String(text[..<range.lowerBound]) + "."
     }
 
-    /// True when the line merely restates the header: a lead of the form
-    /// 'Kind “Name”' that appears verbatim in the title, with a ' · ' tail
-    /// whose verb is the title's verb in past tense ('Create scene “X”' /
-    /// 'Scene “X” · created with 1 action'). A ' → ' transition line is
-    /// never an echo — its right side is information the title lacks
-    /// ('Scene “A” → “B”' under 'Rename scene “A”').
-    static func isEcho(_ text: String, ofTitle title: String) -> Bool {
-        guard !text.contains(" → ") else { return false }
-        guard let tailRange = text.range(of: " · ") else { return false }
-        let lead = String(text[..<tailRange.lowerBound])
-        // A bare '“Name” · add action …' line is real detail, not a
-        // restatement — only a lead carrying a kind word before the
-        // quoted name can duplicate a header.
-        guard !lead.hasPrefix("“"), title.localizedCaseInsensitiveContains(lead) else { return false }
-        let titleVerb = verbPrefix(title)
-        let tailVerb = verbPrefix(String(text[tailRange.upperBound...]))
-        // 'created'/'Create', 'identified'/'Identify', 'deleted'/'Delete',
-        // 'runs'/'Run', 'unblocked'/'Unblock' — a shared word stem.
-        return commonPrefixLength(titleVerb, tailVerb) >= 3
-    }
-
-    private static func verbPrefix(_ text: String) -> String {
-        String(text.prefix(while: { !$0.isWhitespace })).lowercased()
-    }
-
-    private static func commonPrefixLength(_ a: String, _ b: String) -> Int {
-        zip(a, b).prefix(while: { $0.0 == $0.1 }).count
-    }
+    /// The echo predicates live in NilesCore (`ProposalCardEcho`) — they
+    /// encode what the persisted card format guarantees and are unit-tested
+    /// there; this filter only applies them.
 
     /// One run of styled text inside a change line.
     struct ChangeTextSegment {
