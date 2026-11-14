@@ -85,10 +85,6 @@ enum ActivityTimeline {
         let proposalId: String
         let title: String
         let state: Verdict
-        /// The proposal's destructive classification (nil proposal → false):
-        /// destructive groups always render the red trash-can row icon, whatever
-        /// their verdict (Matthew, 2026-11-13).
-        let isDestructive: Bool
         let latestAt: Date
         let events: [EventEntry]
         /// The MCP tool name when the live proposal is in memory — plumbing,
@@ -197,7 +193,6 @@ enum ActivityTimeline {
                 proposalId: id,
                 title: newest?.event.proposalTitle ?? proposal?.title ?? id,
                 state: state,
-                isDestructive: proposal?.isDestructive ?? false,
                 latestAt: newest?.event.at ?? now,
                 events: eventRows.map { EventEntry(event: $0.event, verdict: $0.verdict) },
                 toolName: tool,

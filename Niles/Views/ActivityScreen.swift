@@ -145,11 +145,8 @@ struct ActivitySections: View {
             openDetail = group
         } label: {
             HStack(alignment: .firstTextBaseline) {
-                // Destructive rows always carry the red trash can (Matthew,
-                // 2026-11-13) — keyed off the proposal's destructive
-                // classification, never a name match.
-                Image(systemName: group.isDestructive ? "trash" : group.state.symbol)
-                    .foregroundStyle(group.isDestructive ? Color.red : group.state.tint)
+                Image(systemName: group.state.symbol)
+                    .foregroundStyle(group.state.tint)
                     // Nudge the symbol off the first-text-baseline: SF Symbols
                     // ride high beside a text line — drop it ~2pt so it sits
                     // level with the headline (2026-11-14).
