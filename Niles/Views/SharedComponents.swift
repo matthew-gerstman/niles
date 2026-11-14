@@ -257,16 +257,17 @@ private struct ProposalOperationGroupView: View {
     }
 
     private func header(_ title: String) -> some View {
-        HStack(spacing: 8) {
+        // First-baseline alignment: a wrapped title keeps the "N of M"
+        // caption on the first line instead of centering against the block.
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
             Image(systemName: ProposalCardLayout.symbolName(forOperationTitle: title))
                 .font(.subheadline)
                 .foregroundStyle(ProposalCardLayout.tint(forOperationTitle: title))
             Text(title)
                 .font(.subheadline.weight(.semibold))
-                .lineLimit(1)
-            // The caption keeps its natural fixed width at the
-            // trailing edge; the title gets everything else and
-            // only truncates when the two actually collide.
+            // The caption keeps its natural fixed width at the trailing
+            // edge; the title gets everything else and wraps when the two
+            // collide at narrow widths (folded Duo, user report Nov 14).
             Spacer(minLength: 8)
             if let number = group.operationNumber, let count = group.operationCount {
                 Text("\(number) of \(count)")
