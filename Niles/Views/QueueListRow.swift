@@ -42,11 +42,8 @@ struct QueueListRow: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
-            // Destructive rows always carry the red trash can (Matthew,
-            // 2026-11-13) — keyed off the proposal's destructive
-            // classification, never a name match.
-            Image(systemName: proposal.isDestructive ? "trash" : "doc.text")
-                .foregroundStyle(proposal.isDestructive ? Color.red : .primary)
+            Image(systemName: "doc.text")
+                .foregroundStyle(.primary)
             VStack(alignment: .leading, spacing: 3) {
                 Text(proposal.title)
                     .font(.headline)

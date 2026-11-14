@@ -257,16 +257,23 @@ private struct ProposalOperationGroupView: View {
     }
 
     private func header(_ title: String) -> some View {
-        HStack(spacing: 8) {
+        // First-baseline alignment: a wrapped title keeps the "N of M"
+        // caption on the first line instead of centering against the block.
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
             Image(systemName: ProposalCardLayout.symbolName(forOperationTitle: title))
                 .font(.subheadline)
                 .foregroundStyle(ProposalCardLayout.tint(forOperationTitle: title))
             Text(title)
                 .font(.subheadline.weight(.semibold))
-                .lineLimit(1)
-            // The caption keeps its natural fixed width at the
-            // trailing edge; the title gets everything else and
-            // only truncates when the two actually collide.
+                // List rows propose an estimated height before measuring;
+                // without this the wrapped title truncates to fit the
+                // estimate instead of wrapping (seen on the batch fixture's
+                // first group). Vertical fixedSize lays the text out
+                // unconstrained, so it always renders every line.
+                .fixedSize(horizontal: false, vertical: true)
+            // The caption keeps its natural fixed width at the trailing
+            // edge; the title gets everything else and wraps when the two
+            // collide at narrow widths (folded Duo, user report Nov 14).
             Spacer(minLength: 8)
             if let number = group.operationNumber, let count = group.operationCount {
                 Text("\(number) of \(count)")
@@ -284,18 +291,24 @@ private struct ProposalOperationGroupView: View {
     /// review card needed.
     @ViewBuilder
     private func detailLine(_ line: ProposalDiffLine) -> some View {
+        // fixedSize(vertical:) mirrors the header title: without it the
+        // List's row height estimate truncates the last squeezed line
+        // instead of letting it wrap.
         switch line.kind {
         case .add, .remove:
             ChangeLineText(text: line.text)
                 .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
         case .plain, .note:
             if line.text.contains(" → ") {
                 ChangeLineText(text: line.text)
                     .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
             } else {
                 Text(line.text)
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
