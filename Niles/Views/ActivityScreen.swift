@@ -150,12 +150,28 @@ struct ActivitySections: View {
                 // classification, never a name match.
                 Image(systemName: group.isDestructive ? "trash" : group.state.symbol)
                     .foregroundStyle(group.isDestructive ? Color.red : group.state.tint)
+                    // Nudge the symbol off the first-text-baseline: SF Symbols
+                    // ride high beside a text line — drop it ~2pt so it sits
+                    // level with the headline (2026-11-14).
+                    .baselineOffset(-2)
                 VStack(alignment: .leading, spacing: 4) {
                     // The human-readable summary is the headline; the tool
-                    // name and prop_ id live in the detail sheet only.
-                    Text(group.title)
-                        .font(.headline)
-                        .foregroundStyle(.primary)
+                    // name and prop_ id live in the detail sheet only. Titles
+                    // with a “…” quoted entity split into action + entity
+                    // (`Rename` / `Kitchen`) — ProposalTitleParts — so long
+                    // names wrap on their own line; one-line otherwise.
+                    if let parts = ProposalTitleParts.split(group.title) {
+                        Text(parts.action)
+                            .font(.headline)
+                            .foregroundStyle(.primary)
+                        Text(parts.entity)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text(group.title)
+                            .font(.headline)
+                            .foregroundStyle(.primary)
+                    }
                 }
                 Spacer()
                 VStack(alignment: .trailing, spacing: 4) {
