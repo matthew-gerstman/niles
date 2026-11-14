@@ -291,18 +291,24 @@ private struct ProposalOperationGroupView: View {
     /// review card needed.
     @ViewBuilder
     private func detailLine(_ line: ProposalDiffLine) -> some View {
+        // fixedSize(vertical:) mirrors the header title: without it the
+        // List's row height estimate truncates the last squeezed line
+        // instead of letting it wrap.
         switch line.kind {
         case .add, .remove:
             ChangeLineText(text: line.text)
                 .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
         case .plain, .note:
             if line.text.contains(" → ") {
                 ChangeLineText(text: line.text)
                     .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
             } else {
                 Text(line.text)
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
