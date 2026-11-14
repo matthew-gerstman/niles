@@ -265,6 +265,12 @@ private struct ProposalOperationGroupView: View {
                 .foregroundStyle(ProposalCardLayout.tint(forOperationTitle: title))
             Text(title)
                 .font(.subheadline.weight(.semibold))
+                // List rows propose an estimated height before measuring;
+                // without this the wrapped title truncates to fit the
+                // estimate instead of wrapping (seen on the batch fixture's
+                // first group). Vertical fixedSize lays the text out
+                // unconstrained, so it always renders every line.
+                .fixedSize(horizontal: false, vertical: true)
             // The caption keeps its natural fixed width at the trailing
             // edge; the title gets everything else and wraps when the two
             // collide at narrow widths (folded Duo, user report Nov 14).
