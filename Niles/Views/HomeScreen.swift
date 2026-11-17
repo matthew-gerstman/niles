@@ -56,6 +56,7 @@ struct HomeScreen: View {
                     pairingSection
                     pairedAgentsSection
                     serverSection
+                    aboutSection
                     if let activityModel {
                         ActivitySections(model: activityModel)
                     }
@@ -231,6 +232,31 @@ struct HomeScreen: View {
         } header: {
             Text("Server")
                 .id(ScrollTarget.server)
+        }
+    }
+
+    /// Submission prep (Nov 2026): App Review's 5.1.1(i) wants an in-app
+    /// privacy policy link even with "Data Not Collected", and 1.5 wants a
+    /// reachable support contact. Destinations come from AppLinks so the live
+    /// policy URL drops in without touching this file. Links render with a
+    /// trailing external-arrow; the list rows themselves keep default styling
+    /// (the app-wide white tint is fine on text rows).
+    private var aboutSection: some View {
+        Section {
+            Link(destination: AppLinks.privacyPolicyURL) {
+                LabeledContent("Privacy Policy") {
+                    Image(systemName: "arrow.up.right")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Link(destination: AppLinks.supportEmailURL) {
+                LabeledContent("Contact Support") {
+                    Text(AppLinks.supportEmail)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        } header: {
+            Text("About")
         }
     }
 
