@@ -76,6 +76,28 @@ struct ProposalDetailSheet: View {
             }
         }
         .presentationDetents([.medium, .large], selection: $presentationDetent)
+            .modifier(FullPaneSheetWidth())
+    }
+
+    // MARK: - Pane width
+
+    /// Fills the sheet's presentation context edge to edge. At automatic
+    /// sizing the system sheet renders a form-style ~60% column whenever the
+    /// presenting window's size class is regular — observed on the Duo's
+    /// unfolded left-pane window (Nov 14), whose reported regular class the
+    /// app's own measured-width layout correctly ignores. `.page` restores
+    /// the full-pane presentation; on genuinely compact windows (every
+    /// iPhone, folded Duo) sheets already fill the pane, so this is a no-op
+    /// there. Height still belongs to the detents above.
+    private struct FullPaneSheetWidth: ViewModifier {
+        @ViewBuilder
+        func body(content: Content) -> some View {
+            if #available(iOS 18.0, *) {
+                content.presentationSizing(.page)
+            } else {
+                content
+            }
+        }
     }
 
     // MARK: - Sections
