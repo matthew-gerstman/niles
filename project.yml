@@ -40,6 +40,7 @@ targets:
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UILaunchScreen: {}
+        ITSAppUsesNonExemptEncryption: false
         NSHomeKitUsageDescription: >-
           Niles reads your home layout so agents can propose configuration
           changes for your review, and applies changes you approve.
