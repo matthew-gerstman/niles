@@ -7,9 +7,8 @@ import Foundation
 /// reachable support contact. The policy page itself is being written by a
 /// separate task — when it lands, only this constant changes.
 enum AppLinks {
-    /// Placeholder policy URL; example.com is reserved for placeholders and
-    /// fails loudly (dead row) rather than pointing somewhere wrong.
-    static let privacyPolicyURL = URL(string: "https://example.com/niles/privacy-policy")!
+    /// Hosted privacy policy (persistent Obvious hosted URL).
+    static let privacyPolicyURL = URL(string: "https://1xblhp06r3-8957.hosted.obvious.ai/")!
 
     /// Support contact. A mailto so the row works before any support site
     /// exists.
